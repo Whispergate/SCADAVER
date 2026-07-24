@@ -191,44 +191,46 @@ fn probe_modicon(ip: &str) -> Option<DeviceInfo> {
     let req = hex::decode("000100000006012b0e0100").unwrap_or_default();
     stream.write_all(&req).ok()?;
 
-    let mut resp = [0u8; 256];
-    let n = stream.read(&mut resp).ok()?;
-    if n < 8 {
+    // Read MBAP header (6 bytes): txn_id(2) + protocol_id(2) + length(2)
+    let mut mbap = [0u8; 6];
+    stream.read_exact(&mut mbap).ok()?;
+    if mbap[2..4] != [0x00, 0x00] {
+        return None; // not Modbus
+    }
+    let pdu_len = u16::from_be_bytes([mbap[4], mbap[5]]) as usize;
+    if pdu_len < 2 {
         return None;
     }
-
-    // Check protocol ID 0x0000 and function code echo 0x2B
-    if resp[2..4] != [0x00, 0x00] || resp[7] != 0x2B {
+    let mut pdu = vec![0u8; pdu_len];
+    stream.read_exact(&mut pdu).ok()?;
+    // pdu[0] = unit_id, pdu[1] = function_code
+    if pdu.len() < 2 || pdu[1] != 0x2B {
         return None;
     }
 
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
     fields.insert("protocol".into(), "Modbus TCP".into());
 
-    if n > 12 {
-        let obj_count = resp[12] as usize;
-        let mut pos = 13usize;
+    // pdu: unit_id(1) + fc(1) + mei_type(1) + read_dev_id_code(1) + conformity(1) +
+    //      more_follows(1) + next_obj_id(1) + obj_count(1) + objects...
+    if pdu.len() > 8 {
+        let obj_count = pdu[8] as usize;
+        let mut pos = 9usize;
         for _ in 0..obj_count.min(10) {
-            if pos + 2 > n {
+            if pos + 2 > pdu.len() {
                 break;
             }
-            let obj_id = resp[pos];
-            let obj_len = resp[pos + 1] as usize;
-            if pos + 2 + obj_len > n {
+            let obj_id = pdu[pos];
+            let obj_len = pdu[pos + 1] as usize;
+            if pos + 2 + obj_len > pdu.len() {
                 break;
             }
-            let val = String::from_utf8_lossy(&resp[pos + 2..pos + 2 + obj_len]).to_string();
+            let val = String::from_utf8_lossy(&pdu[pos + 2..pos + 2 + obj_len]).to_string();
             pos += 2 + obj_len;
             match obj_id {
-                0x00 => {
-                    fields.insert("manufacturer".into(), val.into());
-                }
-                0x01 => {
-                    fields.insert("product_name".into(), val.into());
-                }
-                0x02 => {
-                    fields.insert("version".into(), val.into());
-                }
+                0x00 => { fields.insert("manufacturer".into(), val.into()); }
+                0x01 => { fields.insert("product_name".into(), val.into()); }
+                0x02 => { fields.insert("version".into(), val.into()); }
                 _ => {}
             }
         }

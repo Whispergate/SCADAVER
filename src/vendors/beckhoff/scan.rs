@@ -238,26 +238,29 @@ pub fn get_state(device: &BeckhoffDevice, local_netid: &str) -> String {
     );
 
     let pkt = hex_decode(&packet);
-    if stream.write_all(&pkt).is_err() {
-        return "ERROR".to_string();
-    }
-
-    let mut buf = [0u8; 4096];
-    let n = match stream.read(&mut buf) {
-        Ok(n) => n,
-        Err(_) => return "ERROR".to_string(),
+    let resp = match send_recv_ams(&mut stream, &pkt) {
+        Some(r) => r,
+        None => return "ERROR".to_string(),
     };
 
-    let resp_hex = hex_encode(&buf[..n]);
-    if resp_hex.len() >= 8 {
-        let state_byte = &resp_hex[resp_hex.len() - 8..resp_hex.len() - 6];
-        return match state_byte {
-            "06" => "STOP".to_string(),
-            "0f" => "CONFIG".to_string(),
-            _ => "RUN".to_string(),
-        };
+    // AMS ReadState response: ads_data = result(4B) + ads_state(2B LE) + device_state(2B)
+    // ads_state hex chars are at positions [8..12] in ads_data hex string
+    let ams = match parse_ams_response(&resp) {
+        Some(r) => r,
+        None => return "ERROR".to_string(),
+    };
+    if ams.ads_data.len() < 12 {
+        return "ERROR".to_string();
     }
-    "ERROR".to_string()
+    let state_lo = u8::from_str_radix(&ams.ads_data[8..10], 16).unwrap_or(0);
+    let state_hi = u8::from_str_radix(&ams.ads_data[10..12], 16).unwrap_or(0);
+    let ads_state = u16::from(state_lo) | (u16::from(state_hi) << 8);
+    match ads_state {
+        5 => "RUN".to_string(),
+        6 => "STOP".to_string(),
+        15 => "CONFIG".to_string(),
+        _ => format!("STATE_{ads_state}"),
+    }
 }
 
 /// Add a route on a remote Beckhoff device.
@@ -401,7 +404,7 @@ pub fn get_device_info_full(
             10000,
             31337,
         );
-        let _ = send_recv_tcp(&mut stream, &hex_decode(&pkt1))
+        let _ = send_recv_ams(&mut stream, &hex_decode(&pkt1))
             .and_then(|resp| {
                 let ams = parse_ams_response(&resp)?;
                 let (_, ads_data) = parse_ads_response(&ams.ads_data)?;
@@ -417,7 +420,7 @@ pub fn get_device_info_full(
                     10000,
                     31337,
                 );
-                let resp2 = send_recv_tcp(&mut stream, &hex_decode(&pkt2))?;
+                let resp2 = send_recv_ams(&mut stream, &hex_decode(&pkt2))?;
                 let ams2 = parse_ams_response(&resp2)?;
                 let (_, xml_hex) = parse_ads_response(&ams2.ads_data)?;
                 let xml_bytes: Vec<u8> = hex_decode(&xml_hex)
@@ -483,14 +486,6 @@ pub struct BeckhoffDeviceInfo {
     pub serial: Option<String>,
     pub os_name: Option<String>,
     pub os_version: Option<String>,
-}
-
-fn send_recv_tcp(stream: &mut TcpStream, data: &[u8]) -> Option<Vec<u8>> {
-    stream.write_all(data).ok()?;
-    let mut buf = vec![0u8; 4096];
-    let n = stream.read(&mut buf).ok()?;
-    buf.truncate(n);
-    Some(buf)
 }
 
 // ADS symbol index groups (Beckhoff standard).

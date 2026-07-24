@@ -158,7 +158,7 @@ pub fn scan_udp(ip: &str) -> Option<FinsDevice> {
     if resp[0] & 0x40 == 0 {
         return None;
     }
-    let server_node = resp[4]; // DA1 in the response is our original SA1
+    let server_node = resp[7]; // SA1 in the response = source (server) node address
     let model = if resp.len() >= 32 {
         String::from_utf8_lossy(&resp[12..32]).trim_end_matches('\0').trim().to_string()
     } else {

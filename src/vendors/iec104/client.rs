@@ -41,7 +41,9 @@ impl Iec104Session {
     fn apdu_iframe(&self, asdu: &[u8]) -> Vec<u8> {
         let tx = self.tx_seq << 1; // bit 0 = 0 for I-frame
         let rx = self.rx_seq << 1;
-        let len = (asdu.len() + 4) as u8;
+        // APDU length field is 1 byte; control fields are 4 bytes.
+        // Max payload is 255 - 4 = 251 bytes per IEC 60870-5-104 §5.1.
+        let len = u8::try_from(asdu.len() + 4).unwrap_or(u8::MAX);
         let mut frame = vec![
             0x68,
             len,

@@ -55,7 +55,7 @@ pub fn setup_connection(ip: &str, port: u16, timeout_secs: u64) -> Option<TcpStr
         }
 
         // S7Comm Setup
-        let s7_pkt = "030000190 2f08032010000722f00080000f0000001000101e0";
+        let s7_pkt = "0300001902f08032010000722f00080000f0000001000101e0";
         let s7_resp = match send_recv(&mut stream, &hex_decode(s7_pkt)) {
             Some(r) => r,
             None => continue,
@@ -72,10 +72,19 @@ pub fn setup_connection(ip: &str, port: u16, timeout_secs: u64) -> Option<TcpStr
 
 fn send_recv(stream: &mut TcpStream, data: &[u8]) -> Option<Vec<u8>> {
     stream.write_all(data).ok()?;
-    let mut buf = vec![0u8; BUFFER_SIZE];
-    let n = stream.read(&mut buf).ok()?;
-    buf.truncate(n);
-    Some(buf)
+    // TPKT header: version(1) + reserved(1) + total_length(2, big-endian)
+    let mut hdr = [0u8; 4];
+    stream.read_exact(&mut hdr).ok()?;
+    let total_len = u16::from_be_bytes([hdr[2], hdr[3]]) as usize;
+    if total_len < 4 {
+        return None;
+    }
+    let body_len = total_len - 4;
+    let mut body = vec![0u8; body_len];
+    stream.read_exact(&mut body).ok()?;
+    let mut full = hdr.to_vec();
+    full.extend_from_slice(&body);
+    Some(full)
 }
 
 /// Read inputs, outputs, and merkers from an S7 PLC.
