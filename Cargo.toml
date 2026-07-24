@@ -1,0 +1,38 @@
+[package]
+name = "scadaver-rs"
+version = "1.0.0"
+edition = "2021"
+description = "Unified ICS Red Team Multi-Tool — Rust edition"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "scadaver"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "color"] }
+anyhow = "1"
+thiserror = "1"
+ureq = { version = "2", features = ["tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+quick-xml = "0.36"
+colored = "2"
+tabled = { version = "0.16", features = ["std"] }
+dialoguer = "0.11"
+indicatif = "0.17"
+socket2 = { version = "0.5", features = ["all"] }
+base64 = "0.22"
+rand = "0.8"
+network-interface = "2"
+console = "0.15"
+dirs = "5"
+ratatui = "0.29"
+crossterm = "0.28"
+rusqlite = { version = "0.31", features = ["bundled"] }
+chrono = "0.4"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+similar_names = "allow"

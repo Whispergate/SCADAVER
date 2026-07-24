@@ -1,0 +1,398 @@
+use anyhow::{Context, Result};
+use rusqlite::{params, Connection};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone)]
+pub struct DeviceRecord {
+    pub id: i64,
+    pub ip: String,
+    pub vendor: String,
+    pub last_seen: i64,
+    pub fields: Value,
+}
+
+impl DeviceRecord {
+    pub fn field_str(&self, key: &str) -> Option<&str> {
+        self.fields.get(key)?.as_str()
+    }
+
+    pub fn last_seen_str(&self) -> String {
+        use chrono::{Local, TimeZone};
+        if self.last_seen == 0 {
+            return "never".to_string();
+        }
+        match Local.timestamp_opt(self.last_seen, 0) {
+            chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
+            _ => "?".to_string(),
+        }
+    }
+
+    pub fn vendor_color(&self) -> &'static str {
+        match self.vendor.to_lowercase().as_str() {
+            "beckhoff" => "cyan",
+            "siemens" => "blue",
+            "rockwell" | "enip" => "yellow",
+            "schneider" | "modicon" => "green",
+            "mitsubishi" => "magenta",
+            "phoenix" => "red",
+            "ewon" => "white",
+            _ => "gray",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TagRecord {
+    pub instance_id: i64,
+    pub name: String,
+    pub tag_type: i64,
+    pub first_seen: i64,
+    pub last_seen: i64,
+}
+
+pub struct TypeChange {
+    pub name: String,
+    pub old_type: i64,
+    pub new_type: i64,
+}
+
+pub struct TagDiff {
+    pub added: Vec<TagRecord>,
+    pub removed: Vec<TagRecord>,
+    pub type_changed: Vec<TypeChange>,
+}
+
+impl TagDiff {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.type_changed.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DataPoint {
+    pub address: String,
+    pub data_type: Option<String>,
+    pub last_value: Option<String>,
+    pub first_seen: i64,
+    pub last_seen: i64,
+}
+
+pub struct ValueChange {
+    pub address: String,
+    pub old_value: Option<String>,
+    pub new_value: String,
+}
+
+pub struct DataDiff {
+    pub added: Vec<DataPoint>,
+    pub removed: Vec<DataPoint>,
+    pub value_changed: Vec<ValueChange>,
+}
+
+impl DataDiff {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.value_changed.is_empty()
+    }
+}
+
+pub struct Database {
+    conn: Connection,
+}
+
+impl Database {
+    pub fn open(path: &PathBuf) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create DB dir {:?}", parent))?;
+        }
+        let conn = Connection::open(path)
+            .with_context(|| format!("open database {:?}", path))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE IF NOT EXISTS devices (
+                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                 ip        TEXT    NOT NULL UNIQUE,
+                 vendor    TEXT    NOT NULL DEFAULT '',
+                 last_seen INTEGER NOT NULL DEFAULT 0,
+                 fields    TEXT    NOT NULL DEFAULT '{}'
+             );
+             CREATE TABLE IF NOT EXISTS device_tags (
+                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                 ip          TEXT    NOT NULL,
+                 instance_id INTEGER NOT NULL,
+                 name        TEXT    NOT NULL,
+                 tag_type    INTEGER NOT NULL,
+                 first_seen  INTEGER NOT NULL DEFAULT 0,
+                 last_seen   INTEGER NOT NULL DEFAULT 0,
+                 UNIQUE(ip, instance_id)
+             );
+             CREATE TABLE IF NOT EXISTS device_data (
+                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                 ip         TEXT    NOT NULL,
+                 protocol   TEXT    NOT NULL,
+                 address    TEXT    NOT NULL,
+                 data_type  TEXT,
+                 last_value TEXT,
+                 first_seen INTEGER NOT NULL DEFAULT 0,
+                 last_seen  INTEGER NOT NULL DEFAULT 0,
+                 UNIQUE(ip, protocol, address)
+             );
+             CREATE TABLE IF NOT EXISTS log (
+                 id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                 ts      INTEGER NOT NULL,
+                 ip      TEXT    NOT NULL DEFAULT '',
+                 message TEXT    NOT NULL
+             );",
+        )
+        .context("initialize schema")?;
+        Ok(Self { conn })
+    }
+
+    pub fn default_path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("scadaver")
+            .join("devices.db")
+    }
+
+    pub fn upsert_device(&self, ip: &str, vendor: &str, fields: &Value) -> Result<i64> {
+        let ts = now_unix();
+        let fields_json = serde_json::to_string(fields).unwrap_or_else(|_| "{}".into());
+        self.conn.execute(
+            "INSERT INTO devices (ip, vendor, last_seen, fields)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(ip) DO UPDATE SET
+                 vendor    = excluded.vendor,
+                 last_seen = excluded.last_seen,
+                 fields    = excluded.fields",
+            params![ip, vendor, ts, fields_json],
+        )?;
+        let id = self
+            .conn
+            .query_row("SELECT id FROM devices WHERE ip = ?1", params![ip], |r| {
+                r.get(0)
+            })?;
+        Ok(id)
+    }
+
+    pub fn load_devices(&self) -> Result<Vec<DeviceRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ip, vendor, last_seen, fields FROM devices ORDER BY last_seen DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let fields_str: String = r.get(4)?;
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, fields_str))
+        })?;
+
+        let mut devices = Vec::new();
+        for row in rows {
+            let (id, ip, vendor, last_seen, fields_str) = row?;
+            let fields: Value = serde_json::from_str(&fields_str).unwrap_or(Value::Object(Default::default()));
+            devices.push(DeviceRecord { id, ip, vendor, last_seen, fields });
+        }
+        Ok(devices)
+    }
+
+    pub fn delete_device(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM devices WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn search_devices(&self, query: &str) -> Result<Vec<DeviceRecord>> {
+        let pattern = format!("%{query}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ip, vendor, last_seen, fields FROM devices
+             WHERE ip LIKE ?1 OR vendor LIKE ?1 OR fields LIKE ?1
+             ORDER BY last_seen DESC",
+        )?;
+        let rows = stmt.query_map(params![pattern], |r| {
+            let fields_str: String = r.get(4)?;
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, fields_str))
+        })?;
+
+        let mut devices = Vec::new();
+        for row in rows {
+            let (id, ip, vendor, last_seen, fields_str) = row?;
+            let fields: Value = serde_json::from_str(&fields_str).unwrap_or(Value::Object(Default::default()));
+            devices.push(DeviceRecord { id, ip, vendor, last_seen, fields });
+        }
+        Ok(devices)
+    }
+
+    /// Upsert a batch of tags for a device. Returns the diff vs the previous snapshot.
+    pub fn upsert_tags(&self, ip: &str, tags: &[(i64, &str, i64)]) -> Result<TagDiff> {
+        let now = now_unix();
+        let existing = self.load_tags(ip)?;
+        let mut existing_map: HashMap<i64, TagRecord> = existing
+            .into_iter()
+            .map(|t| (t.instance_id, t))
+            .collect();
+
+        let mut added = Vec::new();
+        let mut type_changed = Vec::new();
+
+        for &(instance_id, name, tag_type) in tags {
+            match existing_map.remove(&instance_id) {
+                Some(old) => {
+                    if old.tag_type != tag_type {
+                        type_changed.push(TypeChange {
+                            name: name.to_string(),
+                            old_type: old.tag_type,
+                            new_type: tag_type,
+                        });
+                    }
+                    self.conn.execute(
+                        "UPDATE device_tags SET name=?1, tag_type=?2, last_seen=?3
+                         WHERE ip=?4 AND instance_id=?5",
+                        params![name, tag_type, now, ip, instance_id],
+                    )?;
+                }
+                None => {
+                    added.push(TagRecord {
+                        instance_id,
+                        name: name.to_string(),
+                        tag_type,
+                        first_seen: now,
+                        last_seen: now,
+                    });
+                    self.conn.execute(
+                        "INSERT INTO device_tags (ip, instance_id, name, tag_type, first_seen, last_seen)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                        params![ip, instance_id, name, tag_type, now],
+                    )?;
+                }
+            }
+        }
+
+        // Tags that existed before but weren't in the current scan are removed
+        let removed: Vec<TagRecord> = existing_map.into_values().collect();
+        for t in &removed {
+            self.conn.execute(
+                "DELETE FROM device_tags WHERE ip=?1 AND instance_id=?2",
+                params![ip, t.instance_id],
+            )?;
+        }
+
+        Ok(TagDiff { added, removed, type_changed })
+    }
+
+    pub fn load_tags(&self, ip: &str) -> Result<Vec<TagRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT instance_id, name, tag_type, first_seen, last_seen
+             FROM device_tags WHERE ip=?1 ORDER BY instance_id",
+        )?;
+        let rows = stmt.query_map(params![ip], |r| {
+            Ok(TagRecord {
+                instance_id: r.get(0)?,
+                name:        r.get(1)?,
+                tag_type:    r.get(2)?,
+                first_seen:  r.get(3)?,
+                last_seen:   r.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows { out.push(row?); }
+        Ok(out)
+    }
+
+    /// Upsert a batch of data points for a device+protocol.
+    /// Returns a diff vs the previous snapshot.
+    pub fn upsert_data_points(
+        &self,
+        ip: &str,
+        protocol: &str,
+        points: &[(&str, Option<&str>, &str)],
+    ) -> Result<DataDiff> {
+        let now = now_unix();
+        let existing = self.load_data_points(ip, protocol)?;
+        let mut existing_map: HashMap<String, DataPoint> = existing
+            .into_iter()
+            .map(|p| (p.address.clone(), p))
+            .collect();
+
+        let mut added = Vec::new();
+        let mut value_changed = Vec::new();
+
+        for &(address, data_type, value) in points {
+            match existing_map.remove(address) {
+                Some(old) => {
+                    if old.last_value.as_deref() != Some(value) {
+                        value_changed.push(ValueChange {
+                            address: address.to_string(),
+                            old_value: old.last_value.clone(),
+                            new_value: value.to_string(),
+                        });
+                    }
+                    self.conn.execute(
+                        "UPDATE device_data SET data_type=?1, last_value=?2, last_seen=?3
+                         WHERE ip=?4 AND protocol=?5 AND address=?6",
+                        params![data_type, value, now, ip, protocol, address],
+                    )?;
+                }
+                None => {
+                    added.push(DataPoint {
+                        address: address.to_string(),
+                        data_type: data_type.map(|s| s.to_string()),
+                        last_value: Some(value.to_string()),
+                        first_seen: now,
+                        last_seen: now,
+                    });
+                    self.conn.execute(
+                        "INSERT INTO device_data (ip, protocol, address, data_type, last_value, first_seen, last_seen)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                        params![ip, protocol, address, data_type, value, now],
+                    )?;
+                }
+            }
+        }
+
+        let removed: Vec<DataPoint> = existing_map.into_values().collect();
+        for p in &removed {
+            self.conn.execute(
+                "DELETE FROM device_data WHERE ip=?1 AND protocol=?2 AND address=?3",
+                params![ip, protocol, p.address],
+            )?;
+        }
+
+        Ok(DataDiff { added, removed, value_changed })
+    }
+
+    pub fn load_data_points(&self, ip: &str, protocol: &str) -> Result<Vec<DataPoint>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT address, data_type, last_value, first_seen, last_seen
+             FROM device_data WHERE ip=?1 AND protocol=?2 ORDER BY address",
+        )?;
+        let rows = stmt.query_map(params![ip, protocol], |r| {
+            Ok(DataPoint {
+                address:    r.get(0)?,
+                data_type:  r.get(1)?,
+                last_value: r.get(2)?,
+                first_seen: r.get(3)?,
+                last_seen:  r.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows { out.push(row?); }
+        Ok(out)
+    }
+
+    pub fn log(&self, ip: &str, message: &str) -> Result<()> {
+        let ts = now_unix();
+        self.conn.execute(
+            "INSERT INTO log (ts, ip, message) VALUES (?1, ?2, ?3)",
+            params![ts, ip, message],
+        )?;
+        Ok(())
+    }
+}
+
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}

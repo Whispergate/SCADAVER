@@ -1,0 +1,45 @@
+"""Modbus TCP simulator — port 502.
+
+HR[addr] = addr * 10 (FC3 read holding registers)
+IR[addr] = 1000 + addr (FC4 read input registers)
+Coils[addr] = addr % 2 (FC1 read coils)
+DI[addr] = 1 if addr % 3 == 0 else 0 (FC2 read discrete inputs)
+
+Expected output with 'Read Holding Registers 0:10':
+  HR40001=0, HR40002=10, HR40003=20, HR40004=30, ...
+"""
+import asyncio
+
+from pymodbus.datastore import (
+    ModbusSequentialDataBlock,
+    ModbusServerContext,
+    ModbusSlaveContext,
+)
+from pymodbus.server import StartAsyncTcpServer
+
+COUNT = 200
+
+hr_values = [i * 10 for i in range(COUNT)]
+ir_values = [1000 + i for i in range(COUNT)]
+co_values = [i % 2 for i in range(COUNT)]
+di_values = [1 if i % 3 == 0 else 0 for i in range(COUNT)]
+
+store = ModbusSlaveContext(
+    di=ModbusSequentialDataBlock(0, di_values),
+    co=ModbusSequentialDataBlock(0, co_values),
+    hr=ModbusSequentialDataBlock(0, hr_values),
+    ir=ModbusSequentialDataBlock(0, ir_values),
+)
+ctx = ModbusServerContext(slaves=store, single=True)
+
+
+async def main() -> None:
+    print("Modbus TCP simulator listening on 0.0.0.0:502")
+    print(f"  HR[0..{COUNT-1}]: value = addr * 10  (display 40001+addr)")
+    print(f"  IR[0..{COUNT-1}]: value = 1000 + addr (display 30001+addr)")
+    print(f"  Coils[0..{COUNT-1}]: alternating 0/1")
+    print(f"  DI[0..{COUNT-1}]: ON every 3rd address")
+    await StartAsyncTcpServer(context=ctx, address=("0.0.0.0", 502))
+
+
+asyncio.run(main())

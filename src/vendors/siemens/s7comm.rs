@@ -1,0 +1,506 @@
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::time::Duration;
+
+pub const S7_PORT: u16 = 102;
+const BUFFER_SIZE: usize = 65000;
+
+// COTP destination TSAP candidates tried in order
+const COTP_TSAPS: &[&str] = &[
+    "c2020101", // S7-1200/1500 slot 1
+    "c2020102", // S7-300 slot 2
+    "c2020100", // S7-1200/1500 slot 0
+    "c2020300", // S7-400
+];
+
+fn hex_decode(s: &str) -> Vec<u8> {
+    let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    (0..s.len())
+        .step_by(2)
+        .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
+}
+
+fn hex_encode(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Establish a COTP + S7Comm session.
+pub fn setup_connection(ip: &str, port: u16, timeout_secs: u64) -> Option<TcpStream> {
+    for tsap in COTP_TSAPS {
+        let addr = format!("{ip}:{port}");
+        let mut stream = match TcpStream::connect_timeout(
+            &addr.parse().ok()?,
+            Duration::from_secs(timeout_secs),
+        ) {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)));
+
+        // COTP Connection Request
+        let cotp_pkt = format!(
+            "03000016 11e00000000100c0010ac1020100{tsap}"
+        );
+        let cotp_resp = match send_recv(&mut stream, &hex_decode(&cotp_pkt)) {
+            Some(r) => r,
+            None => {
+                continue;
+            }
+        };
+        let cotp_hex = hex_encode(&cotp_resp);
+        if cotp_hex.len() < 12 || &cotp_hex[10..12] != "d0" {
+            continue; // Wrong TSAP
+        }
+
+        // S7Comm Setup
+        let s7_pkt = "030000190 2f08032010000722f00080000f0000001000101e0";
+        let s7_resp = match send_recv(&mut stream, &hex_decode(s7_pkt)) {
+            Some(r) => r,
+            None => continue,
+        };
+        let s7_hex = hex_encode(&s7_resp);
+        if s7_hex.len() < 20 || &s7_hex[18..20] != "00" {
+            continue;
+        }
+
+        return Some(stream);
+    }
+    None
+}
+
+fn send_recv(stream: &mut TcpStream, data: &[u8]) -> Option<Vec<u8>> {
+    stream.write_all(data).ok()?;
+    let mut buf = vec![0u8; BUFFER_SIZE];
+    let n = stream.read(&mut buf).ok()?;
+    buf.truncate(n);
+    Some(buf)
+}
+
+/// Read inputs, outputs, and merkers from an S7 PLC.
+pub fn read_all_data(
+    ip: &str,
+    port: u16,
+    timeout_secs: u64,
+) -> HashMap<String, Option<HashMap<String, u8>>> {
+    let mut result: HashMap<String, Option<HashMap<String, u8>>> = HashMap::new();
+    result.insert("inputs".into(), None);
+    result.insert("outputs".into(), None);
+    result.insert("merkers".into(), None);
+
+    let mut stream = match setup_connection(ip, port, timeout_secs) {
+        Some(s) => s,
+        None => return result,
+    };
+
+    let base = "0300001f02f08032010000732f000e00000401120a1006000100008{area}000000";
+
+    for (label, area) in &[("inputs", "1"), ("outputs", "2"), ("merkers", "3")] {
+        let pkt_str = base.replace("{area}", area);
+        let pkt = hex_decode(&pkt_str);
+        let resp = match send_recv(&mut stream, &pkt) {
+            Some(r) => r,
+            None => continue,
+        };
+        result.insert(label.to_string(), parse_coil_data(&hex_encode(&resp), label));
+    }
+
+    result
+}
+
+fn parse_coil_data(s7_hex: &str, label: &str) -> Option<HashMap<String, u8>> {
+    if s7_hex.len() < 20 || &s7_hex[18..20] != "00" {
+        eprintln!("S7Comm error reading {label}");
+        return None;
+    }
+
+    let s7_data = &s7_hex[14..];
+    if s7_data.len() < 20 {
+        return None;
+    }
+    let data_length = usize::from_str_radix(&s7_data[16..20], 16).ok()?;
+    let items_start = 28;
+    let items_end = items_start + data_length * 2;
+    if s7_data.len() < items_end {
+        return None;
+    }
+    let items = &s7_data[items_start..items_end];
+    // Data item: return code (1) + transport size (1) + length (2) + payload.
+    // Skip the 4-byte (8 hex char) prefix and decode every byte the PLC returned
+    // instead of assuming a fixed 4-byte (DWORD) payload.
+    if items.len() < 8 || &items[..2] != "ff" {
+        return None;
+    }
+
+    let mut result = HashMap::new();
+    for (i, chunk) in items[8..].as_bytes().chunks(2).enumerate() {
+        let hex = std::str::from_utf8(chunk).ok()?;
+        let byte_val = u8::from_str_radix(hex, 16).unwrap_or(0);
+        for bit in 0..8u8 {
+            let val = if byte_val & (1 << bit) != 0 { 1 } else { 0 };
+            result.insert(format!("{i}.{bit}"), val);
+        }
+    }
+    Some(result)
+}
+
+/// Write output bits to an S7 PLC.
+pub fn set_outputs(ip: &str, binary_str: &str, port: u16, timeout_secs: u64) -> bool {
+    let hex_val = bits_to_hex_byte(binary_str);
+    let mut stream = match setup_connection(ip, port, timeout_secs) {
+        Some(s) => s,
+        None => return false,
+    };
+
+    let pkt_str = format!(
+        "03000024 02f08032010000732f000e00050501120a10020001000082000000000400 08{hex_val}"
+    );
+    let resp = match send_recv(&mut stream, &hex_decode(&pkt_str)) {
+        Some(r) => r,
+        None => return false,
+    };
+    let hex = hex_encode(&resp);
+    hex.len() >= 2 && &hex[hex.len() - 2..] == "ff"
+}
+
+/// Write merker bits at a given byte offset.
+pub fn set_merkers(
+    ip: &str,
+    binary_str: &str,
+    offset: u32,
+    port: u16,
+    timeout_secs: u64,
+) -> bool {
+    let hex_val = bits_to_hex_byte(binary_str);
+    let bit_addr = (offset as u64 * 8) as usize;
+    let merker_offset = format!("{bit_addr:06x}");
+
+    let mut stream = match setup_connection(ip, port, timeout_secs) {
+        Some(s) => s,
+        None => return false,
+    };
+
+    let pkt_str = format!(
+        "03000025 02f080320100001500000e00060501120a10040001000083{merker_offset}00040010{hex_val}00"
+    );
+    let resp = match send_recv(&mut stream, &hex_decode(&pkt_str)) {
+        Some(r) => r,
+        None => return false,
+    };
+    let hex = hex_encode(&resp);
+    hex.len() >= 2 && &hex[hex.len() - 2..] == "ff"
+}
+
+/// Read `length` bytes from data block `db_num` starting at byte `offset`.
+pub fn read_data_block(
+    ip: &str,
+    db_num: u16,
+    offset: u16,
+    length: u16,
+    port: u16,
+    timeout_secs: u64,
+) -> anyhow::Result<Vec<u8>> {
+    let mut stream = setup_connection(ip, port, timeout_secs)
+        .ok_or_else(|| anyhow::anyhow!("failed to establish S7Comm session to {ip}:{port}"))?;
+
+    // S7Comm Read Area: area 0x84 (DB), transport size 0x02 (BYTE). The S7ANY
+    // address is a bit address, so the byte offset is shifted left by 3.
+    let bit_addr = u32::from(offset) * 8;
+    let pkt_str = format!(
+        "0300001f02f08032010000732f000e00000401120a1002{length:04x}{db_num:04x}84{bit_addr:06x}"
+    );
+    let resp = send_recv(&mut stream, &hex_decode(&pkt_str))
+        .ok_or_else(|| anyhow::anyhow!("no response reading DB{db_num}"))?;
+    let hex = hex_encode(&resp);
+
+    if hex.len() < 20 || &hex[18..20] != "00" {
+        anyhow::bail!("S7Comm protocol error reading DB{db_num} (offset {offset}, len {length})");
+    }
+
+    let s7_data = &hex[14..];
+    if s7_data.len() < 20 {
+        anyhow::bail!("short response reading DB{db_num}");
+    }
+    let data_length = usize::from_str_radix(&s7_data[16..20], 16)
+        .map_err(|e| anyhow::anyhow!("invalid data length field reading DB{db_num}: {e}"))?;
+    let items_start = 28;
+    let items_end = items_start + data_length * 2;
+    if s7_data.len() < items_end {
+        anyhow::bail!("truncated data reading DB{db_num}");
+    }
+    let items = &s7_data[items_start..items_end];
+    if items.len() < 8 || &items[..2] != "ff" {
+        anyhow::bail!("read of DB{db_num} rejected by PLC (block missing or protected)");
+    }
+    Ok(hex_decode(&items[8..]))
+}
+
+/// Write `data` bytes to data block `db_num` at byte `offset`.
+///
+/// Returns `true` if the PLC acknowledged the write (last response byte = 0xFF).
+pub fn write_data_block(
+    ip: &str,
+    db_num: u16,
+    offset: u16,
+    data: &[u8],
+    port: u16,
+    timeout_secs: u64,
+) -> anyhow::Result<bool> {
+    if data.is_empty() {
+        anyhow::bail!("write_data_block: no data to write");
+    }
+    let mut stream = setup_connection(ip, port, timeout_secs)
+        .ok_or_else(|| anyhow::anyhow!("failed to establish S7Comm session to {ip}:{port}"))?;
+
+    let n = data.len();
+    let bit_addr = u32::from(offset) * 8;
+    // data section: error_code(1) + transport_size(1) + bit_count(2) + data(n)
+    let data_section_len = 4 + n;
+    // param section: function(1) + items(1) + S7ANY item (12 bytes) = 14
+    let param_len = 14usize;
+    // TPKT total: header(4) + COTP(3) + S7Comm header(10) + param + data
+    let tpkt_len = 31 + data_section_len;
+    let bit_count = n * 8;
+    let data_hex = hex_encode(data);
+
+    // Parameter: write(0x05) | 1 item | S7ANY(0x12, len=10, transport=0x10, type=0x02)
+    // | count | db_num | area(0x84=DB) | bit_address
+    let pkt_str = format!(
+        "0300{tpkt_len:04x}02f08032010000732f{param_len:04x}{data_section_len:04x}\
+         0501120a1002{n:04x}{db_num:04x}84{bit_addr:06x}\
+         0004{bit_count:04x}{data_hex}"
+    );
+
+    let resp = send_recv(&mut stream, &hex_decode(&pkt_str))
+        .ok_or_else(|| anyhow::anyhow!("no response writing DB{db_num}"))?;
+    let hex = hex_encode(&resp);
+    Ok(hex.len() >= 2 && &hex[hex.len() - 2..] == "ff")
+}
+
+/// Enumerate readable data blocks on an S7 PLC.
+///
+/// Rather than parsing an SZL 0x0011 block list (whose binary layout varies
+/// across CPU families), this probes DB1..=DB200 by attempting to read their
+/// first 2 bytes via [`read_data_block`]. Blocks that respond successfully are
+/// returned. The reported size is the number of bytes the probe read back, not
+/// the block's full declared length.
+pub fn list_data_blocks(ip: &str, port: u16, timeout_secs: u64) -> Vec<(u16, u16)> {
+    let mut blocks = Vec::new();
+    for db_num in 1..=200u16 {
+        if let Ok(data) = read_data_block(ip, db_num, 0, 2, port, timeout_secs) {
+            if !data.is_empty() {
+                blocks.push((db_num, data.len() as u16));
+            }
+        }
+    }
+    blocks
+}
+
+/// Query the CPU operating state.
+pub fn get_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> String {
+    let addr = format!("{ip}:{port}");
+    let mut stream = match TcpStream::connect_timeout(
+        &addr.parse().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
+        Duration::from_secs(timeout_secs),
+    ) {
+        Ok(s) => s,
+        Err(_) => return "Unknown".to_string(),
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)));
+
+    // COTP CR
+    let cotp = hex_decode("030000 1611e00000001d00c1020100c2020100c0010a");
+    let cotp_resp = match send_recv(&mut stream, &cotp) {
+        Some(r) => r,
+        None => return "Unknown".to_string(),
+    };
+    if hex_encode(&cotp_resp).len() < 12 || &hex_encode(&cotp_resp)[10..12] != "d0" {
+        return "Unknown".to_string();
+    }
+
+    // S7 Setup
+    let setup_data = "32010000020000080000f0000001000101e0";
+    let tpkt_len = format!("{:02x}", (setup_data.len() + 14) / 2);
+    let _ = send_recv(&mut stream, &hex_decode(&format!("030000{tpkt_len}02f080{setup_data}")));
+
+    // S7 Read CPU State
+    let read_data = "3207000005000008000800011204 11440100ff09000404240001";
+    let tpkt_len2 = format!("{:02x}", (read_data.replace(' ', "").len() + 14) / 2);
+    let resp = match send_recv(
+        &mut stream,
+        &hex_decode(&format!("030000{tpkt_len2}02f080{read_data}")),
+    ) {
+        Some(r) => r,
+        None => return "Unknown".to_string(),
+    };
+
+    if resp.len() >= 45 {
+        if resp[44] == 0x03 {
+            "Stopped".to_string()
+        } else {
+            "Running".to_string()
+        }
+    } else {
+        "Unknown".to_string()
+    }
+}
+
+/// Toggle the CPU state (Running ↔ Stopped).
+pub fn change_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> bool {
+    let cur_state = get_cpu_state(ip, port, timeout_secs);
+    if cur_state == "Unknown" {
+        println!("Cannot determine CPU state, aborting");
+        return false;
+    }
+
+    let addr = format!("{ip}:{port}");
+    let mut stream = match TcpStream::connect_timeout(
+        &addr.parse().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
+        Duration::from_secs(timeout_secs),
+    ) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)));
+
+    // COTP CR for state change
+    let _ = send_recv(
+        &mut stream,
+        &hex_decode("03000016 11e00000002500c1020600c2020600c0010a"),
+    );
+
+    // SubscriptionContainer
+    let sub_resp = match send_recv(
+        &mut stream,
+        &hex_decode(
+            "030000c002f080720100b131000004ca0000000200000120360000011d 00040000000000a1000000d3821f0000a3816900\
+             1516 53657276657253657373696f6e5f453646353438 3534 34a3822100150b313a3a3a362e303a3a3a12a382 28\
+             00150d4f4d532b204465627567676572a3822900 1500a3822a001500a3822b00048480808000a3822c0012 11e1a300\
+             a3822d001500a1000000d3817f0000a3816900 1515537562736372697074696f6e436f6e7461696e 6572a2a2000000\
+             0072010000",
+        ),
+    ) {
+        Some(r) => r,
+        None => return false,
+    };
+
+    if sub_resp.len() < 25 {
+        return false;
+    }
+    let sid_byte = ((sub_resp[24] as u32 + 0x80) & 0xFF) as u8;
+    let sid = format!("{sid_byte:02x}");
+
+    let cmd_byte = if cur_state == "Stopped" { "ce" } else { "88" };
+
+    let state_pkt = format!(
+        "0300007802f080720200693100000542000000030000 03{sid}34000003{cmd_byte}010182320100170000013a823b00048140823c00048140823d000400823e00048480c040823f0015008240001506323b31303538824100030003000000000 4e88969001200000000896a001300896b000400000000000072020000"
+    );
+    let _ = send_recv(&mut stream, &hex_decode(&state_pkt));
+
+    let pkt2 = format!(
+        "0300002b02f0807202001c31000004bb00000005000003{sid}34000000010000000000000000000072020000"
+    );
+    let _ = send_recv(&mut stream, &hex_decode(&pkt2));
+
+    let pkt3 = format!(
+        "0300002b02f0807202001c31000004bb00000006000003{sid}34000000020001010000000000000072020000"
+    );
+    let _ = send_recv(&mut stream, &hex_decode(&pkt3));
+
+    // Drain
+    let mut drain_buf = [0u8; BUFFER_SIZE];
+    for _ in 0..10 {
+        match stream.read(&mut drain_buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+    }
+
+    let action_byte = if cur_state == "Stopped" { "03" } else { "01" };
+
+    let final_pkt = format!(
+        "0300004302f0807202003431000004f200000008000003{sid}36000000340190770008{action_byte}000004e889690012 00000000896a001300896b000400000000000000 72020000"
+    );
+    let _ = send_recv(&mut stream, &hex_decode(&final_pkt));
+
+    true
+}
+
+/// Get hardware/firmware info via COTP.
+pub fn get_device_info_cotp(
+    ip: &str,
+    port: u16,
+    timeout_secs: u64,
+) -> (Option<String>, Option<String>, String) {
+    let addr = format!("{ip}:{port}");
+    let mut stream = match TcpStream::connect_timeout(
+        &addr.parse().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
+        Duration::from_secs(timeout_secs),
+    ) {
+        Ok(s) => s,
+        Err(_) => {
+            return (None, None, "Unknown".to_string());
+        }
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)));
+
+    let cotp = hex_decode("03000016 11e00000000500c1020600c2020600c0010a");
+    let cotp_resp = match send_recv(&mut stream, &cotp) {
+        Some(r) => r,
+        None => return (None, None, get_cpu_state(ip, port, timeout_secs)),
+    };
+    if hex_encode(&cotp_resp).len() < 12 || &hex_encode(&cotp_resp)[10..12] != "d0" {
+        return (None, None, "Unknown".to_string());
+    }
+
+    let data = "720100b131000004ca0000000200000120360000011d 00040000000000a1000000d3821f0000a38169001516 53657276657253657373696f6e5f374236374343 3341a3822100150b313a3a3a362e303a3a3a12a38228 00150d4f4d532b204465627567676572a38229001500a3822a001500a3822b00048480808000a3822c001211e1a304a3822d001500a1000000d3817f0000a3816900 1515537562736372697074696f6e436f6e7461696e 6572a2a20000000072010000";
+    let tpkt_len = format!("{:02x}", (data.replace(' ', "").len() + 14) / 2);
+    let cotp_data_resp = match send_recv(
+        &mut stream,
+        &hex_decode(&format!("030000{tpkt_len}02f080{data}")),
+    ) {
+        Some(r) => r,
+        None => return (None, None, get_cpu_state(ip, port, timeout_secs)),
+    };
+
+    let cotp_str = String::from_utf8_lossy(&cotp_data_resp).to_string();
+    let parts: Vec<&str> = cotp_str.split(';').collect();
+
+    let hardware = parts.get(2).map(|s| s.to_string());
+    let firmware = parts.get(3).map(|s| {
+        s.replace('@', ".")
+            .chars()
+            .filter(|c| c.is_ascii_graphic() || *c == ' ')
+            .collect()
+    });
+
+    let cpu_state = get_cpu_state(ip, port, timeout_secs);
+    (hardware, firmware, cpu_state)
+}
+
+pub fn scan_port(ip: &str, port: u16) -> bool {
+    TcpStream::connect_timeout(
+        &format!("{ip}:{port}")
+            .parse()
+            .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
+        Duration::from_secs(1),
+    )
+    .is_ok()
+}
+
+pub fn tcp_scan(ip: &str) -> Vec<u16> {
+    let mut ports = Vec::new();
+    if scan_port(ip, 102) {
+        ports.push(102);
+    }
+    if scan_port(ip, 502) {
+        ports.push(502);
+    }
+    ports
+}
+
+fn bits_to_hex_byte(bits: &str) -> String {
+    use crate::core::bytes::bits_to_hex_byte;
+    bits_to_hex_byte(bits)
+}
