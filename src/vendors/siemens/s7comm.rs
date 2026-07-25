@@ -560,6 +560,19 @@ pub fn connect_authenticated(
     Some(stream)
 }
 
+/// Returns true if the device accepts a COTP+S7Comm session but rejects an
+/// unauthenticated SZL read with a non-zero error class — indicating that
+/// password protection is enabled on this CPU.
+pub fn probe_auth_required(ip: &str, port: u16, timeout_secs: u64) -> bool {
+    let Some(mut stream) = setup_connection(ip, port, timeout_secs) else {
+        return false; // unreachable — auth is not the blocker
+    };
+    match read_szl(&mut stream, 0x0011, 0x0000) {
+        None => false, // no response (timeout/dead socket) — not an auth rejection
+        Some(resp) => resp.len() >= 19 && resp[17] != 0x00,
+    }
+}
+
 pub fn scan_port(ip: &str, port: u16) -> bool {
     TcpStream::connect_timeout(
         &format!("{ip}:{port}")
