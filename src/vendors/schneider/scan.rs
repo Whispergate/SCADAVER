@@ -1,21 +1,23 @@
 use anyhow::Result;
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::net::UdpSocket;
 use std::time::Duration;
 
+use crate::core::modbus::{self, ModbusDeviceId, ModbusTcpClient};
 use crate::core::network::NetworkInterface;
 
 const DEST_PORT: u16 = 1740;
 const SOURCE_PORT: u16 = 1740;
-const MODBUS_PORT: u16 = 502;
-const MODBUS_UNIT_IDS: &[u8] = &[0x01, 0xFF];
 
 #[derive(Debug, Clone)]
 pub struct SchneiderDevice {
     pub ip: String,
     pub name: Option<String>,
     pub firmware: Option<String>,
+    pub protocol: Option<String>,
+    pub port: Option<u16>,
+    pub discovery_transport: Option<String>,
+    pub modbus_unit_id: Option<u8>,
+    pub identity_match: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +57,11 @@ fn parse_response(data: &[u8], src_ip: &str) -> SchneiderDevice {
         ip: src_ip.to_string(),
         name: None,
         firmware: None,
+        protocol: None,
+        port: None,
+        discovery_transport: Some("udp".to_string()),
+        modbus_unit_id: None,
+        identity_match: false,
     };
 
     if data.len() >= 53 && hexdata.len() >= 106 {
@@ -83,6 +90,7 @@ fn parse_response(data: &[u8], src_ip: &str) -> SchneiderDevice {
             })
             .collect::<Vec<u8>>();
         dev.name = Some(String::from_utf8_lossy(&name).to_string());
+        dev.identity_match = true;
     }
     dev
 }
@@ -259,7 +267,7 @@ fn scan_ip_both(ip: &str, timeout: u64, silent: bool, port: u16) -> Result<Vec<S
 }
 
 fn effective_modbus_port(port: u16) -> u16 {
-    if port == 0 { MODBUS_PORT } else { port }
+    modbus::effective_port(port)
 }
 
 fn tcp_fallback_scan(ip: &str, timeout: u64, silent: bool, port: u16) -> Vec<SchneiderDevice> {
@@ -282,6 +290,11 @@ fn tcp_fallback_scan(ip: &str, timeout: u64, silent: bool, port: u16) -> Vec<Sch
             ip: ip.to_string(),
             name: Some(format!("Schneider-compatible Modbus TCP {port}")),
             firmware: None,
+            protocol: Some("modbus_tcp".to_string()),
+            port: Some(port),
+            discovery_transport: Some("tcp".to_string()),
+            modbus_unit_id: None,
+            identity_match: false,
         };
         if !silent {
             println!(
@@ -296,77 +309,48 @@ fn tcp_fallback_scan(ip: &str, timeout: u64, silent: bool, port: u16) -> Vec<Sch
 }
 
 fn modbus_device_id(ip: &str, timeout: u64, port: u16) -> Option<SchneiderDevice> {
-    let pdu = [0x2B, 0x0E, 0x01, 0x00];
-    for &unit_id in MODBUS_UNIT_IDS {
-        let Ok(resp) = modbus_transact(ip, timeout, port, unit_id, &pdu) else {
-            continue;
-        };
-        if resp.first().copied()? != 0x2B || resp.get(1).copied()? != 0x0E {
-            continue;
-        }
-
-        let mut dev = SchneiderDevice {
-            ip: ip.to_string(),
-            name: None,
-            firmware: None,
-        };
-        let obj_count = usize::from(*resp.get(6)?);
-        let mut pos = 7usize;
-        for _ in 0..obj_count.min(16) {
-            let obj_id = *resp.get(pos)?;
-            let obj_len = usize::from(*resp.get(pos + 1)?);
-            let value = resp.get(pos + 2..pos + 2 + obj_len)?;
-            let value = String::from_utf8_lossy(value).trim().to_string();
-            match obj_id {
-                0x00 if is_schneider_name(&value) => dev.name = Some(value),
-                0x01 if !value.is_empty() => dev.name = Some(value),
-                0x02 if !value.is_empty() => dev.firmware = Some(value),
-                _ => {}
-            }
-            pos += 2 + obj_len;
-        }
-
-        return Some(dev);
-    }
-    None
+    let client = ModbusTcpClient::new(ip)
+        .with_port(port)
+        .with_timeout_secs(timeout);
+    let id = client.read_device_id().ok()?;
+    Some(device_from_modbus_id(ip, port, id))
 }
 
 fn modbus_tcp_probe(ip: &str, timeout: u64, port: u16) -> bool {
-    let pdu = [0x03, 0x00, 0x00, 0x00, 0x01];
-    MODBUS_UNIT_IDS.iter().any(|&unit_id| {
-        modbus_transact(ip, timeout, port, unit_id, &pdu)
-            .map(|resp| matches!(resp.first(), Some(0x03 | 0x83)))
-            .unwrap_or(false)
-    })
+    ModbusTcpClient::new(ip)
+        .with_port(port)
+        .with_timeout_secs(timeout)
+        .probe_holding_register()
+        .is_ok()
 }
 
-fn modbus_transact(ip: &str, timeout: u64, port: u16, unit_id: u8, pdu: &[u8]) -> Result<Vec<u8>> {
-    let addr = format!("{ip}:{port}");
-    let timeout = Duration::from_secs(timeout.max(1));
-    let mut stream = TcpStream::connect_timeout(&addr.parse()?, timeout)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
+fn device_from_modbus_id(ip: &str, port: u16, id: ModbusDeviceId) -> SchneiderDevice {
+    let manufacturer = id.manufacturer().unwrap_or_default();
+    let product = id.product_name().unwrap_or_default();
+    let version = id.version().unwrap_or_default();
+    let identity_match = id
+        .objects
+        .values()
+        .any(|value| is_schneider_name(value));
 
-    let mut req = Vec::with_capacity(7 + pdu.len());
-    req.extend_from_slice(&1u16.to_be_bytes());
-    req.extend_from_slice(&0u16.to_be_bytes());
-    req.extend_from_slice(&u16::try_from(pdu.len() + 1)?.to_be_bytes());
-    req.push(unit_id);
-    req.extend_from_slice(pdu);
-    stream.write_all(&req)?;
+    let name = if !product.is_empty() {
+        Some(product.to_string())
+    } else if !manufacturer.is_empty() {
+        Some(manufacturer.to_string())
+    } else {
+        None
+    };
 
-    let mut header = [0u8; 7];
-    stream.read_exact(&mut header)?;
-    if header[2..4] != [0, 0] || header[6] != unit_id {
-        anyhow::bail!("not a Modbus TCP response");
+    SchneiderDevice {
+        ip: ip.to_string(),
+        name,
+        firmware: if version.is_empty() { None } else { Some(version.to_string()) },
+        protocol: Some("modbus_tcp".to_string()),
+        port: Some(port),
+        discovery_transport: Some("tcp".to_string()),
+        modbus_unit_id: Some(id.unit_id),
+        identity_match,
     }
-    let len = usize::from(u16::from_be_bytes([header[4], header[5]]));
-    if len < 2 {
-        anyhow::bail!("short Modbus TCP response");
-    }
-    let mut body = vec![0u8; len - 1];
-    stream.read_exact(&mut body)?;
-    Ok(body)
 }
 
 fn is_schneider_name(value: &str) -> bool {
@@ -378,6 +362,9 @@ fn is_schneider_name(value: &str) -> bool {
         || value.contains("m580")
         || value.contains("quantum")
         || value.contains("premium")
+        || value.contains("tm221")
+        || value.contains("tm241")
+        || value.contains("tm251")
 }
 
 fn hex_decode(s: &str) -> Vec<u8> {

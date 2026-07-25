@@ -149,13 +149,42 @@ const SCAN_ITEMS: &[&str] = &[
     "All vendors (parallel broadcast)",
     "Beckhoff TwinCAT   (UDP 48899)",
     "EtherNet/IP CIP    (UDP 44818)",
-    "Schneider Electric (UDP 1740)",
+    "Schneider Electric (UDP 1740 broadcast)",
     "Mitsubishi MELSEC  (UDP 5561)",
     "eWON IPCONF        (UDP 1507)",
     "\u{2190} Return",
 ];
 
 const SCAN_BACK_IDX: usize = SCAN_ITEMS.len() - 1;
+
+#[derive(Debug, Clone)]
+struct TargetScan {
+    ip: String,
+    port: Option<u16>,
+    transport: Option<crate::vendors::schneider::scan::Transport>,
+}
+
+impl TargetScan {
+    fn new(ip: String) -> Self {
+        Self {
+            ip,
+            port: None,
+            transport: None,
+        }
+    }
+
+    fn label(&self) -> String {
+        let port = self.port.map_or(String::new(), |p| format!(":{p}"));
+        let transport = self
+            .transport
+            .map_or(String::new(), |t| format!(" {}", schneider_transport_label(t)));
+        format!("{}{}{}", self.ip, port, transport)
+    }
+
+    fn should_try_schneider(&self) -> bool {
+        self.port.is_some() || self.transport.is_some()
+    }
+}
 
 // ─── App state ───────────────────────────────────────────────────────────────
 
@@ -356,18 +385,142 @@ impl App {
 
 // ─── Scan workers ────────────────────────────────────────────────────────────
 
-fn spawn_ip_scan(ip: String, tx: mpsc::Sender<ScanEvent>) {
+fn parse_target_scan(raw: &str) -> Option<TargetScan> {
+    let mut parts = raw.split_whitespace();
+    let addr = parts.next()?;
+    let transport = match parts.next() {
+        Some(token) => Some(parse_schneider_transport(token)?),
+        None => None,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+
+    let (ip, port) = if let Some((addr_ip, port_s)) = addr.rsplit_once(':') {
+        let port = port_s.parse::<u16>().ok()?;
+        if port == 0 {
+            return None;
+        }
+        (addr_ip.to_string(), Some(port))
+    } else {
+        (addr.to_string(), None)
+    };
+
+    ip.parse::<std::net::Ipv4Addr>().ok()?;
+    Some(TargetScan { ip, port, transport })
+}
+
+fn parse_schneider_transport(token: &str) -> Option<crate::vendors::schneider::scan::Transport> {
+    use crate::vendors::schneider::scan::Transport;
+    match token.to_ascii_lowercase().as_str() {
+        "udp" => Some(Transport::Udp),
+        "tcp" => Some(Transport::Tcp),
+        "both" => Some(Transport::Both),
+        _ => None,
+    }
+}
+
+fn schneider_transport_label(transport: crate::vendors::schneider::scan::Transport) -> &'static str {
+    use crate::vendors::schneider::scan::Transport;
+    match transport {
+        Transport::Udp => "udp",
+        Transport::Tcp => "tcp",
+        Transport::Both => "both",
+    }
+}
+
+fn selected_transport(app: &App) -> Option<crate::vendors::schneider::scan::Transport> {
+    app.selected_device()
+        .and_then(|d| d.fields.get("discovery_transport"))
+        .and_then(|v| v.as_str())
+        .and_then(parse_schneider_transport)
+}
+
+fn schneider_device_info(d: crate::vendors::schneider::scan::SchneiderDevice) -> DeviceInfo {
+    let ip = d.ip.clone();
+    let mut fields = HashMap::new();
+    if let Some(name) = d.name {
+        fields.insert("name".into(), Value::String(name));
+    }
+    if let Some(fw) = d.firmware {
+        fields.insert("firmware".into(), Value::String(fw));
+    }
+    if let Some(protocol) = d.protocol {
+        fields.insert("protocol".into(), Value::String(protocol));
+    }
+    if let Some(port) = d.port {
+        fields.insert("port".into(), Value::Number(i64::from(port).into()));
+    }
+    if let Some(transport) = d.discovery_transport {
+        fields.insert("discovery_transport".into(), Value::String(transport));
+    }
+    if let Some(unit_id) = d.modbus_unit_id {
+        fields.insert("modbus_unit_id".into(), Value::Number(i64::from(unit_id).into()));
+    }
+    DeviceInfo {
+        vendor: "schneider".into(),
+        ip,
+        fields,
+    }
+}
+
+fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
     std::thread::spawn(move || {
-        let _ = tx.send(ScanEvent::Output(format!("[*] Probing {ip}...")));
-        match detect_device(&ip, 8) {
+        let label = target.label();
+        let _ = tx.send(ScanEvent::Output(format!("[*] Probing {label}...")));
+
+        if target.should_try_schneider() {
+            use crate::core::modbus;
+            use crate::vendors::schneider::scan;
+
+            let port = target.port.unwrap_or(modbus::DEFAULT_PORT);
+            let transport = target.transport.unwrap_or(scan::Transport::Both);
+            let _ = tx.send(ScanEvent::Output(format!(
+                "[*] Schneider targeted scan ({}, TCP port {port})...",
+                schneider_transport_label(transport)
+            )));
+            if let Ok(devs) = scan::scan_ip_with_transport(&target.ip, 3, true, port, transport) {
+                if let Some(dev) = devs.into_iter().next() {
+                    let name = dev.name.clone().unwrap_or_else(|| "Schneider-compatible".into());
+                    let _ = tx.send(ScanEvent::Output(format!("[+] Schneider: {} ({name})", target.ip)));
+                    let _ = tx.send(ScanEvent::DeviceFound(schneider_device_info(dev)));
+                    let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
+                    return;
+                }
+            }
+
+            if target.transport.is_some() {
+                let _ = tx.send(ScanEvent::Output(format!("[-] {label} - no Schneider response")));
+                let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete (no result)")));
+                return;
+            }
+        }
+
+        match detect_device(&target.ip, 8) {
             Some(info) => {
-                let _ = tx.send(ScanEvent::Output(format!("[+] {} \u{2192} {}", ip, info.vendor)));
+                let _ = tx.send(ScanEvent::Output(format!("[+] {} \u{2192} {}", target.ip, info.vendor)));
                 let _ = tx.send(ScanEvent::DeviceFound(info));
-                let _ = tx.send(ScanEvent::Done(format!("Scan of {ip} complete")));
+                let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
             }
             None => {
-                let _ = tx.send(ScanEvent::Output(format!("[-] {ip} \u{2014} no device identified")));
-                let _ = tx.send(ScanEvent::Done(format!("Scan of {ip} complete (no result)")));
+                if let Some(port) = target.port {
+                    let mut fields = HashMap::new();
+                    fields.insert("port".into(), Value::Number(i64::from(port).into()));
+                    let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
+                        vendor: "unknown".into(),
+                        ip: target.ip.clone(),
+                        fields,
+                    }));
+                    let _ = tx.send(ScanEvent::Output(format!(
+                        "[!] {label} - no device identified; stored with custom port"
+                    )));
+                } else {
+                    let _ = tx.send(ScanEvent::Output(format!(
+                        "[-] {} \u{2014} no device identified",
+                        target.ip
+                    )));
+                }
+                let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete (no result)")));
             }
         }
     });
@@ -463,12 +616,7 @@ fn scan_broadcast_schneider(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEven
             if ip.parse::<std::net::IpAddr>().is_err() { continue; }
             let name = d.name.clone().unwrap_or_default();
             let _ = tx.send(ScanEvent::Output(format!("[+] Schneider: {ip} ({name})")));
-            let mut fields = HashMap::new();
-            fields.insert("name".into(), Value::String(name));
-            if let Some(fw) = d.firmware {
-                fields.insert("firmware".into(), Value::String(fw));
-            }
-            let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo { vendor: "schneider".into(), ip, fields }));
+            let _ = tx.send(ScanEvent::DeviceFound(schneider_device_info(d)));
         }
     }
 }
@@ -2337,6 +2485,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(" Device Actions", s.fg(Color::Cyan).add_modifier(Modifier::BOLD))),
         Line::from(Span::styled("  A        Add / probe single IP", s.fg(Color::White))),
+        Line::from(Span::styled("           Forms: IP, IP:1502, IP tcp, IP:1502 tcp|udp|both", s.fg(Color::DarkGray))),
         Line::from(Span::styled("  S        Broadcast scan (all or by vendor)", s.fg(Color::White))),
         Line::from(Span::styled("  E        Open exploit menu for selected device", s.fg(Color::White))),
         Line::from(Span::styled("  R        Rescan selected device", s.fg(Color::White))),
@@ -2500,7 +2649,13 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
                 app.active_jobs += 1;
                 app.log(format!("[*] Rescanning {ip}..."));
                 let tx = app.scan_tx.clone();
-                spawn_ip_scan(ip, tx);
+                let port = app.device_port(0);
+                let mut target = TargetScan::new(ip);
+                if port != 0 {
+                    target.port = Some(port);
+                }
+                target.transport = selected_transport(app);
+                spawn_ip_scan(target, tx);
             }
         }
         KeyCode::Char('c') | KeyCode::Char('C')
@@ -2540,6 +2695,23 @@ fn handle_ip_input(app: &mut App, code: KeyCode) {
         KeyCode::Esc => { app.mode = Mode::Normal; app.input_buf.clear(); }
         KeyCode::Enter => {
             let raw = app.input_buf.trim().to_string();
+            if let Some(target) = parse_target_scan(&raw) {
+                if app.active_jobs == 0 {
+                    app.output_lines.clear();
+                    app.output_scroll = 0;
+                }
+                let label = target.label();
+                app.output_lines.push(format!("â•â• Probe @ {label} â•â•"));
+                app.active_jobs += 1;
+                app.log(format!("[*] Probing {label}..."));
+                let tx = app.scan_tx.clone();
+                spawn_ip_scan(target, tx);
+                app.mode = Mode::Normal;
+                app.input_buf.clear();
+            } else if !raw.is_empty() {
+                app.log(format!("[!] Invalid target: {raw}"));
+            }
+            if false {
             // Accept "ip" or "ip:port"
             let (ip, port_opt) = if let Some((addr, port_s)) = raw.split_once(':') {
                 (addr.to_string(), port_s.trim().parse::<u16>().ok())
@@ -2566,16 +2738,17 @@ fn handle_ip_input(app: &mut App, code: KeyCode) {
                     app.active_jobs += 1;
                     app.log(format!("[*] Probing {ip}..."));
                     let tx = app.scan_tx.clone();
-                    spawn_ip_scan(ip, tx);
+                    spawn_ip_scan(TargetScan::new(ip), tx);
                     app.mode = Mode::Normal;
                     app.input_buf.clear();
                 }
             } else if !raw.is_empty() {
                 app.log(format!("[!] Invalid IPv4 address: {ip}"));
             }
+            }
         }
         KeyCode::Backspace => { app.input_buf.pop(); }
-        KeyCode::Char(c) if app.input_buf.len() < 21 => app.input_buf.push(c),
+        KeyCode::Char(c) if app.input_buf.len() < 40 => app.input_buf.push(c),
         _ => {}
     }
 }
@@ -2840,6 +3013,33 @@ fn fire_exploit(app: &mut App, input: &str) {
 }
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vendors::schneider::scan::Transport;
+
+    #[test]
+    fn parse_target_scan_accepts_ip_only() {
+        let target = parse_target_scan("192.168.1.10").unwrap();
+        assert_eq!(target.ip, "192.168.1.10");
+        assert_eq!(target.port, None);
+        assert_eq!(target.transport, None);
+    }
+
+    #[test]
+    fn parse_target_scan_accepts_port_and_transport() {
+        let target = parse_target_scan("192.168.1.10:1502 tcp").unwrap();
+        assert_eq!(target.ip, "192.168.1.10");
+        assert_eq!(target.port, Some(1502));
+        assert_eq!(target.transport, Some(Transport::Tcp));
+    }
+
+    #[test]
+    fn parse_target_scan_rejects_bad_transport() {
+        assert!(parse_target_scan("192.168.1.10 serial").is_none());
+    }
+}
 
 pub fn run(db: Database) -> Result<()> {
     let mut app = App::new(&db)?;

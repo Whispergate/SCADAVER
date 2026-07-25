@@ -42,7 +42,6 @@ fn make_probes() -> Vec<ProbeFn> {
         Box::new(probe_ewon),
         Box::new(probe_mitsubishi),
         Box::new(probe_schneider),
-        Box::new(probe_modicon),
         Box::new(probe_phoenix),
         Box::new(probe_omron),
         Box::new(probe_iec104),
@@ -163,12 +162,27 @@ fn probe_schneider(ip: &str) -> Option<DeviceInfo> {
     use crate::vendors::schneider::scan;
     let devices = scan::scan_ip(ip, 3, true).ok()?;
     let d = devices.into_iter().next()?;
+    if !d.identity_match {
+        return None;
+    }
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
     if let Some(name) = d.name {
         fields.insert("name".into(), name.into());
     }
     if let Some(fw) = d.firmware {
         fields.insert("firmware".into(), fw.into());
+    }
+    if let Some(protocol) = d.protocol {
+        fields.insert("protocol".into(), protocol.into());
+    }
+    if let Some(port) = d.port {
+        fields.insert("port".into(), i64::from(port).into());
+    }
+    if let Some(transport) = d.discovery_transport {
+        fields.insert("discovery_transport".into(), transport.into());
+    }
+    if let Some(unit_id) = d.modbus_unit_id {
+        fields.insert("modbus_unit_id".into(), i64::from(unit_id).into());
     }
     Some(DeviceInfo {
         vendor: "schneider".into(),
@@ -177,6 +191,7 @@ fn probe_schneider(ip: &str) -> Option<DeviceInfo> {
     })
 }
 
+#[allow(dead_code)]
 fn probe_modicon(ip: &str) -> Option<DeviceInfo> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
@@ -346,6 +361,7 @@ pub fn detect_device(ip: &str, timeout_secs: u64) -> Option<DeviceInfo> {
 }
 
 // Keep hex module available for decode
+#[allow(dead_code)]
 mod hex {
     pub fn decode(s: &str) -> Result<Vec<u8>, ()> {
         if s.len() % 2 != 0 {
