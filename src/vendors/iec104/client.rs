@@ -192,15 +192,17 @@ pub fn general_interrogation(session: &mut Iec104Session) -> Result<Vec<DataObje
 pub fn single_command(session: &mut Iec104Session, ioa: u32, on: bool) -> Result<bool> {
     let asdu = single_cmd_asdu(session.asdu_addr, ioa, on);
     let resp = session.send_iframe(&asdu)?;
-    // Check COT in response: 7=Activation confirmation, P/N bit 6=0 means positive confirm
-    Ok(resp.len() >= 4 && resp[4] == 0x07 && (resp[5] & 0x40) == 0)
+    // recv() returns ctrl(4) + ASDU. ASDU: TypeID[4] VSQ[5] COT_lo[6] COT_hi[7] ...
+    // COT bits 0-5 = cause (7 = ActCon = Activation confirmation)
+    // COT bit 6 = P/N (0 = positive confirm)
+    Ok(resp.len() >= 7 && (resp[6] & 0x3F) == 0x07 && (resp[6] & 0x40) == 0)
 }
 
 /// Send Double Command (C_DC_NA_1). state: 1=off, 2=on, 3=indeterminate.
 pub fn double_command(session: &mut Iec104Session, ioa: u32, state: u8) -> Result<bool> {
     let asdu = double_cmd_asdu(session.asdu_addr, ioa, state);
     let resp = session.send_iframe(&asdu)?;
-    Ok(resp.len() >= 4 && resp[4] == 0x07 && (resp[5] & 0x40) == 0)
+    Ok(resp.len() >= 7 && (resp[6] & 0x3F) == 0x07 && (resp[6] & 0x40) == 0)
 }
 
 fn parse_response_objects(frame: &[u8], out: &mut Vec<DataObject>) {

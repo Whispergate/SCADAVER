@@ -258,7 +258,7 @@ pub fn get_state(device: &BeckhoffDevice, local_netid: &str) -> String {
     match ads_state {
         5 => "RUN".to_string(),
         6 => "STOP".to_string(),
-        15 => "CONFIG".to_string(),
+        16 => "CONFIG".to_string(),
         _ => format!("STATE_{ads_state}"),
     }
 }
@@ -320,10 +320,10 @@ pub fn set_twincat_state(
     mode: &str,
 ) -> Result<bool> {
     let ads_state: u16 = match mode.to_lowercase().as_str() {
-        "run" => 2,
-        "reset" => 5,
-        "stop" => 6,
-        "config" => 16,
+        "run" => 5,    // ADS_STATE_RUN
+        "reset" => 2,  // ADS_STATE_RESET
+        "stop" => 6,   // ADS_STATE_STOP
+        "config" => 16, // ADS_STATE_CONFIG
         _ => anyhow::bail!("Invalid mode '{mode}'. Use: run, stop, config, reset"),
     };
 
@@ -601,20 +601,21 @@ fn parse_symbol_entries(blob: &[u8]) -> Vec<AdsSymbol> {
         let index_group = u32_le(blob, pos + 4);
         let index_offset = u32_le(blob, pos + 8);
         let size = u32_le(blob, pos + 12);
-        // pos + 16..20: flags (ignored)
-        let type_len = u16_le(blob, pos + 20) as usize;
-        let name_len = u16_le(blob, pos + 22) as usize;
-        // pos + 24..26: comment length (skipped)
-
-        let name_start = pos + 26;
+        // pos+16: dataType (4 bytes), pos+20: flags (4 bytes)
+        // pos+24: nameLen (2), pos+26: typeLen (2), pos+28: commentLen (2)
+        let name_len = u16_le(blob, pos + 24) as usize;
+        let type_len = u16_le(blob, pos + 26) as usize;
+        // strings start at pos+30: name(nameLen)+NUL + type(typeLen)+NUL + ...
+        let name_start = pos + 30;
         let name_end = name_start + name_len;
-        let type_end = name_end + type_len;
+        let type_start = name_end + 1; // skip NUL terminator after name
+        let type_end = type_start + type_len;
         if type_end > pos + entry_len {
             break;
         }
 
         let name = c_string(&blob[name_start..name_end]);
-        let type_name = c_string(&blob[name_end..type_end]);
+        let type_name = c_string(&blob[type_start..type_end]);
 
         symbols.push(AdsSymbol {
             name,

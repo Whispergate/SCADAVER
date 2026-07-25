@@ -150,12 +150,16 @@ pub fn get_device_info_tcp(ip: &str) -> Result<FinsDevice> {
 pub fn scan_udp(ip: &str) -> Option<FinsDevice> {
     // Send Controller Data Read (05 01) directly via UDP
     let resp = send_fins_udp(ip, &[0x05, 0x01], 0x00).ok()?;
-    // Check for valid FINS response: at least 12 bytes (header 10 + response_code 2)
+    // Check for valid FINS response: at least 12 bytes (header 10 + end_code 2)
     if resp.len() < 12 {
         return None;
     }
     // ICF byte should indicate a response (bit 6 set → 0xC0)
     if resp[0] & 0x40 == 0 {
+        return None;
+    }
+    // end_code at resp[10..12]: 0x0000 = normal completion
+    if resp[10] != 0x00 || resp[11] != 0x00 {
         return None;
     }
     let server_node = resp[7]; // SA1 in the response = source (server) node address

@@ -287,6 +287,10 @@ pub fn enumerate_tags(ip: &str) -> Result<Vec<LogixTag>> {
     let mut last_instance = 0u32;
 
     loop {
+        // CIP path uses a 16-bit instance segment (0x25); guard against wrap-around.
+        if last_instance > 0xFFFF {
+            break;
+        }
         // CIP: Read Tag Service, Get Instance Attribute List
         let instance_bytes = last_instance.to_le_bytes();
         let cip = vec![
@@ -297,7 +301,7 @@ pub fn enumerate_tags(ip: &str) -> Result<Vec<LogixTag>> {
             0x25,
             0x00, // Pad
             instance_bytes[0],
-            instance_bytes[1], // Instance
+            instance_bytes[1], // Instance (16-bit)
             0x02,
             0x00, // Attribute count = 2
             0x01,
@@ -514,8 +518,9 @@ pub fn write_tag(ip: &str, tag_name: &str, type_code: u16, value_bytes: &[u8]) -
     let mut session = EipSession::connect(ip)?;
 
     let name_bytes = tag_name.as_bytes();
-    if name_bytes.len() > 480 {
-        anyhow::bail!("Tag name too long (max 480 bytes)");
+    // CIP ANSI Extended Symbolic Segment uses a 1-byte length field (max 255).
+    if name_bytes.len() > 255 {
+        anyhow::bail!("Tag name too long (max 255 bytes for CIP ANSI Symbolic Segment)");
     }
     let path_size = (1 + (name_bytes.len() + 1) / 2) as u8;
 
@@ -523,7 +528,7 @@ pub fn write_tag(ip: &str, tag_name: &str, type_code: u16, value_bytes: &[u8]) -
         0x4d, // Write Tag service
         path_size,
         0x91,
-        name_bytes.len() as u8,
+        name_bytes.len() as u8, // safe: checked ≤255 above
     ];
     cip.extend_from_slice(name_bytes);
     if name_bytes.len() % 2 != 0 {
