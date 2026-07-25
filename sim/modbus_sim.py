@@ -29,6 +29,7 @@ store = ModbusSlaveContext(
     co=ModbusSequentialDataBlock(0, co_values),
     hr=ModbusSequentialDataBlock(0, hr_values),
     ir=ModbusSequentialDataBlock(0, ir_values),
+    zero_mode=True,
 )
 ctx = ModbusServerContext(slaves=store, single=True)
 

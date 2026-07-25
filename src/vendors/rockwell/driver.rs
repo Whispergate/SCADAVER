@@ -43,9 +43,10 @@ struct EipSession {
 }
 
 impl EipSession {
-    fn connect(ip: &str) -> Result<Self> {
+    fn connect(ip: &str, port: u16) -> Result<Self> {
+        let effective_port = if port == 0 { EIP_PORT } else { port };
         let stream = TcpStream::connect_timeout(
-            &format!("{ip}:{EIP_PORT}").parse()?,
+            &format!("{ip}:{effective_port}").parse()?,
             Duration::from_secs(DEFAULT_TIMEOUT),
         )
         .context("TCP connect failed")?;
@@ -146,20 +147,20 @@ impl EipSession {
 /// Read the identity object from an EtherNet/IP device.
 ///
 /// Tries List Identity first (supported by all EtherNet/IP devices), then falls back
-/// to CIP Get Attribute All (Logix-only).  A 24-byte response means the device
-/// rejected the CIP request — usually drives, I/O adapters, or non-Logix PLCs.
-pub fn get_device_info(ip: &str) -> Result<LogixDevice> {
-    if let Ok(dev) = list_identity_tcp(ip) {
+/// to CIP Get Attribute All (Logix-only). Pass `port = 0` to use the default (44818).
+pub fn get_device_info(ip: &str, port: u16) -> Result<LogixDevice> {
+    if let Ok(dev) = list_identity_tcp(ip, port) {
         return Ok(dev);
     }
-    get_device_info_cip(ip)
+    get_device_info_cip(ip, port)
 }
 
 /// EtherNet/IP List Identity (command 0x63) over TCP — no session required.
 /// Works on every compliant EtherNet/IP device.
-fn list_identity_tcp(ip: &str) -> Result<LogixDevice> {
+fn list_identity_tcp(ip: &str, port: u16) -> Result<LogixDevice> {
+    let effective_port = if port == 0 { EIP_PORT } else { port };
     let mut stream = TcpStream::connect_timeout(
-        &format!("{ip}:{EIP_PORT}").parse()?,
+        &format!("{ip}:{effective_port}").parse()?,
         Duration::from_secs(DEFAULT_TIMEOUT),
     )
     .context("TCP connect failed")?;
@@ -229,8 +230,8 @@ fn parse_list_identity_response(data: &[u8], ip: &str) -> Result<LogixDevice> {
     })
 }
 
-fn get_device_info_cip(ip: &str) -> Result<LogixDevice> {
-    let mut session = EipSession::connect(ip).context("EIP session failed")?;
+fn get_device_info_cip(ip: &str, port: u16) -> Result<LogixDevice> {
+    let mut session = EipSession::connect(ip, port).context("EIP session failed")?;
 
     // CIP Get Attribute All on Identity Object (class 0x01, instance 1) — Logix only
     let cip = &[0x01, 0x02, 0x20, 0x01, 0x24, 0x01];
@@ -280,9 +281,9 @@ fn get_device_info_cip(ip: &str) -> Result<LogixDevice> {
     })
 }
 
-/// Enumerate tags from Logix controller's symbol list.
-pub fn enumerate_tags(ip: &str) -> Result<Vec<LogixTag>> {
-    let mut session = EipSession::connect(ip).context("EIP session failed")?;
+/// Enumerate tags from Logix controller's symbol list. Pass `port = 0` for the default (44818).
+pub fn enumerate_tags(ip: &str, port: u16) -> Result<Vec<LogixTag>> {
+    let mut session = EipSession::connect(ip, port).context("EIP session failed")?;
     let mut tags = Vec::new();
     let mut last_instance = 0u32;
 
@@ -403,8 +404,9 @@ pub fn enumerate_tags(ip: &str) -> Result<Vec<LogixTag>> {
 }
 
 /// Read a single named tag's raw value bytes (opens its own session).
-pub fn read_tag(ip: &str, tag_name: &str) -> Result<Vec<u8>> {
-    EipSession::connect(ip)?.read_tag_cip(tag_name)
+/// Pass `port = 0` for the default EtherNet/IP port (44818).
+pub fn read_tag(ip: &str, port: u16, tag_name: &str) -> Result<Vec<u8>> {
+    EipSession::connect(ip, port)?.read_tag_cip(tag_name)
 }
 
 /// Read multiple scalar tag values over a single reused EIP session.
@@ -412,11 +414,12 @@ pub fn read_tag(ip: &str, tag_name: &str) -> Result<Vec<u8>> {
 /// Returns one `Option<Vec<u8>>` per name: `Some(cip_payload)` on success,
 /// `None` if the tag read failed or the initial connect failed.
 /// Each payload has the same layout as `read_tag`: `[type_lo, type_hi, val...]`.
-pub fn read_tags_bulk(ip: &str, tag_names: &[&str]) -> Vec<Option<Vec<u8>>> {
+/// Pass `port = 0` for the default EtherNet/IP port (44818).
+pub fn read_tags_bulk(ip: &str, port: u16, tag_names: &[&str]) -> Vec<Option<Vec<u8>>> {
     if tag_names.is_empty() {
         return Vec::new();
     }
-    let mut session = match EipSession::connect(ip) {
+    let mut session = match EipSession::connect(ip, port) {
         Ok(s) => s,
         Err(_) => return vec![None; tag_names.len()],
     };
@@ -514,8 +517,9 @@ pub fn decode_value(tag_type: u16, cip_data: &[u8]) -> String {
 }
 
 /// Write raw bytes to a named tag.
-pub fn write_tag(ip: &str, tag_name: &str, type_code: u16, value_bytes: &[u8]) -> Result<()> {
-    let mut session = EipSession::connect(ip)?;
+/// Pass `port = 0` for the default EtherNet/IP port (44818).
+pub fn write_tag(ip: &str, port: u16, tag_name: &str, type_code: u16, value_bytes: &[u8]) -> Result<()> {
+    let mut session = EipSession::connect(ip, port)?;
 
     let name_bytes = tag_name.as_bytes();
     // CIP ANSI Extended Symbolic Segment uses a 1-byte length field (max 255).

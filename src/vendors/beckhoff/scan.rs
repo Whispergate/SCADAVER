@@ -215,10 +215,11 @@ pub fn discover_ip(ip: &str, timeout: u64, silent: bool) -> Result<Vec<BeckhoffD
     Ok(vec![dev])
 }
 
-/// Query the TwinCAT state via ADS.
-pub fn get_state(device: &BeckhoffDevice, local_netid: &str) -> String {
+/// Query the TwinCAT state via ADS. Pass `port = 0` to use the default ADS port (48898).
+pub fn get_state(device: &BeckhoffDevice, local_netid: &str, port: u16) -> String {
+    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
     let mut stream = match TcpStream::connect_timeout(
-        &format!("{}:{ADS_TCP_PORT}", device.ip).parse().unwrap(),
+        &format!("{}:{effective_port}", device.ip).parse().unwrap(),
         Duration::from_secs(3),
     ) {
         Ok(s) => s,
@@ -313,11 +314,12 @@ pub fn add_route(
     }
 }
 
-/// Change the TwinCAT service state.
+/// Change the TwinCAT service state. Pass `port = 0` to use the default ADS port (48898).
 pub fn set_twincat_state(
     device: &BeckhoffDevice,
     local_netid: &str,
     mode: &str,
+    port: u16,
 ) -> Result<bool> {
     let ads_state: u16 = match mode.to_lowercase().as_str() {
         "run" => 5,    // ADS_STATE_RUN
@@ -326,9 +328,9 @@ pub fn set_twincat_state(
         "config" => 16, // ADS_STATE_CONFIG
         _ => anyhow::bail!("Invalid mode '{mode}'. Use: run, stop, config, reset"),
     };
-
+    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
     let mut stream = TcpStream::connect_timeout(
-        &format!("{}:{ADS_TCP_PORT}", device.ip).parse()?,
+        &format!("{}:{effective_port}", device.ip).parse()?,
         Duration::from_secs(5),
     )?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -364,13 +366,15 @@ pub fn set_twincat_state(
     }
 }
 
-/// Get detailed device info (ADS read XML for TC3 devices).
+/// Get detailed device info (ADS read XML for TC3 devices). Pass `port = 0` for default (48898).
 pub fn get_device_info_full(
     device: &BeckhoffDevice,
     local_netid: &str,
+    port: u16,
 ) -> Option<BeckhoffDeviceInfo> {
+    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
     let mut stream = TcpStream::connect_timeout(
-        &format!("{}:{ADS_TCP_PORT}", device.ip).parse().ok()?,
+        &format!("{}:{effective_port}", device.ip).parse().ok()?,
         Duration::from_secs(5),
     )
     .ok()?;
@@ -506,8 +510,10 @@ pub struct AdsSymbol {
 /// Enumerate ADS symbols exposed by a Beckhoff device via the symbol upload
 /// protocol, reading scalar values where possible. Returns an empty Vec if the
 /// device does not support symbol upload or on any communication error.
-pub fn enumerate_symbols(device: &BeckhoffDevice, local_netid: &str) -> Vec<AdsSymbol> {
-    let addr = match format!("{}:{ADS_TCP_PORT}", device.ip).parse() {
+/// Pass `port = 0` to use the default ADS port (48898).
+pub fn enumerate_symbols(device: &BeckhoffDevice, local_netid: &str, port: u16) -> Vec<AdsSymbol> {
+    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
+    let addr = match format!("{}:{effective_port}", device.ip).parse() {
         Ok(a) => a,
         Err(_) => return Vec::new(),
     };
@@ -753,13 +759,16 @@ fn hex_str(bytes: &[u8]) -> String {
 }
 
 /// Write raw bytes to a symbol looked up by name from the device's symbol table.
+/// Pass `port = 0` to use the default ADS port (48898).
 pub fn write_symbol_value(
     device: &BeckhoffDevice,
     local_netid: &str,
     symbol_name: &str,
     value_bytes: Vec<u8>,
+    port: u16,
 ) -> Result<bool> {
-    let addr = format!("{}:{ADS_TCP_PORT}", device.ip).parse()?;
+    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
+    let addr = format!("{}:{effective_port}", device.ip).parse()?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
 
@@ -778,14 +787,17 @@ pub fn write_symbol_value(
 }
 
 /// Write raw bytes to a symbol identified by its ADS index group and offset.
+/// Pass `port = 0` to use the default ADS port (48898).
 pub fn write_symbol_by_index(
     device: &BeckhoffDevice,
     local_netid: &str,
     index_group: u32,
     index_offset: u32,
     data: Vec<u8>,
+    port: u16,
 ) -> Result<bool> {
-    let addr = format!("{}:{ADS_TCP_PORT}", device.ip).parse()?;
+    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
+    let addr = format!("{}:{effective_port}", device.ip).parse()?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     write_to_stream(&mut stream, device, local_netid, index_group, index_offset, data)

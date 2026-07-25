@@ -38,8 +38,9 @@ impl FinsDevice {
 
 // ─── TCP helpers ────────────────────────────────────────────────────────────
 
-fn tcp_connect(ip: &str) -> Result<TcpStream> {
-    let addr = format!("{ip}:{FINS_TCP_PORT}");
+fn tcp_connect(ip: &str, port: u16) -> Result<TcpStream> {
+    let effective_port = if port == 0 { FINS_TCP_PORT } else { port };
+    let addr = format!("{ip}:{effective_port}");
     let stream = TcpStream::connect_timeout(&addr.parse()?, TIMEOUT)?;
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
@@ -127,8 +128,9 @@ fn send_fins_udp(ip: &str, cmd: &[u8], server_node: u8) -> Result<Vec<u8>> {
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /// Connect via TCP, negotiate address, and read controller model/version (command 05 01).
-pub fn get_device_info_tcp(ip: &str) -> Result<FinsDevice> {
-    let mut stream = tcp_connect(ip)?;
+/// Pass `port = 0` to use the default FINS/TCP port (9600).
+pub fn get_device_info_tcp(ip: &str, port: u16) -> Result<FinsDevice> {
+    let mut stream = tcp_connect(ip, port)?;
     let server_node = negotiate_address(&mut stream)?;
     // Controller Data Read: 05 01
     let resp = send_fins_tcp(&mut stream, server_node, &[0x05, 0x01])?;
@@ -177,8 +179,9 @@ pub fn scan_udp(ip: &str) -> Option<FinsDevice> {
 }
 
 /// Read DM word area via TCP FINS (command 01 02, area 0x82).
-pub fn read_dm_words(ip: &str, node: u8, start: u16, count: u16) -> Result<Vec<u16>> {
-    let mut stream = tcp_connect(ip)?;
+/// Pass `port = 0` to use the default FINS/TCP port (9600).
+pub fn read_dm_words(ip: &str, port: u16, node: u8, start: u16, count: u16) -> Result<Vec<u16>> {
+    let mut stream = tcp_connect(ip, port)?;
     let server_node = negotiate_address(&mut stream)?;
     let cmd = [
         0x01, 0x01, // Memory Area Read
@@ -208,8 +211,9 @@ pub fn read_dm_words(ip: &str, node: u8, start: u16, count: u16) -> Result<Vec<u
 }
 
 /// Write DM word area via TCP FINS (command 01 02, area 0x82).
-pub fn write_dm_words(ip: &str, node: u8, start: u16, values: &[u16]) -> Result<()> {
-    let mut stream = tcp_connect(ip)?;
+/// Pass `port = 0` to use the default FINS/TCP port (9600).
+pub fn write_dm_words(ip: &str, port: u16, node: u8, start: u16, values: &[u16]) -> Result<()> {
+    let mut stream = tcp_connect(ip, port)?;
     let server_node = negotiate_address(&mut stream)?;
     let actual_node = if node == 0 { server_node } else { node };
     let count = values.len() as u16;
@@ -238,8 +242,9 @@ pub fn write_dm_words(ip: &str, node: u8, start: u16, values: &[u16]) -> Result<
 }
 
 /// Read CPU operating status via FINS (command 06 01).
-pub fn get_cpu_state(ip: &str, node: u8) -> Result<String> {
-    let mut stream = tcp_connect(ip)?;
+/// Pass `port = 0` to use the default FINS/TCP port (9600).
+pub fn get_cpu_state(ip: &str, port: u16, node: u8) -> Result<String> {
+    let mut stream = tcp_connect(ip, port)?;
     let server_node = negotiate_address(&mut stream)?;
     let actual_node = if node == 0 { server_node } else { node };
     let resp = send_fins_tcp_node(&mut stream, actual_node, &[0x06, 0x01])?;
@@ -257,8 +262,9 @@ pub fn get_cpu_state(ip: &str, node: u8) -> Result<String> {
 
 /// Change CPU operating mode via FINS (command 04 01).
 /// `run=true` → Monitor mode (0x02), `run=false` → Stop mode (0x00).
-pub fn set_cpu_mode(ip: &str, node: u8, run: bool) -> Result<bool> {
-    let mut stream = tcp_connect(ip)?;
+/// Pass `port = 0` to use the default FINS/TCP port (9600).
+pub fn set_cpu_mode(ip: &str, port: u16, node: u8, run: bool) -> Result<bool> {
+    let mut stream = tcp_connect(ip, port)?;
     let server_node = negotiate_address(&mut stream)?;
     let actual_node = if node == 0 { server_node } else { node };
     let mode_byte: u8 = if run { 0x02 } else { 0x00 };

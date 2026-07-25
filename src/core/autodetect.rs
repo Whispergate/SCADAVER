@@ -58,6 +58,7 @@ fn probe_beckhoff(ip: &str) -> Option<DeviceInfo> {
     fields.insert("netid".into(), d.netid_str.into());
     fields.insert("tc_version".into(), d.tc_version.into());
     fields.insert("kernel".into(), d.kernel.into());
+    fields.insert("port".into(), 48898i64.into());
     Some(DeviceInfo {
         vendor: "beckhoff".into(),
         ip: ip.into(),
@@ -66,20 +67,30 @@ fn probe_beckhoff(ip: &str) -> Option<DeviceInfo> {
 }
 
 fn probe_siemens(ip: &str) -> Option<DeviceInfo> {
-    use crate::vendors::siemens::scan;
-    let result = scan::scan_ip(ip).ok()?;
-    if !result.open_ports.contains(&102) {
-        return None;
-    }
-    let cpu_state = result.cpu_state?; // None means device didn't respond to S7Comm
+    use crate::vendors::siemens::s7comm;
+    use std::net::TcpStream;
+
+    // Budget: 3s TCP probe + 2s per S7Comm read ≤ 7s total, within detect_device's 8s window.
+    // tcp_scan uses a 1-second timeout that may miss WAN targets; probe directly here.
+    TcpStream::connect_timeout(
+        &format!("{ip}:102").parse().ok()?,
+        Duration::from_secs(3),
+    )
+    .ok()?;
+
+    // S7-1500 with S7comm+ or access protection: setup_connection succeeds on the first
+    // TSAP (c2020101) but SZL reads may return "Unknown" — still identify the device.
+    let (hardware, firmware, cpu_state) = s7comm::get_device_snapshot(ip, 102, 2);
+
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
-    if let Some(hw) = result.hardware {
+    if let Some(hw) = hardware {
         fields.insert("hardware".into(), hw.into());
     }
-    if let Some(fw) = result.firmware {
+    if let Some(fw) = firmware {
         fields.insert("firmware".into(), fw.into());
     }
     fields.insert("cpu_state".into(), cpu_state.into());
+    fields.insert("port".into(), 102i64.into());
     fields.insert("open_ports".into(), vec![102i64].into());
     Some(DeviceInfo {
         vendor: "siemens".into(),
@@ -105,6 +116,7 @@ fn probe_enip(ip: &str) -> Option<DeviceInfo> {
     fields.insert("vendor_id".into(), d.vendor_id.into());
     fields.insert("device_type".into(), d.device_type.into());
     fields.insert("revision".into(), d.revision.into());
+    fields.insert("port".into(), 44818i64.into());
     Some(DeviceInfo {
         vendor: vendor_name.into(),
         ip: ip.into(),
@@ -139,6 +151,7 @@ fn probe_mitsubishi(ip: &str) -> Option<DeviceInfo> {
     if let Some(title) = d.title {
         fields.insert("title".into(), title.into());
     }
+    fields.insert("port".into(), 5007i64.into());
     Some(DeviceInfo {
         vendor: "mitsubishi".into(),
         ip: ip.into(),
@@ -170,11 +183,11 @@ fn probe_modicon(ip: &str) -> Option<DeviceInfo> {
 
     let mut stream = TcpStream::connect_timeout(
         &format!("{ip}:502").parse().ok()?,
-        Duration::from_secs(3),
+        Duration::from_secs(5),
     )
     .ok()?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(3)))
+        .set_read_timeout(Some(Duration::from_secs(5)))
         .ok()?;
 
     // Modbus TCP Read Device Identification (FC 0x2B, MEI 0x0E, basic stream)
@@ -200,12 +213,13 @@ fn probe_modicon(ip: &str) -> Option<DeviceInfo> {
 
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
     fields.insert("protocol".into(), "Modbus TCP".into());
+    fields.insert("port".into(), 502i64.into());
 
-    // pdu: unit_id(1) + fc(1) + mei_type(1) + read_dev_id_code(1) + conformity(1) +
-    //      more_follows(1) + next_obj_id(1) + obj_count(1) + objects...
+    // pdu: unit_id(1) + fc(1) + mei_type(1) + dev_id_code(1) + conformity(1) +
+    //      more_follows(1) + next_obj_id(1) + obj_count(1) + [obj_id obj_len value...]*
     if pdu.len() > 8 {
-        let obj_count = pdu[8] as usize;
-        let mut pos = 9usize;
+        let obj_count = pdu[7] as usize;
+        let mut pos = 8usize;
         for _ in 0..obj_count.min(10) {
             if pos + 2 > pdu.len() {
                 break;
@@ -226,8 +240,19 @@ fn probe_modicon(ip: &str) -> Option<DeviceInfo> {
         }
     }
 
+    // Schneider Electric devices respond to Modbus Device ID — map vendor accordingly
+    let vendor = if fields.get("manufacturer")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_ascii_lowercase().contains("schneider"))
+        .unwrap_or(false)
+    {
+        "schneider"
+    } else {
+        "modicon"
+    };
+
     Some(DeviceInfo {
-        vendor: "modicon".into(),
+        vendor: vendor.into(),
         ip: ip.into(),
         fields,
     })
@@ -235,7 +260,7 @@ fn probe_modicon(ip: &str) -> Option<DeviceInfo> {
 
 fn probe_phoenix(ip: &str) -> Option<DeviceInfo> {
     use crate::vendors::phoenix::control;
-    let info = control::get_device_info(ip, true).ok()?;
+    let info = control::get_device_info(ip, 0, true).ok()?;
     if info.plc_type.is_empty() {
         return None;
     }
@@ -258,6 +283,7 @@ fn probe_omron(ip: &str) -> Option<DeviceInfo> {
     fields.insert("model".into(), dev.model.into());
     fields.insert("version".into(), dev.version.into());
     fields.insert("node".into(), serde_json::Value::Number(dev.node_addr.into()));
+    fields.insert("port".into(), 9600i64.into());
     Some(DeviceInfo {
         vendor: "omron".into(),
         ip: ip.into(),
@@ -267,7 +293,7 @@ fn probe_omron(ip: &str) -> Option<DeviceInfo> {
 
 fn probe_iec104(ip: &str) -> Option<DeviceInfo> {
     use crate::vendors::iec104::client;
-    if !client::probe(ip) {
+    if !client::probe(ip, 0) {
         return None;
     }
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();

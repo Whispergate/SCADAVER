@@ -1,5 +1,6 @@
 mod cli;
 mod core;
+mod creds;
 mod db;
 mod display;
 mod interactive;
@@ -10,6 +11,7 @@ fn main() {
     use clap::Parser;
     let args = cli::Args::parse();
     if args.command.is_none() {
+        creds::ensure_sample_exists();
         let db_path = db::Database::default_path();
         let db = match db::Database::open(&db_path) {
             Ok(d) => d,

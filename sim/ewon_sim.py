@@ -18,9 +18,10 @@ Expected TUI output with 'Extract Credentials adm:5':
   password=<decode failed>  Access: 15
 """
 import http.server
+import os
 import sys
 
-PORT = 80
+PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get('EWON_SIM_PORT', '80'))
 
 # Split on '","': 19 separators -> 20 parts
 EWON_RESPONSE = (

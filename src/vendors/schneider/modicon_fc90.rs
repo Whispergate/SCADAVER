@@ -19,8 +19,10 @@ pub enum ForceState {
     Unforce,
 }
 
-fn connect(ip: &str) -> Result<TcpStream> {
-    let addr = format!("{ip}:{FC90_PORT}");
+/// `port = 0` → use FC90_PORT (502).
+fn connect(ip: &str, port: u16) -> Result<TcpStream> {
+    let effective_port = if port == 0 { FC90_PORT } else { port };
+    let addr = format!("{ip}:{effective_port}");
     let stream = TcpStream::connect_timeout(&addr.parse()?, TIMEOUT)?;
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
@@ -52,8 +54,9 @@ fn check_ack(resp: &[u8]) -> bool {
 }
 
 /// Stop an M340, Quantum, or Premium PLC via unauthenticated FC90.
-pub fn stop_plc(ip: &str) -> Result<bool> {
-    let mut stream = connect(ip)?;
+/// Pass `port = 0` to use the default Modbus port (502).
+pub fn stop_plc(ip: &str, port: u16) -> Result<bool> {
+    let mut stream = connect(ip, port)?;
     init_sequence(&mut stream);
     let stop = [0x00u8, 0x5A, 0x01, 0x41, 0xFF, 0x00];
     let resp = send_recv_fc90(&mut stream, &stop)
@@ -62,8 +65,9 @@ pub fn stop_plc(ip: &str) -> Result<bool> {
 }
 
 /// Start an M340, Quantum, or Premium PLC via unauthenticated FC90.
-pub fn start_plc(ip: &str) -> Result<bool> {
-    let mut stream = connect(ip)?;
+/// Pass `port = 0` to use the default Modbus port (502).
+pub fn start_plc(ip: &str, port: u16) -> Result<bool> {
+    let mut stream = connect(ip, port)?;
     init_sequence(&mut stream);
     let start = [0x00u8, 0x5A, 0x01, 0x40, 0xFF, 0x00];
     let resp = send_recv_fc90(&mut stream, &start)
@@ -72,8 +76,8 @@ pub fn start_plc(ip: &str) -> Result<bool> {
 }
 
 /// Stop a TM221 (SoMachine Basic) PLC. No init sequence required.
-pub fn stop_tm221(ip: &str) -> Result<bool> {
-    let mut stream = connect(ip)?;
+pub fn stop_tm221(ip: &str, port: u16) -> Result<bool> {
+    let mut stream = connect(ip, port)?;
     let stop = [0x01u8, 0x5A, 0xC9, 0x41, 0xFF, 0x00];
     let resp = send_recv_fc90(&mut stream, &stop)
         .ok_or_else(|| anyhow::anyhow!("no response from FC90 TM221 stop on {ip}"))?;
@@ -81,8 +85,8 @@ pub fn stop_tm221(ip: &str) -> Result<bool> {
 }
 
 /// Start a TM221 (SoMachine Basic) PLC. No init sequence required.
-pub fn start_tm221(ip: &str) -> Result<bool> {
-    let mut stream = connect(ip)?;
+pub fn start_tm221(ip: &str, port: u16) -> Result<bool> {
+    let mut stream = connect(ip, port)?;
     let start = [0x01u8, 0x5A, 0xC9, 0x40, 0xFF, 0x00];
     let resp = send_recv_fc90(&mut stream, &start)
         .ok_or_else(|| anyhow::anyhow!("no response from FC90 TM221 start on {ip}"))?;
@@ -92,13 +96,13 @@ pub fn start_tm221(ip: &str) -> Result<bool> {
 /// Force a physical output bit via FC90 subcommand 0x71.
 ///
 /// `output_byte`: 0x11=Q0.17, 0x12=Q0.18, 0x13=Q0.19, 0x14=Q0.20, 0x15=Q0.21, 0x16=Q0.22
-pub fn force_output_bit(ip: &str, output_byte: u8, state: ForceState) -> Result<bool> {
+pub fn force_output_bit(ip: &str, port: u16, output_byte: u8, state: ForceState) -> Result<bool> {
     let state_byte: u8 = match state {
         ForceState::On => 0x01,
         ForceState::Off => 0x02,
         ForceState::Unforce => 0x04,
     };
-    let mut stream = connect(ip)?;
+    let mut stream = connect(ip, port)?;
     init_sequence(&mut stream);
     let pkt = [0x00u8, 0x5A, 0x71, output_byte, state_byte, 0x00];
     let resp = send_recv_fc90(&mut stream, &pkt)

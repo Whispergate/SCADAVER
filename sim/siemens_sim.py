@@ -51,10 +51,37 @@ S7_READ_ACK = bytes.fromhex(
     'aaaaaaaa'      # 4 bytes of 0xAA = 10101010
 )
 
-# CPU state response: >= 45 bytes, byte[44] != 0x03 -> "Running"
-_cpu = bytearray(50)
-_cpu[44] = 0x08
-CPU_STATE_ACK = bytes(_cpu)
+def szl_ack(szl_id: int, record: bytes) -> bytes:
+    data = (
+        b'\xff\x09'
+        + len(record).to_bytes(2, 'big')
+        + szl_id.to_bytes(2, 'big')
+        + b'\x00\x01'  # SZL index
+        + b'\x00\x01'  # record count
+        + len(record).to_bytes(2, 'big')
+        + record
+    )
+    body = (
+        b'\x02\xf0\x80'
+        b'\x32\x07'
+        b'\x00\x00'
+        b'\x00\x01'
+        b'\x00\x08'
+        + len(data).to_bytes(2, 'big')
+        + b'\x00\x00'
+        + data
+    )
+    return b'\x03\x00' + (len(body) + 4).to_bytes(2, 'big') + body
+
+
+module_record = bytearray(28)
+module_record[0:2] = b'\x00\x01'
+module_record[2:22] = b'6ES7 315-2EH14-0AB0'.ljust(20)[:20]
+module_record[26] = 3
+module_record[27] = 2
+MODULE_INFO_ACK = szl_ack(0x0011, bytes(module_record))
+
+CPU_STATE_ACK = szl_ack(0x0424, b'\x00\x01\x01\x00')
 
 
 def recv_exact(sock, n: int) -> bytes:
@@ -93,7 +120,11 @@ class SiemensHandler(socketserver.BaseRequestHandler):
                         elif func == 0x04:
                             sock.sendall(S7_READ_ACK)
                     elif msg_type == 0x07:
-                        sock.sendall(CPU_STATE_ACK)
+                        szl_id = struct.unpack('>H', pkt[-4:-2])[0] if len(pkt) >= 4 else 0
+                        if szl_id == 0x0011:
+                            sock.sendall(MODULE_INFO_ACK)
+                        else:
+                            sock.sendall(CPU_STATE_ACK)
         except Exception:
             pass
 

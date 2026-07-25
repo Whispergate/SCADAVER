@@ -87,9 +87,10 @@ impl Iec104Session {
 }
 
 /// Connect to an IEC 104 outstation, send STARTDT, and confirm the data transfer phase.
-/// Returns a session that can issue commands.
-pub fn connect(ip: &str) -> Result<Iec104Session> {
-    let addr = format!("{ip}:{IEC104_PORT}");
+/// Returns a session that can issue commands. Pass `port = 0` to use the default (2404).
+pub fn connect(ip: &str, port: u16) -> Result<Iec104Session> {
+    let effective_port = if port == 0 { IEC104_PORT } else { port };
+    let addr = format!("{ip}:{effective_port}");
     let stream = TcpStream::connect_timeout(&addr.parse()?, TIMEOUT)?;
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
@@ -113,9 +114,10 @@ pub fn connect(ip: &str) -> Result<Iec104Session> {
     Ok(session)
 }
 
-/// Probe an IP for an IEC 104 outstation using TESTFR (no data transfer required).
-pub fn probe(ip: &str) -> bool {
-    let Ok(addr) = format!("{ip}:{IEC104_PORT}").parse() else { return false };
+/// Probe an IP for an IEC 104 outstation using TESTFR. Pass `port = 0` for the default (2404).
+pub fn probe(ip: &str, port: u16) -> bool {
+    let effective_port = if port == 0 { IEC104_PORT } else { port };
+    let Ok(addr) = format!("{ip}:{effective_port}").parse() else { return false };
     let Ok(stream) = TcpStream::connect_timeout(&addr, TIMEOUT) else { return false };
     let _ = stream.set_read_timeout(Some(TIMEOUT));
     let _ = stream.set_write_timeout(Some(TIMEOUT));

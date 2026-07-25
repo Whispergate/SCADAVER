@@ -27,6 +27,7 @@ rand = "0.8"
 network-interface = "2"
 console = "0.15"
 dirs = "5"
+toml = "0.8"
 ratatui = "0.29"
 crossterm = "0.28"
 rusqlite = { version = "0.31", features = ["bundled"] }

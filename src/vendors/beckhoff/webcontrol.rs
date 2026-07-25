@@ -32,13 +32,13 @@ fn get_uuid(target_ip: &str) -> Option<String> {
     None
 }
 
-fn soap_write(target_ip: &str, uuid: &str, index_offset: &str, pdata: &str) -> bool {
+fn soap_write(target_ip: &str, port: u16, uuid: &str, index_offset: &str, pdata: &str) -> bool {
     let soap = format!(
         r#"<?xml version="1.0" encoding="utf-8"?><s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:Write xmlns:u="urn:beckhoff.com:service:cxconfig:1"><netId></netId><nPort>0</nPort><indexGroup>0</indexGroup><IndexOffset>-{index_offset}</IndexOffset><pData>{pdata}</pData></u:Write></s:Body></s:Envelope>"#
     );
 
     let path = format!("/upnpisapi?uuid:{uuid}+urn:beckhoff.com:serviceId:cxconfig");
-    let url = format!("http://{target_ip}:5120{path}");
+    let url = format!("http://{target_ip}:{port}{path}");
 
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
@@ -65,9 +65,10 @@ fn soap_write(target_ip: &str, uuid: &str, index_offset: &str, pdata: &str) -> b
     }
 }
 
-/// Reboot a Beckhoff CX9020 via unauthenticated SOAP.
-pub fn reboot(target_ip: &str) -> Result<bool> {
+/// Reboot a Beckhoff CX9020 via unauthenticated SOAP. Pass `port = 0` for default (5120).
+pub fn reboot(target_ip: &str, port: u16) -> Result<bool> {
     validate_ipv4(target_ip)?;
+    let effective_port = if port == 0 { 5120 } else { port };
 
     let uuid = match get_uuid(target_ip) {
         Some(u) => u,
@@ -75,15 +76,16 @@ pub fn reboot(target_ip: &str) -> Result<bool> {
     };
     println!("UUID: {uuid}");
 
-    if soap_write(target_ip, &uuid, INDEX_INACTIVE_REBOOT, "AQAAAAAA") {
+    if soap_write(target_ip, effective_port, &uuid, INDEX_INACTIVE_REBOOT, "AQAAAAAA") {
         return Ok(true);
     }
-    Ok(soap_write(target_ip, &uuid, INDEX_ACTIVE_REBOOT, "AQAAAAAA"))
+    Ok(soap_write(target_ip, effective_port, &uuid, INDEX_ACTIVE_REBOOT, "AQAAAAAA"))
 }
 
-/// Add a web user via unauthenticated SOAP.
-pub fn add_user(target_ip: &str, username: &str, password: &str) -> Result<bool> {
+/// Add a web user via unauthenticated SOAP. Pass `port = 0` for default (5120).
+pub fn add_user(target_ip: &str, port: u16, username: &str, password: &str) -> Result<bool> {
     validate_ipv4(target_ip)?;
+    let effective_port = if port == 0 { 5120 } else { port };
     if username.len() > 15 {
         anyhow::bail!("Username must be 15 characters or fewer (CX9020 limit)");
     }
@@ -114,10 +116,10 @@ pub fn add_user(target_ip: &str, username: &str, password: &str) -> Result<bool>
     let pdata = general_purpose::STANDARD.encode(&full);
     println!("Adding user '{username}' with SOAP payload");
 
-    if soap_write(target_ip, &uuid, INDEX_INACTIVE_USER, &pdata) {
+    if soap_write(target_ip, effective_port, &uuid, INDEX_INACTIVE_USER, &pdata) {
         return Ok(true);
     }
-    Ok(soap_write(target_ip, &uuid, INDEX_ACTIVE_USER, &pdata))
+    Ok(soap_write(target_ip, effective_port, &uuid, INDEX_ACTIVE_USER, &pdata))
 }
 
 fn validate_ipv4(ip: &str) -> Result<()> {

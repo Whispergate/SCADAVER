@@ -1,4 +1,5 @@
 pub mod beckhoff;
+pub mod default_creds;
 pub mod enip;
 pub mod ewon;
 pub mod iec104;

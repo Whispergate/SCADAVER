@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
@@ -66,6 +66,13 @@ pub enum Command {
 // scan subcommands
 // ===================================================================
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum SchneiderScanTransport {
+    Both,
+    Udp,
+    Tcp,
+}
+
 #[derive(Subcommand)]
 pub enum ScanCmd {
     /// Scan for EtherNet/IP (CIP) devices (UDP 44818)
@@ -82,12 +89,18 @@ pub enum ScanCmd {
         #[arg(short, long)]
         ip: Option<String>,
     },
-    /// Scan for Schneider Electric devices (UDP 1740)
+    /// Scan for Schneider Electric devices (UDP discovery or Modbus TCP)
     Schneider {
         #[arg(short, long, default_value = "2")]
         timeout: u64,
         #[arg(short, long)]
         ip: Option<String>,
+        /// Transport for targeted scans: udp, tcp, or both
+        #[arg(long, value_enum, default_value = "both")]
+        transport: SchneiderScanTransport,
+        /// Modbus TCP port for targeted TCP scans
+        #[arg(long, default_value = "502")]
+        port: u16,
     },
     /// Scan for Mitsubishi MELSEC devices (UDP 5561/5006)
     Mitsubishi {
@@ -189,6 +202,9 @@ pub enum ExploitCmd {
         target: String,
         #[arg(short, long, default_value = "20")]
         max_users: u32,
+        /// Override port (default: 80)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// Flash LED on a Schneider Electric PLC
     SchneiderFlash {
@@ -249,6 +265,9 @@ pub enum ExploitCmd {
         /// Number of coils to read (max 2000)
         #[arg(short, long, default_value = "16")]
         count: u16,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// Modbus FC3: read holding registers
     ModbusReadRegisters {
@@ -260,6 +279,9 @@ pub enum ExploitCmd {
         /// Number of registers to read (max 125)
         #[arg(short, long, default_value = "10")]
         count: u16,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// Modbus FC4: read input registers
     ModbusReadInputRegisters {
@@ -271,6 +293,9 @@ pub enum ExploitCmd {
         /// Number of registers to read (max 125)
         #[arg(short, long, default_value = "10")]
         count: u16,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// Modbus FC5: write a single coil
     ModbusWriteCoil {
@@ -282,6 +307,9 @@ pub enum ExploitCmd {
         /// on / off
         #[arg(short, long, default_value = "on")]
         state: String,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// Modbus FC6: write a single holding register
     ModbusWriteRegister {
@@ -291,6 +319,9 @@ pub enum ExploitCmd {
         address: u16,
         #[arg(short, long)]
         value: u16,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// Modbus FC16: write multiple holding registers
     ModbusWriteRegisters {
@@ -300,26 +331,41 @@ pub enum ExploitCmd {
         start: u16,
         /// Comma-separated u16 values, e.g. 100,200,300
         values: String,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// FC90: unauthenticated STOP on Schneider M340/Quantum/Premium
     Fc90Stop {
         #[arg(short, long)]
         target: String,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// FC90: unauthenticated START on Schneider M340/Quantum/Premium
     Fc90Start {
         #[arg(short, long)]
         target: String,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// FC90: unauthenticated STOP on Schneider TM221
     Fc90StopTm221 {
         #[arg(short, long)]
         target: String,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// FC90: unauthenticated START on Schneider TM221
     Fc90StartTm221 {
         #[arg(short, long)]
         target: String,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// FC90: force a physical output bit on Schneider M340
     Fc90Force {
@@ -331,6 +377,9 @@ pub enum ExploitCmd {
         /// on / off / unforce
         #[arg(long, default_value = "on")]
         state: String,
+        /// Override port (default: 502)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// SLMP: write D (word) registers on Mitsubishi MELSEC
     SlmpWriteD {
@@ -362,11 +411,15 @@ pub enum RockwellCmd {
     Tags {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "44818")]
+        port: u16,
     },
     /// Read one tag (or list all if TAG is omitted)
     Read {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "44818")]
+        port: u16,
         /// Tag name (omit to enumerate all tags)
         tag: Option<String>,
     },
@@ -374,6 +427,8 @@ pub enum RockwellCmd {
     Write {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "44818")]
+        port: u16,
         /// TAG=HEXVALUE, e.g. MyBool=01 or MyInt=0100
         #[arg(required = true)]
         assignments: Vec<String>,
@@ -382,6 +437,8 @@ pub enum RockwellCmd {
     Info {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "44818")]
+        port: u16,
     },
 }
 
@@ -462,11 +519,15 @@ pub enum OmronCmd {
     Info {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "9600")]
+        port: u16,
     },
     /// Read DM word registers
     ReadDm {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "9600")]
+        port: u16,
         #[arg(long, default_value = "0")]
         start: u16,
         #[arg(long, default_value = "10")]
@@ -476,6 +537,8 @@ pub enum OmronCmd {
     WriteDm {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "9600")]
+        port: u16,
         #[arg(long, default_value = "0")]
         start: u16,
         /// Comma-separated u16 values
@@ -485,16 +548,22 @@ pub enum OmronCmd {
     CpuStatus {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "9600")]
+        port: u16,
     },
     /// Set CPU to Monitor/Run mode
     CpuRun {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "9600")]
+        port: u16,
     },
     /// Set CPU to Stop mode
     CpuStop {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "9600")]
+        port: u16,
     },
 }
 
@@ -508,11 +577,15 @@ pub enum Iec104Cmd {
     Gi {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "2404")]
+        port: u16,
     },
     /// Send Single Command ON to an IOA
     ScOn {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "2404")]
+        port: u16,
         /// Information Object Address
         #[arg(long)]
         ioa: u32,
@@ -521,6 +594,8 @@ pub enum Iec104Cmd {
     ScOff {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "2404")]
+        port: u16,
         #[arg(long)]
         ioa: u32,
     },
@@ -528,6 +603,8 @@ pub enum Iec104Cmd {
     Dc {
         #[arg(short, long)]
         target: String,
+        #[arg(short, long, default_value = "2404")]
+        port: u16,
         #[arg(long)]
         ioa: u32,
         #[arg(long, default_value = "2")]
@@ -635,15 +712,24 @@ fn run_scan(cmd: ScanCmd) -> Result<()> {
             }
         }
 
-        ScanCmd::Schneider { timeout, ip } => {
+        ScanCmd::Schneider { timeout, ip, transport, port } => {
             use crate::vendors::schneider::scan;
             if let Some(target) = ip {
                 crate::display::print_info(&format!("Scanning {target} for Schneider…"));
-                let devs = scan::scan_ip(&target, timeout, false)?;
+                let transport = match transport {
+                    SchneiderScanTransport::Both => scan::Transport::Both,
+                    SchneiderScanTransport::Udp => scan::Transport::Udp,
+                    SchneiderScanTransport::Tcp => scan::Transport::Tcp,
+                };
+                let devs = scan::scan_ip_with_transport(&target, timeout, false, port, transport)?;
                 if devs.is_empty() {
                     crate::display::print_warn("No Schneider devices found.");
                 }
             } else {
+                if matches!(transport, SchneiderScanTransport::Tcp) {
+                    crate::display::print_error("TCP Schneider scans require --ip.");
+                    return Ok(());
+                }
                 let ifaces = get_interfaces();
                 let iface = select_interface(&ifaces)?;
                 crate::display::print_info("Broadcasting Schneider discovery (UDP 1740)…");
@@ -753,7 +839,7 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
             match action.to_lowercase().as_str() {
                 "info" => {
                     let pb = crate::display::spinner_start(&format!("Querying {target}…"));
-                    let result = control::get_device_info(&target, false);
+                    let result = control::get_device_info(&target, 0, false);
                     pb.finish_and_clear();
                     match result {
                         Ok(info) => {
@@ -770,7 +856,7 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
                     let pb = crate::display::spinner_start(&format!("Sending {a} to {target}…"));
                     let result = if model.eq_ignore_ascii_case("ilc390") {
                         let action_str = if a == "stop" { "stop" } else { "start" };
-                        control::control_ilc390(&target, action_str)
+                        control::control_ilc390(&target, 0, action_str)
                     } else {
                         let action_str = if a == "stop" { "stop" } else { "start" };
                         let start_type = match a {
@@ -778,7 +864,7 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
                             "hot" => "hot",
                             _ => "cold",
                         };
-                        control::control_ilc150(&target, action_str, start_type)
+                        control::control_ilc150(&target, 0, action_str, start_type)
                     };
                     pb.finish_and_clear();
                     match result {
@@ -862,13 +948,13 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
 
             if let Some(s) = state {
                 crate::display::print_info(&format!("Setting TwinCAT state to {s}…"));
-                match scan::set_twincat_state(&dev, &local_netid, &s) {
+                match scan::set_twincat_state(&dev, &local_netid, &s, 0) {
                     Ok(_) => crate::display::print_success("State command sent."),
                     Err(e) => crate::display::print_error(&format!("{e}")),
                 }
             } else {
                 let pb2 = crate::display::spinner_start("Reading full device info…");
-                let result = scan::get_device_info_full(&dev, &local_netid);
+                let result = scan::get_device_info_full(&dev, &local_netid, 0);
                 pb2.finish_and_clear();
                 match result {
                     Some(info) => {
@@ -893,10 +979,10 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
 
 fn run_exploit(cmd: ExploitCmd) -> Result<()> {
     match cmd {
-        ExploitCmd::EwonCreds { target, max_users } => {
+        ExploitCmd::EwonCreds { target, max_users, port } => {
             use crate::vendors::ewon::exploit;
             crate::display::print_info(&format!("Extracting credentials from {target}…"));
-            match exploit::exploit(&target, "adm", max_users) {
+            match exploit::exploit(&target, port, "adm", max_users) {
                 Ok(users) if users.is_empty() => {
                     crate::display::print_warn("No credentials extracted.");
                 }
@@ -919,7 +1005,7 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
         ExploitCmd::SchneiderHijack { target, action } => {
             use crate::vendors::schneider::session_hijack;
             let pb = crate::display::spinner_start(&format!("Fetching session from {target}…"));
-            let session = session_hijack::get_session_cookie(&target);
+            let session = session_hijack::get_session_cookie(&target, 0);
             pb.finish_and_clear();
             let session = match session {
                 Some(s) => s,
@@ -934,11 +1020,12 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             ));
             match action.as_str() {
                 "info" => {
-                    session_hijack::get_device_info(&target, &session.cookie_value, "Administrator");
+                    session_hijack::get_device_info(&target, 0, &session.cookie_value, "Administrator");
                 }
                 a => {
                     let ok = session_hijack::control_plc(
                         &target,
+                        0,
                         &session.cookie_value,
                         "Administrator",
                         a,
@@ -955,7 +1042,7 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
         ExploitCmd::PhoenixPasswords { target } => {
             use crate::vendors::phoenix::webvisit;
             let pb = crate::display::spinner_start(&format!("Retrieving passwords from {target}…"));
-            let result = webvisit::retrieve_passwords(&target);
+            let result = webvisit::retrieve_passwords(&target, 0);
             pb.finish_and_clear();
             match result {
                 Ok(entries) if entries.is_empty() => {
@@ -977,17 +1064,17 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
 
         ExploitCmd::PhoenixTags { target, read, write } => {
             use crate::vendors::phoenix::webvisit;
-            let (_, tags) = webvisit::get_tags(&target)?;
+            let (_, tags) = webvisit::get_tags(&target, 0)?;
             crate::display::print_success(&format!("Found {} tag(s).", tags.len()));
             if read {
-                let values = webvisit::read_tag_values(&target, &tags)?;
+                let values = webvisit::read_tag_values(&target, 0, &tags)?;
                 for (name, val) in &values {
                     println!("  {name}: {val}");
                 }
             }
             if let Some(pair) = write {
                 let (tag_name, value) = pair.split_once('=').unwrap_or((&pair, "0"));
-                webvisit::write_tag_value(&target, tag_name, value)?;
+                webvisit::write_tag_value(&target, 0, tag_name, value)?;
                 crate::display::print_success(&format!("Wrote {tag_name} = {value}"));
             }
         }
@@ -995,7 +1082,7 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
         ExploitCmd::BeckhoffReboot { target } => {
             use crate::vendors::beckhoff::webcontrol;
             crate::display::print_info(&format!("Sending reboot to {target}…"));
-            match webcontrol::reboot(&target) {
+            match webcontrol::reboot(&target, 0) {
                 Ok(true) => crate::display::print_success("Reboot command sent."),
                 Ok(false) => crate::display::print_warn("Reboot sent (no confirmation)."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
@@ -1005,7 +1092,7 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
         ExploitCmd::BeckhoffUser { target, username, password } => {
             use crate::vendors::beckhoff::webcontrol;
             crate::display::print_info(&format!("Adding user '{username}' to {target}…"));
-            match webcontrol::add_user(&target, &username, &password) {
+            match webcontrol::add_user(&target, 0, &username, &password) {
                 Ok(true) => crate::display::print_success("User creation command sent."),
                 Ok(false) => crate::display::print_warn("Command sent (no confirmation)."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
@@ -1033,17 +1120,17 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
                     return Ok(());
                 }
             };
-            match scan::write_symbol_value(&dev, &local_netid, sym_name, value_bytes) {
+            match scan::write_symbol_value(&dev, &local_netid, sym_name, value_bytes, 0) {
                 Ok(true) => crate::display::print_success(&format!("Symbol '{sym_name}' written.")),
                 Ok(false) => crate::display::print_warn("Write sent — ADS error code returned."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::ModbusReadCoils { target, start, count } => {
+        ExploitCmd::ModbusReadCoils { target, start, count, port } => {
             use crate::vendors::schneider::modbus;
             crate::display::print_info(&format!("Reading {count} coils from {target} (start={start})…"));
-            match modbus::read_coils(&target, start, count) {
+            match modbus::read_coils(&target, port, start, count) {
                 Ok(regs) => {
                     for r in &regs {
                         crate::display::print_success(&format!("  {:>6}  {}", r.display_addr, r.value_str));
@@ -1054,10 +1141,10 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::ModbusReadRegisters { target, start, count } => {
+        ExploitCmd::ModbusReadRegisters { target, start, count, port } => {
             use crate::vendors::schneider::modbus;
             crate::display::print_info(&format!("Reading {count} holding registers from {target} (start={start})…"));
-            match modbus::read_holding_registers(&target, start, count) {
+            match modbus::read_holding_registers(&target, port, start, count) {
                 Ok(regs) => {
                     for r in &regs {
                         crate::display::print_success(&format!("  {:>6}  {}", r.display_addr, r.value_str));
@@ -1068,10 +1155,10 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::ModbusReadInputRegisters { target, start, count } => {
+        ExploitCmd::ModbusReadInputRegisters { target, start, count, port } => {
             use crate::vendors::schneider::modbus;
             crate::display::print_info(&format!("Reading {count} input registers from {target} (start={start})…"));
-            match modbus::read_input_registers(&target, start, count) {
+            match modbus::read_input_registers(&target, port, start, count) {
                 Ok(regs) => {
                     for r in &regs {
                         crate::display::print_success(&format!("  {:>6}  {}", r.display_addr, r.value_str));
@@ -1082,28 +1169,28 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::ModbusWriteCoil { target, address, state } => {
+        ExploitCmd::ModbusWriteCoil { target, address, state, port } => {
             use crate::vendors::schneider::modbus;
             let on = !state.eq_ignore_ascii_case("off");
             crate::display::print_info(&format!(
                 "Writing coil {address} = {} on {target}…", if on { "ON" } else { "OFF" }
             ));
-            match modbus::write_single_coil(&target, address, on) {
+            match modbus::write_single_coil(&target, port, address, on) {
                 Ok(()) => crate::display::print_success("Coil written."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::ModbusWriteRegister { target, address, value } => {
+        ExploitCmd::ModbusWriteRegister { target, address, value, port } => {
             use crate::vendors::schneider::modbus;
             crate::display::print_info(&format!("Writing register {address} = {value} on {target}…"));
-            match modbus::write_single_register(&target, address, value) {
+            match modbus::write_single_register(&target, port, address, value) {
                 Ok(()) => crate::display::print_success("Register written."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::ModbusWriteRegisters { target, start, values } => {
+        ExploitCmd::ModbusWriteRegisters { target, start, values, port } => {
             use crate::vendors::schneider::modbus;
             let parsed: Vec<u16> = values.split(',')
                 .filter_map(|s| s.trim().parse::<u16>().ok()).collect();
@@ -1111,53 +1198,53 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
                 crate::display::print_error("No valid register values.");
                 return Ok(());
             }
-            match modbus::write_multiple_registers(&target, start, &parsed) {
+            match modbus::write_multiple_registers(&target, port, start, &parsed) {
                 Ok(n) => crate::display::print_success(&format!("{n} register(s) written.")),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::Fc90Stop { target } => {
+        ExploitCmd::Fc90Stop { target, port } => {
             use crate::vendors::schneider::modicon_fc90;
             crate::display::print_info(&format!("FC90 STOP (M340/Quantum) to {target}…"));
-            match modicon_fc90::stop_plc(&target) {
+            match modicon_fc90::stop_plc(&target, port) {
                 Ok(true) => crate::display::print_success("PLC stopped."),
                 Ok(false) => crate::display::print_warn("Command sent — no confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::Fc90Start { target } => {
+        ExploitCmd::Fc90Start { target, port } => {
             use crate::vendors::schneider::modicon_fc90;
             crate::display::print_info(&format!("FC90 START (M340/Quantum) to {target}…"));
-            match modicon_fc90::start_plc(&target) {
+            match modicon_fc90::start_plc(&target, port) {
                 Ok(true) => crate::display::print_success("PLC started."),
                 Ok(false) => crate::display::print_warn("Command sent — no confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::Fc90StopTm221 { target } => {
+        ExploitCmd::Fc90StopTm221 { target, port } => {
             use crate::vendors::schneider::modicon_fc90;
             crate::display::print_info(&format!("FC90 STOP TM221 to {target}…"));
-            match modicon_fc90::stop_tm221(&target) {
+            match modicon_fc90::stop_tm221(&target, port) {
                 Ok(true) => crate::display::print_success("TM221 stopped."),
                 Ok(false) => crate::display::print_warn("Command sent — no confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::Fc90StartTm221 { target } => {
+        ExploitCmd::Fc90StartTm221 { target, port } => {
             use crate::vendors::schneider::modicon_fc90;
             crate::display::print_info(&format!("FC90 START TM221 to {target}…"));
-            match modicon_fc90::start_tm221(&target) {
+            match modicon_fc90::start_tm221(&target, port) {
                 Ok(true) => crate::display::print_success("TM221 started."),
                 Ok(false) => crate::display::print_warn("Command sent — no confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::Fc90Force { target, output, state } => {
+        ExploitCmd::Fc90Force { target, output, state, port } => {
             use crate::vendors::schneider::modicon_fc90::{self, ForceState};
             let output_byte = u8::from_str_radix(
                 output.trim().trim_start_matches("0x"),
@@ -1171,7 +1258,7 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             crate::display::print_info(&format!(
                 "FC90 Force output 0x{output_byte:02x} to {state} on {target}…"
             ));
-            match modicon_fc90::force_output_bit(&target, output_byte, force_state) {
+            match modicon_fc90::force_output_bit(&target, port, output_byte, force_state) {
                 Ok(true) => crate::display::print_success("Force command sent."),
                 Ok(false) => crate::display::print_warn("Command sent — no confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
@@ -1186,7 +1273,7 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
                 crate::display::print_error("No valid D register values.");
                 return Ok(());
             }
-            match slmp::write_word_devices(&target, "D", start, &parsed) {
+            match slmp::write_word_devices(&target, 0, "D", start, &parsed) {
                 Ok(()) => crate::display::print_success(&format!(
                     "{} D register(s) written starting at D{start}.", parsed.len()
                 )),
@@ -1203,7 +1290,7 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
                 crate::display::print_error("No valid bit values (use 0/1 characters).");
                 return Ok(());
             }
-            match slmp::write_bit_devices(&target, "M", start, &parsed) {
+            match slmp::write_bit_devices(&target, 0, "M", start, &parsed) {
                 Ok(()) => crate::display::print_success(&format!(
                     "{} M bit(s) written starting at M{start}.", parsed.len()
                 )),
@@ -1220,10 +1307,10 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
 
 fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
     match cmd {
-        RockwellCmd::Info { target } => {
+        RockwellCmd::Info { target, port } => {
             use crate::vendors::rockwell::driver;
             let pb = crate::display::spinner_start(&format!("Connecting to {target}…"));
-            let result = driver::get_device_info(&target);
+            let result = driver::get_device_info(&target, port);
             pb.finish_and_clear();
             match result {
                 Ok(dev) => {
@@ -1239,10 +1326,10 @@ fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
             }
         }
 
-        RockwellCmd::Tags { target } => {
+        RockwellCmd::Tags { target, port } => {
             use crate::vendors::rockwell::driver;
             let pb = crate::display::spinner_start(&format!("Enumerating tags on {target}…"));
-            let result = driver::enumerate_tags(&target);
+            let result = driver::enumerate_tags(&target, port);
             pb.finish_and_clear();
             match result {
                 Ok(tags) => {
@@ -1258,11 +1345,11 @@ fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
             }
         }
 
-        RockwellCmd::Read { target, tag } => {
+        RockwellCmd::Read { target, port, tag } => {
             use crate::vendors::rockwell::driver;
             if let Some(name) = tag {
                 let pb = crate::display::spinner_start(&format!("Reading {name}…"));
-                let result = driver::read_tag(&target, &name);
+                let result = driver::read_tag(&target, port, &name);
                 pb.finish_and_clear();
                 match result {
                     Ok(raw) => println!("  {name} = 0x{}", hex_encode(&raw)),
@@ -1271,7 +1358,7 @@ fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
             } else {
                 // Enumerate and print all
                 let pb = crate::display::spinner_start(&format!("Enumerating tags on {target}…"));
-                let result = driver::enumerate_tags(&target);
+                let result = driver::enumerate_tags(&target, port);
                 pb.finish_and_clear();
                 match result {
                     Ok(tags) => {
@@ -1285,7 +1372,7 @@ fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
             }
         }
 
-        RockwellCmd::Write { target, assignments } => {
+        RockwellCmd::Write { target, port, assignments } => {
             use crate::vendors::rockwell::driver;
             for pair in &assignments {
                 let (name, hex_val) = match pair.split_once('=') {
@@ -1310,7 +1397,7 @@ fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
                     4 => 0x00C4,
                     _ => 0x00C4,
                 };
-                match driver::write_tag(&target, name, type_code, &value_bytes) {
+                match driver::write_tag(&target, port, name, type_code, &value_bytes) {
                     Ok(_) => crate::display::print_success(&format!("{name}: written")),
                     Err(e) => crate::display::print_error(&format!("{name}: {e}")),
                 }
@@ -1389,10 +1476,10 @@ fn run_siemens(cmd: SiemensCmd) -> Result<()> {
 
 fn run_omron(cmd: OmronCmd) -> Result<()> {
     match cmd {
-        OmronCmd::Info { target } => {
+        OmronCmd::Info { target, port } => {
             use crate::vendors::omron::fins;
             let pb = crate::display::spinner_start(&format!("Querying Omron FINS at {target}…"));
-            let result = fins::get_device_info_tcp(&target);
+            let result = fins::get_device_info_tcp(&target, port);
             pb.finish_and_clear();
             match result {
                 Ok(dev) => {
@@ -1405,12 +1492,12 @@ fn run_omron(cmd: OmronCmd) -> Result<()> {
             }
         }
 
-        OmronCmd::ReadDm { target, start, count } => {
+        OmronCmd::ReadDm { target, port, start, count } => {
             use crate::vendors::omron::fins;
             let pb = crate::display::spinner_start(&format!(
                 "Reading DM{start}..DM{} from {target}…", start + count - 1
             ));
-            let result = fins::read_dm_words(&target, 0, start, count);
+            let result = fins::read_dm_words(&target, port, 0, start, count);
             pb.finish_and_clear();
             match result {
                 Ok(vals) => {
@@ -1424,7 +1511,7 @@ fn run_omron(cmd: OmronCmd) -> Result<()> {
             }
         }
 
-        OmronCmd::WriteDm { target, start, values } => {
+        OmronCmd::WriteDm { target, port, start, values } => {
             use crate::vendors::omron::fins;
             let parsed: Vec<u16> = values.split(',')
                 .filter_map(|s| s.trim().parse::<u16>().ok()).collect();
@@ -1432,7 +1519,7 @@ fn run_omron(cmd: OmronCmd) -> Result<()> {
                 crate::display::print_error("No valid values.");
                 return Ok(());
             }
-            match fins::write_dm_words(&target, 0, start, &parsed) {
+            match fins::write_dm_words(&target, port, 0, start, &parsed) {
                 Ok(()) => crate::display::print_success(&format!(
                     "{} DM word(s) written at DM{start}.", parsed.len()
                 )),
@@ -1440,28 +1527,28 @@ fn run_omron(cmd: OmronCmd) -> Result<()> {
             }
         }
 
-        OmronCmd::CpuStatus { target } => {
+        OmronCmd::CpuStatus { target, port } => {
             use crate::vendors::omron::fins;
-            match fins::get_cpu_state(&target, 0) {
+            match fins::get_cpu_state(&target, port, 0) {
                 Ok(state) => crate::display::print_success(&format!("CPU state: {state}")),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        OmronCmd::CpuRun { target } => {
+        OmronCmd::CpuRun { target, port } => {
             use crate::vendors::omron::fins;
             crate::display::print_info(&format!("Setting Omron CPU to Monitor/Run on {target}…"));
-            match fins::set_cpu_mode(&target, 0, true) {
+            match fins::set_cpu_mode(&target, port, 0, true) {
                 Ok(true) => crate::display::print_success("CPU set to Monitor/Run mode."),
                 Ok(false) => crate::display::print_warn("FINS error — mode change rejected."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        OmronCmd::CpuStop { target } => {
+        OmronCmd::CpuStop { target, port } => {
             use crate::vendors::omron::fins;
             crate::display::print_info(&format!("Setting Omron CPU to STOP on {target}…"));
-            match fins::set_cpu_mode(&target, 0, false) {
+            match fins::set_cpu_mode(&target, port, 0, false) {
                 Ok(true) => crate::display::print_success("CPU stopped."),
                 Ok(false) => crate::display::print_warn("FINS error — mode change rejected."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
@@ -1477,10 +1564,10 @@ fn run_omron(cmd: OmronCmd) -> Result<()> {
 
 fn run_iec104(cmd: Iec104Cmd) -> Result<()> {
     match cmd {
-        Iec104Cmd::Gi { target } => {
+        Iec104Cmd::Gi { target, port } => {
             use crate::vendors::iec104::client;
             let pb = crate::display::spinner_start(&format!("Connecting to IEC 104 at {target}…"));
-            let result = client::connect(&target);
+            let result = client::connect(&target, port);
             pb.finish_and_clear();
             match result {
                 Ok(mut sess) => {
@@ -1499,9 +1586,9 @@ fn run_iec104(cmd: Iec104Cmd) -> Result<()> {
             }
         }
 
-        Iec104Cmd::ScOn { target, ioa } => {
+        Iec104Cmd::ScOn { target, port, ioa } => {
             use crate::vendors::iec104::client;
-            let mut sess = client::connect(&target)?;
+            let mut sess = client::connect(&target, port)?;
             match client::single_command(&mut sess, ioa, true) {
                 Ok(true) => crate::display::print_success(&format!("IOA {ioa}: Single Command ON confirmed.")),
                 Ok(false) => crate::display::print_warn("Command sent — negative confirmation."),
@@ -1509,9 +1596,9 @@ fn run_iec104(cmd: Iec104Cmd) -> Result<()> {
             }
         }
 
-        Iec104Cmd::ScOff { target, ioa } => {
+        Iec104Cmd::ScOff { target, port, ioa } => {
             use crate::vendors::iec104::client;
-            let mut sess = client::connect(&target)?;
+            let mut sess = client::connect(&target, port)?;
             match client::single_command(&mut sess, ioa, false) {
                 Ok(true) => crate::display::print_success(&format!("IOA {ioa}: Single Command OFF confirmed.")),
                 Ok(false) => crate::display::print_warn("Command sent — negative confirmation."),
@@ -1519,11 +1606,11 @@ fn run_iec104(cmd: Iec104Cmd) -> Result<()> {
             }
         }
 
-        Iec104Cmd::Dc { target, ioa, state } => {
+        Iec104Cmd::Dc { target, port, ioa, state } => {
             use crate::vendors::iec104::client;
             let state_name = match state { 1 => "OFF", 2 => "ON", _ => "INDETERMINATE" };
             crate::display::print_info(&format!("IEC 104 Double Command IOA {ioa} → {state_name} on {target}…"));
-            let mut sess = client::connect(&target)?;
+            let mut sess = client::connect(&target, port)?;
             match client::double_command(&mut sess, ioa, state) {
                 Ok(true) => crate::display::print_success("Double Command confirmed."),
                 Ok(false) => crate::display::print_warn("Command sent — negative confirmation."),
@@ -1543,7 +1630,7 @@ fn run_phoenix(cmd: PhoenixCmd) -> Result<()> {
         PhoenixCmd::Info { target } => {
             use crate::vendors::phoenix::control;
             let pb = crate::display::spinner_start(&format!("Querying {target}…"));
-            let result = control::get_device_info(&target, false);
+            let result = control::get_device_info(&target, 0, false);
             pb.finish_and_clear();
             match result {
                 Ok(info) => {
@@ -1561,7 +1648,7 @@ fn run_phoenix(cmd: PhoenixCmd) -> Result<()> {
 
         PhoenixCmd::Tags { target } => {
             use crate::vendors::phoenix::webvisit;
-            let (project, tags) = webvisit::get_tags(&target)?;
+            let (project, tags) = webvisit::get_tags(&target, 0)?;
             println!("  Project: {project}");
             for (i, tag) in tags.iter().enumerate() {
                 println!("  [{i:>4}] {tag}");
@@ -1571,8 +1658,8 @@ fn run_phoenix(cmd: PhoenixCmd) -> Result<()> {
 
         PhoenixCmd::ReadTags { target } => {
             use crate::vendors::phoenix::webvisit;
-            let (_, tags) = webvisit::get_tags(&target)?;
-            let values = webvisit::read_tag_values(&target, &tags)?;
+            let (_, tags) = webvisit::get_tags(&target, 0)?;
+            let values = webvisit::read_tag_values(&target, 0, &tags)?;
             for (name, val) in &values {
                 println!("  {name}: {val}");
             }
@@ -1580,14 +1667,14 @@ fn run_phoenix(cmd: PhoenixCmd) -> Result<()> {
 
         PhoenixCmd::WriteTag { target, name, value } => {
             use crate::vendors::phoenix::webvisit;
-            webvisit::write_tag_value(&target, &name, &value)?;
+            webvisit::write_tag_value(&target, 0, &name, &value)?;
             crate::display::print_success(&format!("Wrote {name} = {value}"));
         }
 
         PhoenixCmd::Passwords { target } => {
             use crate::vendors::phoenix::webvisit;
             let pb = crate::display::spinner_start(&format!("Retrieving passwords from {target}…"));
-            let result = webvisit::retrieve_passwords(&target);
+            let result = webvisit::retrieve_passwords(&target, 0);
             pb.finish_and_clear();
             match result {
                 Ok(entries) if entries.is_empty() => {

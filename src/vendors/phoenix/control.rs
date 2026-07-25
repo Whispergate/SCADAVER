@@ -76,10 +76,11 @@ fn send_recv(stream: &mut TcpStream, hex_data: &str) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-/// Retrieve PLC type, firmware version (port 1962).
-pub fn get_device_info(target_ip: &str, silent: bool) -> Result<PhoenixDeviceInfo> {
+/// Retrieve PLC type, firmware version. Pass `port = 0` to use the default (1962).
+pub fn get_device_info(target_ip: &str, port: u16, silent: bool) -> Result<PhoenixDeviceInfo> {
+    let effective_port = if port == 0 { INFO_PORT } else { port };
     let mut stream = TcpStream::connect_timeout(
-        &format!("{target_ip}:{INFO_PORT}").parse()?,
+        &format!("{target_ip}:{effective_port}").parse()?,
         Duration::from_secs(DEFAULT_TIMEOUT),
     )?;
     stream.set_read_timeout(Some(Duration::from_secs(DEFAULT_TIMEOUT)))?;
@@ -173,10 +174,11 @@ pub fn get_device_info(target_ip: &str, silent: bool) -> Result<PhoenixDeviceInf
     })
 }
 
-/// Control ILC 150 PLC (start/stop).
-pub fn control_ilc150(target_ip: &str, action: &str, start_type: &str) -> Result<String> {
+/// Control ILC 150 PLC (start/stop). Pass `port = 0` to use the default (41100).
+pub fn control_ilc150(target_ip: &str, port: u16, action: &str, start_type: &str) -> Result<String> {
+    let effective_port = if port == 0 { CONTROL_PORT_ILC150 } else { port };
     let mut stream = TcpStream::connect_timeout(
-        &format!("{target_ip}:{CONTROL_PORT_ILC150}").parse()?,
+        &format!("{target_ip}:{effective_port}").parse()?,
         Duration::from_secs(DEFAULT_TIMEOUT),
     )?;
     stream.set_read_timeout(Some(Duration::from_secs(DEFAULT_TIMEOUT)))?;
@@ -223,10 +225,11 @@ pub fn control_ilc150(target_ip: &str, action: &str, start_type: &str) -> Result
     Ok(state.to_string())
 }
 
-/// Control ILC 390 PLC (start/stop).
-pub fn control_ilc390(target_ip: &str, action: &str) -> Result<String> {
+/// Control ILC 390 PLC (start/stop). Pass `port = 0` to use the default (20547).
+pub fn control_ilc390(target_ip: &str, port: u16, action: &str) -> Result<String> {
+    let effective_port = if port == 0 { CONTROL_PORT_ILC390 } else { port };
     let mut stream = TcpStream::connect_timeout(
-        &format!("{target_ip}:{CONTROL_PORT_ILC390}").parse()?,
+        &format!("{target_ip}:{effective_port}").parse()?,
         Duration::from_secs(DEFAULT_TIMEOUT),
     )?;
     stream.set_read_timeout(Some(Duration::from_secs(DEFAULT_TIMEOUT)))?;

