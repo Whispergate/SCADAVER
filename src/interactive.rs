@@ -666,7 +666,7 @@ fn siemens_device_info(ip: &str) {
 fn siemens_read_io(ip: &str) {
     use crate::vendors::siemens::s7comm;
     let pb = crate::display::spinner_start(&format!("Reading I/O from {ip}…"));
-    let data = s7comm::read_all_data(ip, 102, 5);
+    let data = s7comm::read_all_data(ip, 102, 5, None);
     pb.finish_and_clear();
     let mut any = false;
     for area in &["inputs", "outputs", "merkers"] {
@@ -690,7 +690,7 @@ fn siemens_read_io(ip: &str) {
 fn siemens_write_outputs(ip: &str) {
     use crate::vendors::siemens::s7comm;
     let bits = ask_input("Binary output string", "00000000");
-    let ok = s7comm::set_outputs(ip, &bits, 102, 5);
+    let ok = s7comm::set_outputs(ip, &bits, 102, 5, None);
     if ok {
         crate::display::print_success("Outputs written.");
     } else {
@@ -703,7 +703,7 @@ fn siemens_write_merkers(ip: &str) {
     let bits = ask_input("Binary merker string", "00000000");
     let offset_str = ask_input("Byte offset", "0");
     let offset: u32 = offset_str.parse().unwrap_or(0);
-    let ok = s7comm::set_merkers(ip, &bits, offset, 102, 5);
+    let ok = s7comm::set_merkers(ip, &bits, offset, 102, 5, None);
     if ok {
         crate::display::print_success("Merkers written.");
     } else {
@@ -713,11 +713,11 @@ fn siemens_write_merkers(ip: &str) {
 
 fn siemens_cpu_state(ip: &str, flip: bool) {
     use crate::vendors::siemens::s7comm;
-    let state = s7comm::get_cpu_state(ip, 102, 5);
+    let state = s7comm::get_cpu_state(ip, 102, 5, None);
     crate::display::print_info(&format!("CPU state: {state}"));
     if flip {
         if s7comm::change_cpu_state(ip, 102, 5) {
-            let new_state = s7comm::get_cpu_state(ip, 102, 5);
+            let new_state = s7comm::get_cpu_state(ip, 102, 5, None);
             crate::display::print_success(&format!("New state: {new_state}"));
         } else {
             crate::display::print_error("Failed to toggle CPU state.");

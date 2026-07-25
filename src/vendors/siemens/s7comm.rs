@@ -132,13 +132,14 @@ pub fn read_all_data(
     ip: &str,
     port: u16,
     timeout_secs: u64,
+    password: Option<&str>,
 ) -> HashMap<String, Option<HashMap<String, u8>>> {
     let mut result: HashMap<String, Option<HashMap<String, u8>>> = HashMap::new();
     result.insert("inputs".into(), None);
     result.insert("outputs".into(), None);
     result.insert("merkers".into(), None);
 
-    let mut stream = match setup_connection(ip, port, timeout_secs) {
+    let mut stream = match connect_authenticated(ip, port, timeout_secs, password) {
         Some(s) => s,
         None => return result,
     };
@@ -195,9 +196,9 @@ fn parse_coil_data(s7_hex: &str, label: &str) -> Option<HashMap<String, u8>> {
 }
 
 /// Write output bits to an S7 PLC.
-pub fn set_outputs(ip: &str, binary_str: &str, port: u16, timeout_secs: u64) -> bool {
+pub fn set_outputs(ip: &str, binary_str: &str, port: u16, timeout_secs: u64, password: Option<&str>) -> bool {
     let hex_val = bits_to_hex_byte(binary_str);
-    let mut stream = match setup_connection(ip, port, timeout_secs) {
+    let mut stream = match connect_authenticated(ip, port, timeout_secs, password) {
         Some(s) => s,
         None => return false,
     };
@@ -220,12 +221,13 @@ pub fn set_merkers(
     offset: u32,
     port: u16,
     timeout_secs: u64,
+    password: Option<&str>,
 ) -> bool {
     let hex_val = bits_to_hex_byte(binary_str);
     let bit_addr = (offset as u64 * 8) as usize;
     let merker_offset = format!("{bit_addr:06x}");
 
-    let mut stream = match setup_connection(ip, port, timeout_secs) {
+    let mut stream = match connect_authenticated(ip, port, timeout_secs, password) {
         Some(s) => s,
         None => return false,
     };
@@ -249,8 +251,9 @@ pub fn read_data_block(
     length: u16,
     port: u16,
     timeout_secs: u64,
+    password: Option<&str>,
 ) -> anyhow::Result<Vec<u8>> {
-    let mut stream = setup_connection(ip, port, timeout_secs)
+    let mut stream = connect_authenticated(ip, port, timeout_secs, password)
         .ok_or_else(|| anyhow::anyhow!("failed to establish S7Comm session to {ip}:{port}"))?;
 
     // S7Comm Read Area: area 0x84 (DB), transport size 0x02 (BYTE). The S7ANY
@@ -295,11 +298,12 @@ pub fn write_data_block(
     data: &[u8],
     port: u16,
     timeout_secs: u64,
+    password: Option<&str>,
 ) -> anyhow::Result<bool> {
     if data.is_empty() {
         anyhow::bail!("write_data_block: no data to write");
     }
-    let mut stream = setup_connection(ip, port, timeout_secs)
+    let mut stream = connect_authenticated(ip, port, timeout_secs, password)
         .ok_or_else(|| anyhow::anyhow!("failed to establish S7Comm session to {ip}:{port}"))?;
 
     let n = data.len();
@@ -334,10 +338,10 @@ pub fn write_data_block(
 /// first 2 bytes via [`read_data_block`]. Blocks that respond successfully are
 /// returned. The reported size is the number of bytes the probe read back, not
 /// the block's full declared length.
-pub fn list_data_blocks(ip: &str, port: u16, timeout_secs: u64) -> Vec<(u16, u16)> {
+pub fn list_data_blocks(ip: &str, port: u16, timeout_secs: u64, password: Option<&str>) -> Vec<(u16, u16)> {
     let mut blocks = Vec::new();
     for db_num in 1..=200u16 {
-        if let Ok(data) = read_data_block(ip, db_num, 0, 2, port, timeout_secs) {
+        if let Ok(data) = read_data_block(ip, db_num, 0, 2, port, timeout_secs, password) {
             if !data.is_empty() {
                 blocks.push((db_num, data.len() as u16));
             }
@@ -411,8 +415,8 @@ pub fn get_device_snapshot(
 ///
 /// Tries all four COTP TSAPs (S7-1200/1500/300/400) before giving up,
 /// so this works across the full S7 family — not just slot-0 CPUs.
-pub fn get_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> String {
-    let Some(mut stream) = setup_connection(ip, port, timeout_secs) else {
+pub fn get_cpu_state(ip: &str, port: u16, timeout_secs: u64, password: Option<&str>) -> String {
+    let Some(mut stream) = connect_authenticated(ip, port, timeout_secs, password) else {
         return "Unknown".to_string();
     };
     cpu_state_from_stream(&mut stream)
@@ -420,7 +424,7 @@ pub fn get_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> String {
 
 /// Toggle the CPU state (Running ↔ Stopped).
 pub fn change_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> bool {
-    let cur_state = get_cpu_state(ip, port, timeout_secs);
+    let cur_state = get_cpu_state(ip, port, timeout_secs, None);
     if cur_state == "Unknown" {
         println!("Cannot determine CPU state, aborting");
         return false;

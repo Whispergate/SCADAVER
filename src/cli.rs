@@ -55,6 +55,11 @@ pub enum Command {
         #[command(subcommand)]
         sub: Iec104Cmd,
     },
+    /// Manually add or remove devices from the device database
+    Db {
+        #[command(subcommand)]
+        sub: DbCmd,
+    },
 }
 
 // ===================================================================
@@ -361,6 +366,8 @@ pub enum SiemensCmd {
         port: u16,
         #[arg(long)]
         flip: bool,
+        #[arg(long)]
+        password: Option<String>,
     },
     /// Read all I/O data (inputs, outputs, merkers)
     Io {
@@ -368,6 +375,8 @@ pub enum SiemensCmd {
         target: String,
         #[arg(short, long, default_value = "102")]
         port: u16,
+        #[arg(long)]
+        password: Option<String>,
     },
     /// Write raw bytes to a Siemens S7 Data Block
     WriteDb {
@@ -383,6 +392,30 @@ pub enum SiemensCmd {
         offset: u16,
         /// Data as hex string, e.g. deadbeef
         data: String,
+        #[arg(long)]
+        password: Option<String>,
+    },
+}
+
+// ===================================================================
+// db subcommands
+// ===================================================================
+
+#[derive(Subcommand)]
+pub enum DbCmd {
+    /// Add a device IP to the database
+    Add {
+        #[arg(long)]
+        ip: String,
+        /// Vendor label (default: unknown)
+        #[arg(long)]
+        vendor: Option<String>,
+    },
+    /// Remove a device from the database by ID
+    Remove {
+        /// Device ID (visible in TUI)
+        #[arg(long)]
+        id: i64,
     },
 }
 
@@ -523,6 +556,7 @@ pub fn run(args: Args) -> Result<()> {
         Some(Command::Phoenix { sub }) => run_phoenix(sub),
         Some(Command::Omron { sub }) => run_omron(sub),
         Some(Command::Iec104 { sub }) => run_iec104(sub),
+        Some(Command::Db { sub }) => run_db(sub),
     }
 }
 
@@ -728,7 +762,7 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
             let wrote_merkers = merkers.is_some();
             if let Some(ref bits) = outputs {
                 crate::display::print_info(&format!("Writing outputs to {target}…"));
-                if s7comm::set_outputs(&target, bits, port, 5) {
+                if s7comm::set_outputs(&target, bits, port, 5, None) {
                     crate::display::print_success("Outputs written.");
                 } else {
                     crate::display::print_error("Failed to write outputs.");
@@ -739,7 +773,7 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
                 let bits = parts[0];
                 let offset: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
                 crate::display::print_info(&format!("Writing merkers to {target} (offset {offset})…"));
-                if s7comm::set_merkers(&target, bits, offset, port, 5) {
+                if s7comm::set_merkers(&target, bits, offset, port, 5, None) {
                     crate::display::print_success("Merkers written.");
                 } else {
                     crate::display::print_error("Failed to write merkers.");
@@ -747,7 +781,7 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
             }
             if read || (!wrote_outputs && !wrote_merkers) {
                 let pb = crate::display::spinner_start(&format!("Reading I/O from {target}…"));
-                let data = s7comm::read_all_data(&target, port, 5);
+                let data = s7comm::read_all_data(&target, port, 5, None);
                 pb.finish_and_clear();
                 for area in &["inputs", "outputs", "merkers"] {
                     if let Some(Some(bits)) = data.get(*area) {
@@ -764,11 +798,11 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
 
         ControlCmd::SiemensCpu { target, port, flip } => {
             use crate::vendors::siemens::s7comm;
-            let state = s7comm::get_cpu_state(&target, port, 5);
+            let state = s7comm::get_cpu_state(&target, port, 5, None);
             crate::display::print_info(&format!("CPU state: {state}"));
             if flip {
                 if s7comm::change_cpu_state(&target, port, 5) {
-                    let new_state = s7comm::get_cpu_state(&target, port, 5);
+                    let new_state = s7comm::get_cpu_state(&target, port, 5, None);
                     crate::display::print_success(&format!("New state: {new_state}"));
                 } else {
                     crate::display::print_error("Failed to change CPU state.");
@@ -1217,23 +1251,23 @@ fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
 
 fn run_siemens(cmd: SiemensCmd) -> Result<()> {
     match cmd {
-        SiemensCmd::Cpu { target, port, flip } => {
+        SiemensCmd::Cpu { target, port, flip, password } => {
             use crate::vendors::siemens::s7comm;
-            let state = s7comm::get_cpu_state(&target, port, 5);
+            let state = s7comm::get_cpu_state(&target, port, 5, password.as_deref());
             crate::display::print_info(&format!("CPU state: {state}"));
             if flip {
                 if s7comm::change_cpu_state(&target, port, 5) {
-                    let new_state = s7comm::get_cpu_state(&target, port, 5);
+                    let new_state = s7comm::get_cpu_state(&target, port, 5, password.as_deref());
                     crate::display::print_success(&format!("New state: {new_state}"));
                 } else {
                     crate::display::print_error("Failed to toggle CPU state.");
                 }
             }
         }
-        SiemensCmd::Io { target, port } => {
+        SiemensCmd::Io { target, port, password } => {
             use crate::vendors::siemens::s7comm;
             let pb = crate::display::spinner_start(&format!("Reading I/O from {target}…"));
-            let data = s7comm::read_all_data(&target, port, 5);
+            let data = s7comm::read_all_data(&target, port, 5, password.as_deref());
             pb.finish_and_clear();
             let mut any = false;
             for area in &["inputs", "outputs", "merkers"] {
@@ -1252,7 +1286,7 @@ fn run_siemens(cmd: SiemensCmd) -> Result<()> {
             }
         }
 
-        SiemensCmd::WriteDb { target, port, db, offset, data } => {
+        SiemensCmd::WriteDb { target, port, db, offset, data, password } => {
             use crate::vendors::siemens::s7comm;
             let bytes: Vec<u8> = data.as_bytes().chunks(2)
                 .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
@@ -1264,7 +1298,7 @@ fn run_siemens(cmd: SiemensCmd) -> Result<()> {
             crate::display::print_info(&format!(
                 "Writing {} byte(s) to DB{db}:{offset} on {target}…", bytes.len()
             ));
-            match s7comm::write_data_block(&target, db, offset, &bytes, port, 5) {
+            match s7comm::write_data_block(&target, db, offset, &bytes, port, 5, password.as_deref()) {
                 Ok(true) => crate::display::print_success("DB write acknowledged."),
                 Ok(false) => crate::display::print_warn("Write sent — PLC did not acknowledge."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
@@ -1495,6 +1529,27 @@ fn run_phoenix(cmd: PhoenixCmd) -> Result<()> {
                 }
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
+        }
+    }
+    Ok(())
+}
+
+// ===================================================================
+// DB handlers
+// ===================================================================
+
+fn run_db(cmd: DbCmd) -> Result<()> {
+    use crate::db::Database;
+    let db = Database::open(&Database::default_path())?;
+    match cmd {
+        DbCmd::Add { ip, vendor } => {
+            let vendor = vendor.as_deref().unwrap_or("unknown");
+            let id = db.upsert_device(&ip, vendor, &serde_json::Value::Object(Default::default()))?;
+            crate::display::print_success(&format!("Added {ip} (vendor={vendor}, id={id})"));
+        }
+        DbCmd::Remove { id } => {
+            db.delete_device(id)?;
+            crate::display::print_success(&format!("Removed device id={id}"));
         }
     }
     Ok(())

@@ -77,8 +77,8 @@ impl EipSession {
     /// the element data — pass it directly to `decode_value`.
     fn read_tag_cip(&mut self, tag_name: &str) -> Result<Vec<u8>> {
         let name_bytes = tag_name.as_bytes();
-        if name_bytes.len() > 480 {
-            anyhow::bail!("Tag name too long (max 480 bytes)");
+        if name_bytes.len() > 255 {
+            anyhow::bail!("Tag name too long (max 255 bytes for CIP ANSI Symbolic Segment)");
         }
         let path_size = (1 + (name_bytes.len() + 1) / 2) as u8;
 

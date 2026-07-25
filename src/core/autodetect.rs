@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -283,36 +282,37 @@ fn probe_iec104(ip: &str) -> Option<DeviceInfo> {
 /// Probe all vendors in parallel. Returns the highest-confidence match.
 /// Timeout in seconds applies to the overall collection window.
 pub fn detect_device(ip: &str, timeout_secs: u64) -> Option<DeviceInfo> {
-    let results: Arc<Mutex<Vec<DeviceInfo>>> = Arc::new(Mutex::new(Vec::new()));
+    use std::sync::mpsc;
     let probes = make_probes();
+    let (tx, rx) = mpsc::channel::<DeviceInfo>();
 
-    let handles: Vec<_> = probes
+    let _handles: Vec<_> = probes
         .into_iter()
         .map(|probe| {
             let ip = ip.to_string();
-            let results = Arc::clone(&results);
+            let tx = tx.clone();
             thread::spawn(move || {
                 if let Some(info) = probe(&ip) {
-                    if let Ok(mut v) = results.lock() {
-                        v.push(info);
-                    }
+                    let _ = tx.send(info);
                 }
             })
         })
         .collect();
+    drop(tx); // close our copy so channel drains when all threads finish
 
-    // Wait up to timeout for all probes to complete.
     let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
-    for handle in handles {
+    let mut results: Vec<DeviceInfo> = Vec::new();
+    loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             break;
         }
-        // join() doesn't support timeout natively; we accept slight overrun
-        let _ = handle.join();
+        match rx.recv_timeout(remaining) {
+            Ok(info) => results.push(info),
+            Err(_) => break,
+        }
     }
 
-    let results = results.lock().ok()?;
     results
         .iter()
         .min_by_key(|r| vendor_priority(&r.vendor))
