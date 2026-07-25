@@ -239,6 +239,39 @@ pub enum ExploitCmd {
         /// SymbolName=hexbytes, e.g. MAIN.valve=01
         input: String,
     },
+    /// Modbus FC1: read coils
+    ModbusReadCoils {
+        #[arg(short, long)]
+        target: String,
+        /// Start address (0-based)
+        #[arg(short, long, default_value = "0")]
+        start: u16,
+        /// Number of coils to read (max 2000)
+        #[arg(short, long, default_value = "16")]
+        count: u16,
+    },
+    /// Modbus FC3: read holding registers
+    ModbusReadRegisters {
+        #[arg(short, long)]
+        target: String,
+        /// Start address (0-based)
+        #[arg(short, long, default_value = "0")]
+        start: u16,
+        /// Number of registers to read (max 125)
+        #[arg(short, long, default_value = "10")]
+        count: u16,
+    },
+    /// Modbus FC4: read input registers
+    ModbusReadInputRegisters {
+        #[arg(short, long)]
+        target: String,
+        /// Start address (0-based)
+        #[arg(short, long, default_value = "0")]
+        start: u16,
+        /// Number of registers to read (max 125)
+        #[arg(short, long, default_value = "10")]
+        count: u16,
+    },
     /// Modbus FC5: write a single coil
     ModbusWriteCoil {
         #[arg(short, long)]
@@ -1004,6 +1037,48 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
                 Ok(true) => crate::display::print_success(&format!("Symbol '{sym_name}' written.")),
                 Ok(false) => crate::display::print_warn("Write sent — ADS error code returned."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+
+        ExploitCmd::ModbusReadCoils { target, start, count } => {
+            use crate::vendors::schneider::modbus;
+            crate::display::print_info(&format!("Reading {count} coils from {target} (start={start})…"));
+            match modbus::read_coils(&target, start, count) {
+                Ok(regs) => {
+                    for r in &regs {
+                        crate::display::print_success(&format!("  {:>6}  {}", r.display_addr, r.value_str));
+                    }
+                    println!("[+] {} coil(s) read", regs.len());
+                }
+                Err(e) => crate::display::print_error(&format!("[-] {e}")),
+            }
+        }
+
+        ExploitCmd::ModbusReadRegisters { target, start, count } => {
+            use crate::vendors::schneider::modbus;
+            crate::display::print_info(&format!("Reading {count} holding registers from {target} (start={start})…"));
+            match modbus::read_holding_registers(&target, start, count) {
+                Ok(regs) => {
+                    for r in &regs {
+                        crate::display::print_success(&format!("  {:>6}  {}", r.display_addr, r.value_str));
+                    }
+                    println!("[+] {} register(s) read", regs.len());
+                }
+                Err(e) => crate::display::print_error(&format!("[-] {e}")),
+            }
+        }
+
+        ExploitCmd::ModbusReadInputRegisters { target, start, count } => {
+            use crate::vendors::schneider::modbus;
+            crate::display::print_info(&format!("Reading {count} input registers from {target} (start={start})…"));
+            match modbus::read_input_registers(&target, start, count) {
+                Ok(regs) => {
+                    for r in &regs {
+                        crate::display::print_success(&format!("  {:>6}  {}", r.display_addr, r.value_str));
+                    }
+                    println!("[+] {} register(s) read", regs.len());
+                }
+                Err(e) => crate::display::print_error(&format!("[-] {e}")),
             }
         }
 
