@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::vendors::siemens::s7comm::{get_cpu_state, tcp_scan, S7_PORT};
+use crate::vendors::siemens::s7comm::{get_cpu_state, get_module_info, tcp_scan, S7_PORT};
 
 #[derive(Debug, Clone)]
 pub struct SiemensDevice {
@@ -14,19 +14,19 @@ pub struct SiemensDevice {
 /// Probe a single IP for a Siemens S7 device.
 pub fn scan_ip(ip: &str) -> Result<SiemensDevice> {
     let open_ports = tcp_scan(ip);
-    // get_device_info_cotp uses TSAP 0x0600 which always fails; get_cpu_state uses
-    // TSAP 0x0100 and works correctly. hw/fw remain None until SZL reads are implemented.
-    let cpu_state = if open_ports.contains(&S7_PORT) {
+    let (hardware, firmware, cpu_state) = if open_ports.contains(&S7_PORT) {
+        let (hw, fw) = get_module_info(ip, S7_PORT, 5);
         let state = get_cpu_state(ip, S7_PORT, 5);
-        if state == "Unknown" { None } else { Some(state) }
+        let cpu = if state == "Unknown" { None } else { Some(state) };
+        (hw, fw, cpu)
     } else {
-        None
+        (None, None, None)
     };
 
     Ok(SiemensDevice {
         ip: ip.to_string(),
-        hardware: None,
-        firmware: None,
+        hardware,
+        firmware,
         cpu_state,
         open_ports,
     })

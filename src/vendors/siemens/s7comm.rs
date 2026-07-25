@@ -87,6 +87,46 @@ fn send_recv(stream: &mut TcpStream, data: &[u8]) -> Option<Vec<u8>> {
     Some(full)
 }
 
+/// Send an S7Comm UserData SZL read request and return the raw TPKT response.
+fn read_szl(stream: &mut TcpStream, szl_id: u16, szl_index: u16) -> Option<Vec<u8>> {
+    let [id_hi, id_lo] = szl_id.to_be_bytes();
+    let [idx_hi, idx_lo] = szl_index.to_be_bytes();
+    // S7 UserData payload = 26 bytes → TPKT total = 33 = 0x21
+    let pkt = hex_decode(&format!(
+        "0300002102f0803207000001000008000800011204114401\
+         00ff090004{id_hi:02x}{id_lo:02x}{idx_hi:02x}{idx_lo:02x}"
+    ));
+    send_recv(stream, &pkt)
+}
+
+/// Locate the first SZL record byte in a SZL read response.
+///
+/// Searches for the [0xFF, 0x09] data-section marker, verifies the returned SZL
+/// ID matches `expected_id`, then returns the byte offset of the first record
+/// (which begins with the record's 2-byte index field).
+fn szl_records_start(resp: &[u8], expected_id: u16) -> Option<usize> {
+    // Skip past the minimum TPKT+COTP+S7Comm header (19 bytes) before searching
+    let search_start = 19usize;
+    if resp.len() <= search_start {
+        return None;
+    }
+    let offset = resp[search_start..]
+        .windows(2)
+        .position(|w| w == [0xFF, 0x09])?;
+    let pos = search_start + offset;
+    // pos+0: return_code(0xFF), +1: transport(0x09), +2..3: data_len,
+    // +4..5: szl_id, +6..7: szl_idx, +8..9: count, +10..11: reclen
+    // → first record at pos+12
+    if resp.len() < pos + 12 {
+        return None;
+    }
+    let got_id = u16::from_be_bytes([resp[pos + 4], resp[pos + 5]]);
+    if got_id != expected_id {
+        return None;
+    }
+    Some(pos + 12)
+}
+
 /// Read inputs, outputs, and merkers from an S7 PLC.
 pub fn read_all_data(
     ip: &str,
@@ -306,52 +346,34 @@ pub fn list_data_blocks(ip: &str, port: u16, timeout_secs: u64) -> Vec<(u16, u16
     blocks
 }
 
-/// Query the CPU operating state.
+/// Query the CPU operating state via SZL 0x0424.
+///
+/// Tries all four COTP TSAPs (S7-1200/1500/300/400) before giving up,
+/// so this works across the full S7 family — not just slot-0 CPUs.
 pub fn get_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> String {
-    let addr = format!("{ip}:{port}");
-    let mut stream = match TcpStream::connect_timeout(
-        &addr.parse().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
-        Duration::from_secs(timeout_secs),
-    ) {
-        Ok(s) => s,
-        Err(_) => return "Unknown".to_string(),
+    let mut stream = match setup_connection(ip, port, timeout_secs) {
+        Some(s) => s,
+        None => return "Unknown".to_string(),
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)));
-
-    // COTP CR
-    let cotp = hex_decode("030000 1611e00000001d00c1020100c2020100c0010a");
-    let cotp_resp = match send_recv(&mut stream, &cotp) {
+    let resp = match read_szl(&mut stream, 0x0424, 0x0001) {
         Some(r) => r,
         None => return "Unknown".to_string(),
     };
-    if hex_encode(&cotp_resp).len() < 12 || &hex_encode(&cotp_resp)[10..12] != "d0" {
+    // SZL 0x0424 record layout: index(2) + mode_byte + ...
+    // mode: 0x01=Running, 0x02=Startup, 0x03=Stopped, 0x04=Hold
+    let Some(rec_start) = szl_records_start(&resp, 0x0424) else {
+        return "Unknown".to_string();
+    };
+    let mode_off = rec_start + 2;
+    if mode_off >= resp.len() {
         return "Unknown".to_string();
     }
-
-    // S7 Setup
-    let setup_data = "32010000020000080000f0000001000101e0";
-    let tpkt_len = format!("{:02x}", (setup_data.len() + 14) / 2);
-    let _ = send_recv(&mut stream, &hex_decode(&format!("030000{tpkt_len}02f080{setup_data}")));
-
-    // S7 Read CPU State
-    let read_data = "3207000005000008000800011204 11440100ff09000404240001";
-    let tpkt_len2 = format!("{:02x}", (read_data.replace(' ', "").len() + 14) / 2);
-    let resp = match send_recv(
-        &mut stream,
-        &hex_decode(&format!("030000{tpkt_len2}02f080{read_data}")),
-    ) {
-        Some(r) => r,
-        None => return "Unknown".to_string(),
-    };
-
-    if resp.len() >= 45 {
-        if resp[44] == 0x03 {
-            "Stopped".to_string()
-        } else {
-            "Running".to_string()
-        }
-    } else {
-        "Unknown".to_string()
+    match resp[mode_off] {
+        0x01 => "Running".to_string(),
+        0x02 => "Startup".to_string(),
+        0x03 => "Stopped".to_string(),
+        0x04 => "Hold".to_string(),
+        _ => "Unknown".to_string(),
     }
 }
 
@@ -486,6 +508,87 @@ pub fn get_device_info_cotp(
 
     let cpu_state = get_cpu_state(ip, port, timeout_secs);
     (hardware, firmware, cpu_state)
+}
+
+/// Read SZL 0x0011 (module identification) and return (order_number, firmware_version).
+///
+/// The order number (MLFB) is the CPU model string, e.g. "6ES7 315-2EH14-0AB0".
+/// Firmware version is formatted as "V{major}.{minor}".
+pub fn get_module_info(ip: &str, port: u16, timeout_secs: u64) -> (Option<String>, Option<String>) {
+    let mut stream = match setup_connection(ip, port, timeout_secs) {
+        Some(s) => s,
+        None => return (None, None),
+    };
+    let resp = match read_szl(&mut stream, 0x0011, 0x0001) {
+        Some(r) => r,
+        None => return (None, None),
+    };
+    // SZL 0x0011 record: index(2) + mlfb[20] + bgtyp(2) + ausbg(2) + ausbe(2) = 28 bytes
+    let Some(rec_start) = szl_records_start(&resp, 0x0011) else {
+        return (None, None);
+    };
+    if resp.len() < rec_start + 28 {
+        return (None, None);
+    }
+    let mlfb = String::from_utf8_lossy(&resp[rec_start + 2..rec_start + 22])
+        .trim_matches(|c: char| c == ' ' || c == '\0')
+        .to_string();
+    let hardware = if mlfb.is_empty() { None } else { Some(mlfb) };
+
+    let fw_major = resp[rec_start + 26];
+    let fw_minor = resp[rec_start + 27];
+    let firmware = if fw_major == 0 && fw_minor == 0 {
+        None
+    } else {
+        Some(format!("V{fw_major}.{fw_minor}"))
+    };
+    (hardware, firmware)
+}
+
+/// XOR-encode a password for S7Comm SetPassword (padded to 8 bytes with spaces).
+fn encode_password(pw: &str) -> [u8; 8] {
+    let mut enc = [0x20u8; 8];
+    for (i, &b) in pw.as_bytes().iter().take(8).enumerate() {
+        enc[i] = b ^ if i % 2 == 0 { 0xAA } else { 0x55 };
+    }
+    enc
+}
+
+/// Send SetPassword (S7Comm UserData subfunction 0x45) on an existing session.
+///
+/// Returns `true` if the PLC accepted the password (error code in response = 0x0000).
+pub fn set_password(stream: &mut TcpStream, password: &str) -> bool {
+    let enc = encode_password(password);
+    // UserData SetPassword: param_len=8, data_len=12 (4 data header + 8 encoded pw)
+    // Total S7 payload = 30 bytes → TPKT total = 37 = 0x25
+    let pkt = hex_decode(&format!(
+        "0300002502f0803207000001000008000c0001120411450100\
+         ff09000800{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        enc[0], enc[1], enc[2], enc[3], enc[4], enc[5], enc[6], enc[7]
+    ));
+    let Some(resp) = send_recv(stream, &pkt) else {
+        return false;
+    };
+    // S7Comm response header error code at resp[17..19] (0x00 0x00 = success)
+    resp.len() >= 19 && resp[17] == 0x00 && resp[18] == 0x00
+}
+
+/// Establish a session and optionally authenticate with a password.
+///
+/// Returns `None` if the connection fails or if a password was given but rejected.
+pub fn connect_authenticated(
+    ip: &str,
+    port: u16,
+    timeout_secs: u64,
+    password: Option<&str>,
+) -> Option<TcpStream> {
+    let mut stream = setup_connection(ip, port, timeout_secs)?;
+    if let Some(pw) = password {
+        if !pw.is_empty() && !set_password(&mut stream, pw) {
+            return None;
+        }
+    }
+    Some(stream)
 }
 
 pub fn scan_port(ip: &str, port: u16) -> bool {
