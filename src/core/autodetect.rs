@@ -67,20 +67,12 @@ fn probe_beckhoff(ip: &str) -> Option<DeviceInfo> {
 }
 
 fn probe_siemens(ip: &str) -> Option<DeviceInfo> {
-    use crate::vendors::siemens::{s7comm, scan};
+    use crate::vendors::siemens::scan;
     let result = scan::scan_ip(ip).ok()?;
-
     if !result.open_ports.contains(&102) {
         return None;
     }
-
-    // get_device_info_cotp uses TSAP 0x0600 (wrong) so hw/fw are always None and
-    // cpu_state always "Unknown". Use get_cpu_state directly — it uses TSAP 0x0100.
-    let cpu_state = s7comm::get_cpu_state(ip, 102, 5);
-    if cpu_state == "Unknown" {
-        return None;
-    }
-
+    let cpu_state = result.cpu_state?; // None means device didn't respond to S7Comm
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
     if let Some(hw) = result.hardware {
         fields.insert("hardware".into(), hw.into());
@@ -89,7 +81,6 @@ fn probe_siemens(ip: &str) -> Option<DeviceInfo> {
         fields.insert("firmware".into(), fw.into());
     }
     fields.insert("cpu_state".into(), cpu_state.into());
-    // Only include port 102 — port 502 is Modbus and not a Siemens indicator
     fields.insert("open_ports".into(), vec![102i64].into());
     Some(DeviceInfo {
         vendor: "siemens".into(),

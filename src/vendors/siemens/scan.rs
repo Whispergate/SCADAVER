@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::vendors::siemens::s7comm::{get_cpu_state, get_module_info, tcp_scan, S7_PORT};
+use crate::vendors::siemens::s7comm::{get_device_snapshot, tcp_scan, S7_PORT};
 
 #[derive(Debug, Clone)]
 pub struct SiemensDevice {
@@ -15,8 +15,7 @@ pub struct SiemensDevice {
 pub fn scan_ip(ip: &str) -> Result<SiemensDevice> {
     let open_ports = tcp_scan(ip);
     let (hardware, firmware, cpu_state) = if open_ports.contains(&S7_PORT) {
-        let (hw, fw) = get_module_info(ip, S7_PORT, 5);
-        let state = get_cpu_state(ip, S7_PORT, 5);
+        let (hw, fw, state) = get_device_snapshot(ip, S7_PORT, 5);
         let cpu = if state == "Unknown" { None } else { Some(state) };
         (hw, fw, cpu)
     } else {

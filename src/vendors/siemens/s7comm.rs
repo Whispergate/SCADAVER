@@ -346,21 +346,10 @@ pub fn list_data_blocks(ip: &str, port: u16, timeout_secs: u64) -> Vec<(u16, u16
     blocks
 }
 
-/// Query the CPU operating state via SZL 0x0424.
-///
-/// Tries all four COTP TSAPs (S7-1200/1500/300/400) before giving up,
-/// so this works across the full S7 family — not just slot-0 CPUs.
-pub fn get_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> String {
-    let mut stream = match setup_connection(ip, port, timeout_secs) {
-        Some(s) => s,
-        None => return "Unknown".to_string(),
+fn cpu_state_from_stream(stream: &mut TcpStream) -> String {
+    let Some(resp) = read_szl(stream, 0x0424, 0x0001) else {
+        return "Unknown".to_string();
     };
-    let resp = match read_szl(&mut stream, 0x0424, 0x0001) {
-        Some(r) => r,
-        None => return "Unknown".to_string(),
-    };
-    // SZL 0x0424 record layout: index(2) + mode_byte + ...
-    // mode: 0x01=Running, 0x02=Startup, 0x03=Stopped, 0x04=Hold
     let Some(rec_start) = szl_records_start(&resp, 0x0424) else {
         return "Unknown".to_string();
     };
@@ -375,6 +364,58 @@ pub fn get_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> String {
         0x04 => "Hold".to_string(),
         _ => "Unknown".to_string(),
     }
+}
+
+fn module_info_from_stream(stream: &mut TcpStream) -> (Option<String>, Option<String>) {
+    let Some(resp) = read_szl(stream, 0x0011, 0x0001) else {
+        return (None, None);
+    };
+    let Some(rec_start) = szl_records_start(&resp, 0x0011) else {
+        return (None, None);
+    };
+    if resp.len() < rec_start + 28 {
+        return (None, None);
+    }
+    let mlfb = String::from_utf8_lossy(&resp[rec_start + 2..rec_start + 22])
+        .trim_matches(|c: char| c == ' ' || c == '\0')
+        .to_string();
+    let hardware = if mlfb.is_empty() { None } else { Some(mlfb) };
+    let fw_major = resp[rec_start + 26];
+    let fw_minor = resp[rec_start + 27];
+    let firmware = if fw_major == 0 && fw_minor == 0 {
+        None
+    } else {
+        Some(format!("V{fw_major}.{fw_minor}"))
+    };
+    (hardware, firmware)
+}
+
+/// Enumerate hardware info and CPU state in a single COTP/S7Comm session.
+///
+/// More efficient than calling `get_module_info` and `get_cpu_state` separately
+/// since it establishes the TSAP negotiation only once.
+pub fn get_device_snapshot(
+    ip: &str,
+    port: u16,
+    timeout_secs: u64,
+) -> (Option<String>, Option<String>, String) {
+    let Some(mut stream) = setup_connection(ip, port, timeout_secs) else {
+        return (None, None, "Unknown".to_string());
+    };
+    let (hw, fw) = module_info_from_stream(&mut stream);
+    let cpu_state = cpu_state_from_stream(&mut stream);
+    (hw, fw, cpu_state)
+}
+
+/// Query the CPU operating state via SZL 0x0424.
+///
+/// Tries all four COTP TSAPs (S7-1200/1500/300/400) before giving up,
+/// so this works across the full S7 family — not just slot-0 CPUs.
+pub fn get_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> String {
+    let Some(mut stream) = setup_connection(ip, port, timeout_secs) else {
+        return "Unknown".to_string();
+    };
+    cpu_state_from_stream(&mut stream)
 }
 
 /// Toggle the CPU state (Running ↔ Stopped).
@@ -458,91 +499,15 @@ pub fn change_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> bool {
     true
 }
 
-/// Get hardware/firmware info via COTP.
-pub fn get_device_info_cotp(
-    ip: &str,
-    port: u16,
-    timeout_secs: u64,
-) -> (Option<String>, Option<String>, String) {
-    let addr = format!("{ip}:{port}");
-    let mut stream = match TcpStream::connect_timeout(
-        &addr.parse().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
-        Duration::from_secs(timeout_secs),
-    ) {
-        Ok(s) => s,
-        Err(_) => {
-            return (None, None, "Unknown".to_string());
-        }
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)));
-
-    let cotp = hex_decode("03000016 11e00000000500c1020600c2020600c0010a");
-    let cotp_resp = match send_recv(&mut stream, &cotp) {
-        Some(r) => r,
-        None => return (None, None, get_cpu_state(ip, port, timeout_secs)),
-    };
-    if hex_encode(&cotp_resp).len() < 12 || &hex_encode(&cotp_resp)[10..12] != "d0" {
-        return (None, None, "Unknown".to_string());
-    }
-
-    let data = "720100b131000004ca0000000200000120360000011d 00040000000000a1000000d3821f0000a38169001516 53657276657253657373696f6e5f374236374343 3341a3822100150b313a3a3a362e303a3a3a12a38228 00150d4f4d532b204465627567676572a38229001500a3822a001500a3822b00048480808000a3822c001211e1a304a3822d001500a1000000d3817f0000a3816900 1515537562736372697074696f6e436f6e7461696e 6572a2a20000000072010000";
-    let tpkt_len = format!("{:02x}", (data.replace(' ', "").len() + 14) / 2);
-    let cotp_data_resp = match send_recv(
-        &mut stream,
-        &hex_decode(&format!("030000{tpkt_len}02f080{data}")),
-    ) {
-        Some(r) => r,
-        None => return (None, None, get_cpu_state(ip, port, timeout_secs)),
-    };
-
-    let cotp_str = String::from_utf8_lossy(&cotp_data_resp).to_string();
-    let parts: Vec<&str> = cotp_str.split(';').collect();
-
-    let hardware = parts.get(2).map(|s| s.to_string());
-    let firmware = parts.get(3).map(|s| {
-        s.replace('@', ".")
-            .chars()
-            .filter(|c| c.is_ascii_graphic() || *c == ' ')
-            .collect()
-    });
-
-    let cpu_state = get_cpu_state(ip, port, timeout_secs);
-    (hardware, firmware, cpu_state)
-}
-
 /// Read SZL 0x0011 (module identification) and return (order_number, firmware_version).
 ///
 /// The order number (MLFB) is the CPU model string, e.g. "6ES7 315-2EH14-0AB0".
 /// Firmware version is formatted as "V{major}.{minor}".
 pub fn get_module_info(ip: &str, port: u16, timeout_secs: u64) -> (Option<String>, Option<String>) {
-    let mut stream = match setup_connection(ip, port, timeout_secs) {
-        Some(s) => s,
-        None => return (None, None),
-    };
-    let resp = match read_szl(&mut stream, 0x0011, 0x0001) {
-        Some(r) => r,
-        None => return (None, None),
-    };
-    // SZL 0x0011 record: index(2) + mlfb[20] + bgtyp(2) + ausbg(2) + ausbe(2) = 28 bytes
-    let Some(rec_start) = szl_records_start(&resp, 0x0011) else {
+    let Some(mut stream) = setup_connection(ip, port, timeout_secs) else {
         return (None, None);
     };
-    if resp.len() < rec_start + 28 {
-        return (None, None);
-    }
-    let mlfb = String::from_utf8_lossy(&resp[rec_start + 2..rec_start + 22])
-        .trim_matches(|c: char| c == ' ' || c == '\0')
-        .to_string();
-    let hardware = if mlfb.is_empty() { None } else { Some(mlfb) };
-
-    let fw_major = resp[rec_start + 26];
-    let fw_minor = resp[rec_start + 27];
-    let firmware = if fw_major == 0 && fw_minor == 0 {
-        None
-    } else {
-        Some(format!("V{fw_major}.{fw_minor}"))
-    };
-    (hardware, firmware)
+    module_info_from_stream(&mut stream)
 }
 
 /// XOR-encode a password for S7Comm SetPassword (padded to 8 bytes with spaces).
