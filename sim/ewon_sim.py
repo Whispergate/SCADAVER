@@ -17,11 +17,11 @@ Expected TUI output with 'Extract Credentials adm:5':
   username=admin  first_name=John  last_name=Doe
   password=<decode failed>  Access: 15
 """
+import argparse
 import http.server
 import os
-import sys
 
-PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get('EWON_SIM_PORT', '80'))
+PORT = 80
 
 # Split on '","': 19 separators -> 20 parts
 EWON_RESPONSE = (
@@ -69,9 +69,36 @@ class EwonHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="eWON HTTP simulator")
+    parser.add_argument(
+        "legacy_port",
+        nargs="?",
+        type=int,
+        help="legacy positional TCP port",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="TCP port to listen on (default: 80 or EWON_SIM_PORT)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("SCADAVER_SIM_HOST", "0.0.0.0"),
+        help="IP address to bind (default: 0.0.0.0 or SCADAVER_SIM_HOST)",
+    )
+    return parser.parse_args()
+
+
 if __name__ == '__main__':
-    srv = http.server.HTTPServer(('0.0.0.0', PORT), EwonHandler)
-    print(f"eWON HTTP stub listening on 0.0.0.0:{PORT}")
+    args = parse_args()
+    port = args.port or args.legacy_port or int(os.environ.get("EWON_SIM_PORT", str(PORT)))
+    if not 1 <= port <= 65535:
+        raise ValueError("--port must be between 1 and 65535")
+
+    srv = http.server.HTTPServer((args.host, port), EwonHandler)
+    print(f"eWON HTTP stub listening on {args.host}:{port}")
     print("  POST /wrcgi.bin/wsdReadForm -> 20-field CSV")
     print("  username=admin  access_rights=15  password=<decode failed>")
     srv.serve_forever()

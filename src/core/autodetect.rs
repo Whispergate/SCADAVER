@@ -25,9 +25,10 @@ impl DeviceInfo {
 fn vendor_priority(vendor: &str) -> u8 {
     match vendor {
         "modicon" => 0,
-        "beckhoff" | "siemens" | "rockwell" | "ewon" | "mitsubishi" | "schneider"
-        | "phoenix" | "omron" => 1,
+        "beckhoff" | "siemens" | "rockwell" | "ewon" | "mitsubishi" | "schneider" | "phoenix"
+        | "omron" => 1,
         "enip" | "iec104" => 2,
+        "snmp" => 3,
         _ => 99,
     }
 }
@@ -45,6 +46,7 @@ fn make_probes() -> Vec<ProbeFn> {
         Box::new(probe_phoenix),
         Box::new(probe_omron),
         Box::new(probe_iec104),
+        Box::new(probe_snmp),
     ]
 }
 
@@ -58,6 +60,17 @@ fn probe_beckhoff(ip: &str) -> Option<DeviceInfo> {
     fields.insert("tc_version".into(), d.tc_version.into());
     fields.insert("kernel".into(), d.kernel.into());
     fields.insert("port".into(), 48898i64.into());
+    fields.insert("ads_port".into(), 48898i64.into());
+    fields.insert(
+        "web_port".into(),
+        i64::from(crate::vendors::beckhoff::webcontrol::DEFAULT_WEB_PORT).into(),
+    );
+    fields.insert("discovery_port".into(), 48899i64.into());
+    fields.insert("discovery_transport".into(), "udp".into());
+    fields.insert("protocol".into(), "ads_tcp".into());
+    fields.insert("cap_ads_tcp".into(), true.into());
+    fields.insert("cap_ads_udp_discovery".into(), true.into());
+    fields.insert("cap_beckhoff_web_candidate".into(), true.into());
     Some(DeviceInfo {
         vendor: "beckhoff".into(),
         ip: ip.into(),
@@ -71,11 +84,7 @@ fn probe_siemens(ip: &str) -> Option<DeviceInfo> {
 
     // Budget: 3s TCP probe + 2s per S7Comm read ≤ 7s total, within detect_device's 8s window.
     // tcp_scan uses a 1-second timeout that may miss WAN targets; probe directly here.
-    TcpStream::connect_timeout(
-        &format!("{ip}:102").parse().ok()?,
-        Duration::from_secs(3),
-    )
-    .ok()?;
+    TcpStream::connect_timeout(&format!("{ip}:102").parse().ok()?, Duration::from_secs(3)).ok()?;
 
     // S7-1500 with S7comm+ or access protection: setup_connection succeeds on the first
     // TSAP (c2020101) but SZL reads may return "Unknown" — still identify the device.
@@ -90,7 +99,9 @@ fn probe_siemens(ip: &str) -> Option<DeviceInfo> {
     }
     fields.insert("cpu_state".into(), cpu_state.into());
     fields.insert("port".into(), 102i64.into());
+    fields.insert("s7_port".into(), 102i64.into());
     fields.insert("open_ports".into(), vec![102i64].into());
+    fields.insert("cap_s7_tcp".into(), true.into());
     Some(DeviceInfo {
         vendor: "siemens".into(),
         ip: ip.into(),
@@ -116,6 +127,8 @@ fn probe_enip(ip: &str) -> Option<DeviceInfo> {
     fields.insert("device_type".into(), d.device_type.into());
     fields.insert("revision".into(), d.revision.into());
     fields.insert("port".into(), 44818i64.into());
+    fields.insert("enip_port".into(), 44818i64.into());
+    fields.insert("cap_enip_tcp_identity".into(), true.into());
     Some(DeviceInfo {
         vendor: vendor_name.into(),
         ip: ip.into(),
@@ -134,6 +147,9 @@ fn probe_ewon(ip: &str) -> Option<DeviceInfo> {
     if let Some(serial) = d.serial {
         fields.insert("serial".into(), serial.into());
     }
+    fields.insert("http_port".into(), 80i64.into());
+    fields.insert("cap_ewon_ipconf".into(), true.into());
+    fields.insert("cap_ewon_http_candidate".into(), true.into());
     Some(DeviceInfo {
         vendor: "ewon".into(),
         ip: ip.into(),
@@ -146,11 +162,44 @@ fn probe_mitsubishi(ip: &str) -> Option<DeviceInfo> {
     let devices = scan::scan_ip(ip, 2, true).ok()?;
     let d = devices.into_iter().next()?;
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
+    let protocol = d.protocol.clone().unwrap_or_default();
+    let discovery_transport = d.discovery_transport.clone().unwrap_or_default();
     fields.insert("plc_type".into(), d.plc_type.into());
     if let Some(title) = d.title {
         fields.insert("title".into(), title.into());
     }
-    fields.insert("port".into(), 5007i64.into());
+    if let Some(comment) = d.comment {
+        fields.insert("comment".into(), comment.into());
+    }
+    if let Some(protocol) = d.protocol {
+        fields.insert("protocol".into(), protocol.into());
+    }
+    if let Some(port) = d.port {
+        if matches!(d.discovery_transport.as_deref(), Some("tcp")) {
+            fields.insert("port".into(), i64::from(port).into());
+            fields.insert("slmp_port".into(), i64::from(port).into());
+        } else {
+            fields.insert("port".into(), 5007i64.into());
+            fields.insert("discovery_port".into(), i64::from(port).into());
+            fields.insert("slmp_port".into(), 5007i64.into());
+        }
+    } else {
+        fields.insert("port".into(), 5007i64.into());
+        fields.insert("slmp_port".into(), 5007i64.into());
+    }
+    if let Some(transport) = d.discovery_transport {
+        fields.insert("discovery_transport".into(), transport.into());
+    }
+    fields.insert("cap_mitsubishi_identity".into(), true.into());
+    fields.insert(
+        "cap_gxworks_udp".into(),
+        (protocol == "gxworks_udp" || discovery_transport == "udp").into(),
+    );
+    fields.insert(
+        "cap_slmp_tcp".into(),
+        (protocol == "slmp_tcp" || discovery_transport == "tcp").into(),
+    );
+    fields.insert("cap_slmp_udp".into(), (protocol == "slmp_udp").into());
     Some(DeviceInfo {
         vendor: "mitsubishi".into(),
         ip: ip.into(),
@@ -166,6 +215,13 @@ fn probe_schneider(ip: &str) -> Option<DeviceInfo> {
         return None;
     }
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
+    let name_for_family = d.name.clone().unwrap_or_default();
+    let identity_confirmed = d.identity_match
+        || (matches!(d.discovery_transport.as_deref(), Some("udp"))
+            && (d.name.is_some() || d.firmware.is_some()));
+    let modbus_tcp_confirmed = d.protocol.as_deref() == Some("modbus_tcp") || d.port.is_some();
+    let udp_confirmed =
+        matches!(d.discovery_transport.as_deref(), Some("udp")) && identity_confirmed;
     if let Some(name) = d.name {
         fields.insert("name".into(), name.into());
     }
@@ -177,6 +233,9 @@ fn probe_schneider(ip: &str) -> Option<DeviceInfo> {
     }
     if let Some(port) = d.port {
         fields.insert("port".into(), i64::from(port).into());
+        fields.insert("modbus_port".into(), i64::from(port).into());
+    } else {
+        fields.insert("modbus_port".into(), 502i64.into());
     }
     if let Some(transport) = d.discovery_transport {
         fields.insert("discovery_transport".into(), transport.into());
@@ -184,6 +243,16 @@ fn probe_schneider(ip: &str) -> Option<DeviceInfo> {
     if let Some(unit_id) = d.modbus_unit_id {
         fields.insert("modbus_unit_id".into(), i64::from(unit_id).into());
     }
+    if identity_confirmed {
+        fields.insert("web_port".into(), 80i64.into());
+    }
+    fields.insert("cap_identity_confirmed".into(), identity_confirmed.into());
+    fields.insert("cap_schneider_udp".into(), udp_confirmed.into());
+    fields.insert("cap_modbus_tcp".into(), modbus_tcp_confirmed.into());
+    fields.insert(
+        "fc90_family".into(),
+        schneider_fc90_family(&name_for_family).into(),
+    );
     Some(DeviceInfo {
         vendor: "schneider".into(),
         ip: ip.into(),
@@ -191,19 +260,30 @@ fn probe_schneider(ip: &str) -> Option<DeviceInfo> {
     })
 }
 
+fn schneider_fc90_family(name: &str) -> &'static str {
+    let name = name.to_ascii_lowercase();
+    if name.contains("tm221") {
+        "tm221"
+    } else if name.contains("m340")
+        || name.contains("quantum")
+        || name.contains("premium")
+        || name.contains("m580")
+    {
+        "m340_quantum_premium"
+    } else {
+        "unknown"
+    }
+}
+
 #[allow(dead_code)]
 fn probe_modicon(ip: &str) -> Option<DeviceInfo> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
 
-    let mut stream = TcpStream::connect_timeout(
-        &format!("{ip}:502").parse().ok()?,
-        Duration::from_secs(5),
-    )
-    .ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .ok()?;
+    let mut stream =
+        TcpStream::connect_timeout(&format!("{ip}:502").parse().ok()?, Duration::from_secs(5))
+            .ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
 
     // Modbus TCP Read Device Identification (FC 0x2B, MEI 0x0E, basic stream)
     let req = hex::decode("000100000006012b0e0100").unwrap_or_default();
@@ -247,16 +327,23 @@ fn probe_modicon(ip: &str) -> Option<DeviceInfo> {
             let val = String::from_utf8_lossy(&pdu[pos + 2..pos + 2 + obj_len]).to_string();
             pos += 2 + obj_len;
             match obj_id {
-                0x00 => { fields.insert("manufacturer".into(), val.into()); }
-                0x01 => { fields.insert("product_name".into(), val.into()); }
-                0x02 => { fields.insert("version".into(), val.into()); }
+                0x00 => {
+                    fields.insert("manufacturer".into(), val.into());
+                }
+                0x01 => {
+                    fields.insert("product_name".into(), val.into());
+                }
+                0x02 => {
+                    fields.insert("version".into(), val.into());
+                }
                 _ => {}
             }
         }
     }
 
     // Schneider Electric devices respond to Modbus Device ID — map vendor accordingly
-    let vendor = if fields.get("manufacturer")
+    let vendor = if fields
+        .get("manufacturer")
         .and_then(|v| v.as_str())
         .map(|s| s.to_ascii_lowercase().contains("schneider"))
         .unwrap_or(false)
@@ -284,6 +371,11 @@ fn probe_phoenix(ip: &str) -> Option<DeviceInfo> {
     if let Some(fw) = info.firmware {
         fields.insert("firmware".into(), fw.into());
     }
+    fields.insert("port".into(), 1962i64.into());
+    fields.insert("phoenix_info_port".into(), 1962i64.into());
+    fields.insert("webvisit_port".into(), 80i64.into());
+    fields.insert("cap_phoenix_info".into(), true.into());
+    fields.insert("cap_webvisit_candidate".into(), true.into());
     Some(DeviceInfo {
         vendor: "phoenix".into(),
         ip: ip.into(),
@@ -292,13 +384,26 @@ fn probe_phoenix(ip: &str) -> Option<DeviceInfo> {
 }
 
 fn probe_omron(ip: &str) -> Option<DeviceInfo> {
-    use crate::vendors::omron::scan;
-    let dev = scan::scan_ip(ip)?;
+    use crate::vendors::omron::{fins, scan};
+    let (dev, tcp_confirmed) = match fins::get_device_info_tcp(ip, 0) {
+        Ok(dev) => (dev, true),
+        Err(_) => (scan::scan_ip(ip)?, false),
+    };
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
     fields.insert("model".into(), dev.model.into());
     fields.insert("version".into(), dev.version.into());
-    fields.insert("node".into(), serde_json::Value::Number(dev.node_addr.into()));
+    fields.insert(
+        "node".into(),
+        serde_json::Value::Number(dev.node_addr.into()),
+    );
     fields.insert("port".into(), 9600i64.into());
+    fields.insert("fins_port".into(), 9600i64.into());
+    fields.insert("cap_fins_tcp".into(), tcp_confirmed.into());
+    fields.insert("cap_fins_udp".into(), (!tcp_confirmed).into());
+    fields.insert(
+        "discovery_transport".into(),
+        if tcp_confirmed { "tcp" } else { "udp" }.into(),
+    );
     Some(DeviceInfo {
         vendor: "omron".into(),
         ip: ip.into(),
@@ -312,12 +417,58 @@ fn probe_iec104(ip: &str) -> Option<DeviceInfo> {
         return None;
     }
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
-    fields.insert("port".into(), serde_json::Value::Number(client::IEC104_PORT.into()));
+    fields.insert(
+        "port".into(),
+        serde_json::Value::Number(client::IEC104_PORT.into()),
+    );
+    fields.insert(
+        "iec104_port".into(),
+        serde_json::Value::Number(client::IEC104_PORT.into()),
+    );
+    fields.insert("cap_iec104_tcp".into(), true.into());
     Some(DeviceInfo {
         vendor: "iec104".into(),
         ip: ip.into(),
         fields,
     })
+}
+
+fn probe_snmp(ip: &str) -> Option<DeviceInfo> {
+    use crate::vendors::snmp::{client, oids};
+
+    // Try common community strings; 4-second UDP timeout per attempt
+    let community = client::discover_community(ip, 0)?;
+
+    // Fetch the four most useful scalar OIDs in one round-trip
+    let sys_oids = [oids::SYS_DESCR, oids::SYS_OBJECT_ID, oids::SYS_NAME, oids::SYS_LOCATION];
+    let results = client::get_multi(ip, 0, &community, &sys_oids).ok()?;
+    let at = |i: usize| results.get(i).map(|(_, v)| v.display()).unwrap_or_default();
+
+    let sys_descr = at(0);
+    let sys_oid = at(1);
+    let sys_name = at(2);
+    let sys_location = at(3);
+
+    let is_apc = sys_oid.starts_with(oids::APC_ROOT);
+
+    // If sysObjectID maps to a known ICS vendor, return that vendor slug so the
+    // device appears in the correct exploit list; otherwise fall through as "snmp".
+    let vendor = oids::vendor_from_sys_oid(&sys_oid).unwrap_or("snmp");
+
+    let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
+    fields.insert("snmp_community".into(), community.clone().into());
+    fields.insert("sys_descr".into(), sys_descr.into());
+    fields.insert("sys_object_id".into(), sys_oid.into());
+    fields.insert("sys_name".into(), sys_name.into());
+    fields.insert("sys_location".into(), sys_location.into());
+    fields.insert("port".into(), serde_json::Value::Number(client::SNMP_PORT.into()));
+    fields.insert("snmp_port".into(), serde_json::Value::Number(client::SNMP_PORT.into()));
+    fields.insert("cap_snmp_udp".into(), true.into());
+    if is_apc {
+        fields.insert("cap_snmp_apc".into(), true.into());
+    }
+
+    Some(DeviceInfo { vendor: vendor.into(), ip: ip.into(), fields })
 }
 
 /// Probe all vendors in parallel. Returns the highest-confidence match.

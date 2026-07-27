@@ -13,10 +13,25 @@ pub struct SiemensDevice {
 
 /// Probe a single IP for a Siemens S7 device.
 pub fn scan_ip(ip: &str) -> Result<SiemensDevice> {
+    scan_ip_with_port(ip, S7_PORT)
+}
+
+pub fn scan_ip_with_port(ip: &str, port: u16) -> Result<SiemensDevice> {
+    let port = if port == 0 { S7_PORT } else { port };
     let open_ports = tcp_scan(ip);
-    let (hardware, firmware, cpu_state) = if open_ports.contains(&S7_PORT) {
-        let (hw, fw, state) = get_device_snapshot(ip, S7_PORT, 5);
-        let cpu = if state == "Unknown" { None } else { Some(state) };
+    let mut open_ports = open_ports;
+    if port != S7_PORT && crate::vendors::siemens::s7comm::scan_port(ip, port) {
+        open_ports.push(port);
+        open_ports.sort_unstable();
+        open_ports.dedup();
+    }
+    let (hardware, firmware, cpu_state) = if open_ports.contains(&port) {
+        let (hw, fw, state) = get_device_snapshot(ip, port, 5);
+        let cpu = if state == "Unknown" {
+            None
+        } else {
+            Some(state)
+        };
         (hw, fw, cpu)
     } else {
         (None, None, None)

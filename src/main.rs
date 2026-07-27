@@ -1,3 +1,4 @@
+﻿mod auth;
 mod cli;
 mod core;
 mod creds;
@@ -29,3 +30,4 @@ fn main() {
         std::process::exit(1);
     }
 }
+

@@ -29,6 +29,11 @@ scadaver
 Launches the full-screen terminal UI. Navigate with arrow keys, enter targets in the
 prompt, run scans and exploits from the menu.
 
+The TUI stores per-protocol capability hints from scans and uses them to keep actions
+visible but disabled when the required service has not been confirmed. Read-only actions
+run directly; sensitive reads, long-running maps/monitors, and write/control actions
+require typing `YES` before execution.
+
 ### CLI
 
 ```
@@ -57,6 +62,42 @@ scadaver iec104 gi --target 192.168.1.200
 scadaver exploit modbus-write-coil --target 192.168.1.30 --address 0 --state on
 ```
 
+### Local simulator suite
+
+The `sim/` directory contains protocol stubs for local smoke and regression testing.
+Use `run_all.py` to start them as one supervised test suite:
+
+```bash
+python sim/run_all.py --profile high
+```
+
+Profiles:
+- `high` avoids privileged ports: Modbus TCP 1502, SLMP TCP 15007, Beckhoff ADS TCP
+  14898 plus UDP discovery 48899, Siemens TCP 1102, eWON HTTP 8080.
+- `canonical` uses normal protocol ports: Modbus TCP 502, SLMP TCP 5007, Beckhoff ADS
+  TCP 48898 plus UDP discovery 48899, Siemens TCP 102, eWON HTTP 80. Ports 80, 102,
+  and 502 usually require Administrator/root.
+
+The runner preflights bind conflicts before startup, writes per-simulator logs under
+`sim/logs/`, and supports `--host`, `--only`, per-protocol port overrides, `--dry-run`,
+and `--install-deps`. Existing PowerShell workflows can call:
+
+```powershell
+.\sim\start_all.ps1 -Profile high
+```
+
+For end-to-end regression checks, build the Rust binary and run the simulator-backed
+smoke suite:
+
+```bash
+cargo build
+python sim/smoke.py --profile high
+```
+
+The smoke suite starts the covered simulators, runs read-only `scadaver` commands, and
+fails with captured command output if a protocol path regresses. Current simulator
+coverage is Schneider/Modbus, Mitsubishi/SLMP, Beckhoff/ADS, Siemens/S7Comm, and eWON.
+
 ---
 
 ## Supported Protocols
@@ -76,6 +117,8 @@ scadaver exploit modbus-write-coil --target 192.168.1.30 --address 0 --state on
 - Controller identity (vendor, firmware, serial) via CIP identity object
 
 **Exploitation:**
+- The TUI marks tag enumeration and monitoring as confirmation-gated because they can be
+  long-running, and tag writes require explicit `YES` confirmation.
 - Tag write via CIP Write Tag Service (service 0x4D) — any data type including BOOL,
   DINT, REAL, STRING
 - `scadaver rockwell write --target <IP> TAG=HEXVALUE [TAG=HEXVALUE ...]`
@@ -121,11 +164,13 @@ levels (different protocol, not currently implemented).
 
 ### Beckhoff TwinCAT — ADS over AMS/TCP
 
-**Ports:** UDP 48899 (discovery), TCP 48898 (AMS/TCP)
+**Ports:** UDP 48899 (discovery), TCP 48898 (AMS/TCP), TCP 5120 (CX web/UPnP control)
 
 **Discovery:**
 - UDP broadcast to 48899 — returns NetID, device name, TwinCAT version, kernel version
 - AMS/TCP framing: 6-byte prefix + LE u32 length at bytes [2..6]
+- Targeted scans can fall back to ADS/TCP when UDP discovery is blocked:
+  `scadaver scan beckhoff --ip <IP> --port 48898`
 
 **Enumeration:**
 - ADS state (Running / Config / Stop) via ADS ReadState request (command 0x0004)
@@ -133,12 +178,16 @@ levels (different protocol, not currently implemented).
 - Symbol table enumeration via ADS Read of `/TC_Config/SumReadEx`
 
 **Exploitation:**
+- The TUI marks ADS, UDP discovery, and web-control capabilities separately. ADS actions
+  require ADS TCP, route injection requires UDP discovery, and web/UPnP actions require
+  the web candidate port.
 - Write raw bytes to any named ADS symbol: `scadaver exploit beckhoff-write-symbol
   --target <IP> MAIN.valve=01`
 - TwinCAT state change (Run / Config / Stop): `scadaver control beckhoff-tc
   --target <IP> --state run`
 - CVE-2015-4051: Reboot CX9020 via unauthenticated UPnP/SOAP
 - Add admin user to CX9020 via UPnP/SOAP
+- ADS actions use the ADS port; CX web/UPnP actions use the web-control port.
 
 **Auth:** TwinCAT 3.1 Build 4024+ requires TLS with certificate thumbprint pinning.
 The tool collects the thumbprint but does not implement the TLS handshake. Earlier
@@ -154,8 +203,20 @@ TwinCAT versions have no authentication.
 - Modbus Device Identification (FC 0x2B / MEI 0x0E) — returns manufacturer, product
   name, firmware version
 - UDP broadcast to port 1740 for Schneider-specific discovery
+- Targeted scans can use UDP discovery, Modbus TCP, or both:
+  `scadaver scan schneider --ip <IP> --transport tcp --port 1502`
 
 **Exploitation:**
+- TUI Map Modbus Ranges reads holding/input/coils/discrete-input tables to surface
+  readable non-zero values when a register map is not known. Presets are `quick`,
+  `common`, and `all`; custom specs use `hr:0:500,ir:0:100,co:0:128,di:0:128`.
+  Saved map points are namespaced by table (`HR40001`, `IR30001`, `CO1`, `DI10001`)
+  so overlapping Modbus display ranges do not collide in the device database.
+  Devices that return `illegal function` for unsupported tables are summarized and
+  skipped instead of flooding the output.
+- The TUI marks Schneider actions by detected capability: Modbus actions require
+  confirmed Modbus TCP, FC90 actions require a matching Modicon family hint, and
+  write/control actions require an explicit `YES` confirmation.
 - FC5 write single coil: `scadaver exploit modbus-write-coil`
 - FC6 write single holding register: `scadaver exploit modbus-write-register`
 - FC16 write multiple holding registers: `scadaver exploit modbus-write-registers`
@@ -188,10 +249,20 @@ on M340, Quantum, Premium, and TM221 families.
 
 **Ports:** UDP 5561 (SLMP discovery), UDP 5006 (alternate), TCP 5007 (SLMP TCP)
 
+Targeted scans can use UDP discovery, SLMP TCP, or both:
+`scadaver scan mitsubishi --ip <IP> --transport tcp --port 5007`
+
 **Discovery:**
 - SLMP UDP broadcast — returns PLC type and title
 
 **Exploitation:**
+- TUI Map SLMP reads word devices (`D/W/R`) and bit devices (`M/X/Y/B`) to surface
+  readable non-default values when the device memory map is not known. Presets are
+  `quick`, `common`, and `all`; custom specs use `d:0:100,m:0:128,w:0:64`.
+- Read D (word) registers: `scadaver exploit slmp-read-d --target <IP>
+  --start 0 --count 10`
+- Read M (bit) devices: `scadaver exploit slmp-read-m --target <IP>
+  --start 0 --count 16`
 - Write D (word) registers: `scadaver exploit slmp-write-d --target <IP>
   --start 0 100,200`
 - Write M (bit) devices: `scadaver exploit slmp-write-m --target <IP>
@@ -250,10 +321,10 @@ credentials without authentication.
 
 **Exploitation:**
 - CVE-2016-8366: Retrieve plaintext passwords from WebVisit HMI:
-  `scadaver exploit phoenix-passwords --target <IP>`
+  `scadaver exploit phoenix-passwords --target <IP> [--port 8080]`
 - CVE-2016-8380: Read/write HMI tag values:
-  `scadaver exploit phoenix-tags --target <IP> --read`
-  `scadaver exploit phoenix-tags --target <IP> --write TAG=value`
+  `scadaver exploit phoenix-tags --target <IP> [--port 8080] --read`
+  `scadaver exploit phoenix-tags --target <IP> [--port 8080] --write TAG=value`
 - PLC control (ILC 150 / ILC 390): cold/warm/hot restart, stop, info:
   `scadaver control phoenix --target <IP> --model ilc150 --action stop`
 

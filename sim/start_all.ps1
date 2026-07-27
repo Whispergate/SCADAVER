@@ -1,26 +1,33 @@
-#Requires -RunAsAdministrator
-# Launch all ICS simulators. Ports 80, 102, 502 require Administrator.
+param(
+    [ValidateSet("canonical", "high")]
+    [string]$Profile = "canonical",
+    [string]$HostAddress = "0.0.0.0",
+    [int]$ModbusPort = 0,
+    [int]$SlmpPort = 0,
+    [int]$BeckhoffAdsPort = 0,
+    [int]$BeckhoffDiscoveryPort = 0,
+    [int]$SiemensPort = 0,
+    [int]$EwonPort = 0,
+    [switch]$InstallDeps,
+    [switch]$DryRun
+)
 
 $sim = $PSScriptRoot
+$runnerArgs = @(
+    "$sim\run_all.py",
+    "--profile", $Profile,
+    "--host", $HostAddress
+)
 
-Write-Host "Installing Python dependencies..."
-pip install -r "$sim\requirements.txt"
+if ($ModbusPort -gt 0) { $runnerArgs += @("--modbus-port", $ModbusPort) }
+if ($SlmpPort -gt 0) { $runnerArgs += @("--slmp-port", $SlmpPort) }
+if ($BeckhoffAdsPort -gt 0) { $runnerArgs += @("--beckhoff-ads-port", $BeckhoffAdsPort) }
+if ($BeckhoffDiscoveryPort -gt 0) { $runnerArgs += @("--beckhoff-discovery-port", $BeckhoffDiscoveryPort) }
+if ($SiemensPort -gt 0) { $runnerArgs += @("--siemens-port", $SiemensPort) }
+if ($EwonPort -gt 0) { $runnerArgs += @("--ewon-port", $EwonPort) }
+if ($InstallDeps) { $runnerArgs += "--install-deps" }
+if ($DryRun) { $runnerArgs += "--dry-run" }
 
-Write-Host "Launching simulators..."
-Start-Process powershell "-NoExit -Command python `"$sim\modbus_sim.py`""
-Start-Process powershell "-NoExit -Command python `"$sim\slmp_sim.py`""
-Start-Process powershell "-NoExit -Command python `"$sim\siemens_sim.py`""
-Start-Process powershell "-NoExit -Command python `"$sim\ewon_sim.py`""
-
-Write-Host ""
-Write-Host "All simulators launched in separate windows."
-Write-Host ""
-Write-Host "  Modbus  TCP 502  -> vendor: Schneider, exploit 'Read Holding Registers 0:10'"
-Write-Host "  SLMP    TCP 5007 -> vendor: Mitsubishi, exploit 'Read D Registers 0:10'"
-Write-Host "  Siemens TCP 102  -> vendor: Siemens,   exploit 'Read I/O' (0xAA bit pattern)"
-Write-Host "  eWON    TCP 80   -> vendor: eWON,      exploit 'Extract Credentials adm:5'"
-Write-Host ""
-Write-Host "Use separate loopback IPs to add multiple vendors to scadaver-rs:"
-Write-Host "  netsh interface ipv4 add address 'Loopback Pseudo-Interface 1' 127.0.0.2"
-Write-Host "  netsh interface ipv4 add address 'Loopback Pseudo-Interface 1' 127.0.0.3"
-Write-Host "  netsh interface ipv4 add address 'Loopback Pseudo-Interface 1' 127.0.0.4"
+Write-Host "Starting SCADAver simulator suite through run_all.py..."
+Write-Host "Use -Profile high to avoid privileged ports 80, 102, and 502."
+python @runnerArgs

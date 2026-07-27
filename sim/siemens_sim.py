@@ -10,6 +10,8 @@ Expected output with 'Read I/O': I0.0=0 I0.1=1 I0.2=0 I0.3=1 ...
 
 CPU state check (UserData msg type 0x07) -> 50-byte response, byte[44]=0x08 -> "Running"
 """
+import argparse
+import os
 import socketserver
 import struct
 
@@ -129,10 +131,30 @@ class SiemensHandler(socketserver.BaseRequestHandler):
             pass
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Siemens S7Comm simulator")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("SCADAVER_SIEMENS_PORT", str(PORT))),
+        help="TCP port to listen on (default: 102 or SCADAVER_SIEMENS_PORT)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("SCADAVER_SIM_HOST", "0.0.0.0"),
+        help="IP address to bind (default: 0.0.0.0 or SCADAVER_SIM_HOST)",
+    )
+    return parser.parse_args()
+
+
 if __name__ == '__main__':
-    srv = socketserver.ThreadingTCPServer(('0.0.0.0', PORT), SiemensHandler)
+    args = parse_args()
+    if not 1 <= args.port <= 65535:
+        raise ValueError("--port must be between 1 and 65535")
+
+    srv = socketserver.ThreadingTCPServer((args.host, args.port), SiemensHandler)
     srv.allow_reuse_address = True
-    print(f"Siemens S7Comm stub listening on 0.0.0.0:{PORT}")
+    print(f"Siemens S7Comm stub listening on {args.host}:{args.port}")
     print("  COTP CR  -> CC")
     print("  S7 Setup -> Ack-Data (param_len=8, PDU=480)")
     print("  S7 Read  -> 4x0xAA (bit pattern: 0,1,0,1,...) per area")

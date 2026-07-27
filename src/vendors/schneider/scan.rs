@@ -82,10 +82,7 @@ fn parse_response(data: &[u8], src_ip: &str) -> SchneiderDevice {
                 if c == [0] {
                     vec![]
                 } else {
-                    c.iter()
-                        .filter(|&&b| b != 0)
-                        .copied()
-                        .collect::<Vec<_>>()
+                    c.iter().filter(|&&b| b != 0).copied().collect::<Vec<_>>()
                 }
             })
             .collect::<Vec<u8>>();
@@ -96,7 +93,11 @@ fn parse_response(data: &[u8], src_ip: &str) -> SchneiderDevice {
 }
 
 /// Broadcast-scan for Schneider Electric devices.
-pub fn scan(interface: &NetworkInterface, timeout: u64, silent: bool) -> Result<Vec<SchneiderDevice>> {
+pub fn scan(
+    interface: &NetworkInterface,
+    timeout: u64,
+    silent: bool,
+) -> Result<Vec<SchneiderDevice>> {
     use socket2::{Domain, Protocol, Socket, Type};
 
     let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
@@ -161,7 +162,12 @@ pub fn scan_ip(ip: &str, timeout: u64, silent: bool) -> Result<Vec<SchneiderDevi
 
 /// Send discovery to a specific Schneider IP, falling back to Modbus TCP on `port`.
 /// Pass `port = 0` to use the default Modbus TCP port (502).
-pub fn scan_ip_with_port(ip: &str, timeout: u64, silent: bool, port: u16) -> Result<Vec<SchneiderDevice>> {
+pub fn scan_ip_with_port(
+    ip: &str,
+    timeout: u64,
+    silent: bool,
+    port: u16,
+) -> Result<Vec<SchneiderDevice>> {
     scan_ip_with_transport(ip, timeout, silent, port, Transport::Both)
 }
 
@@ -188,8 +194,7 @@ fn scan_ip_udp(ip: &str, timeout: u64, silent: bool) -> Result<Vec<SchneiderDevi
     let pkt = build_discovery_packet(&local_ip, "255.255.0.0");
 
     let bind_addr = format!("{local_ip}:{SOURCE_PORT}");
-    let sock = UdpSocket::bind(&bind_addr)
-        .or_else(|_| UdpSocket::bind("0.0.0.0:0"))?;
+    let sock = UdpSocket::bind(&bind_addr).or_else(|_| UdpSocket::bind("0.0.0.0:0"))?;
     sock.set_read_timeout(Some(Duration::from_secs(timeout)))?;
 
     sock.send_to(&pkt, format!("{ip}:{DEST_PORT}"))?;
@@ -227,7 +232,10 @@ fn scan_ip_udp(ip: &str, timeout: u64, silent: bool) -> Result<Vec<SchneiderDevi
 
 fn scan_ip_both(ip: &str, timeout: u64, silent: bool, port: u16) -> Result<Vec<SchneiderDevice>> {
     let udp_devs = scan_ip_udp(ip, timeout, true)?;
-    if udp_devs.iter().any(|d| d.name.is_some() || d.firmware.is_some()) {
+    if udp_devs
+        .iter()
+        .any(|d| d.name.is_some() || d.firmware.is_some())
+    {
         if !silent {
             for dev in &udp_devs {
                 match (&dev.name, &dev.firmware) {
@@ -328,10 +336,7 @@ fn device_from_modbus_id(ip: &str, port: u16, id: ModbusDeviceId) -> SchneiderDe
     let manufacturer = id.manufacturer().unwrap_or_default();
     let product = id.product_name().unwrap_or_default();
     let version = id.version().unwrap_or_default();
-    let identity_match = id
-        .objects
-        .values()
-        .any(|value| is_schneider_name(value));
+    let identity_match = id.objects.values().any(|value| is_schneider_name(value));
 
     let name = if !product.is_empty() {
         Some(product.to_string())
@@ -344,7 +349,11 @@ fn device_from_modbus_id(ip: &str, port: u16, id: ModbusDeviceId) -> SchneiderDe
     SchneiderDevice {
         ip: ip.to_string(),
         name,
-        firmware: if version.is_empty() { None } else { Some(version.to_string()) },
+        firmware: if version.is_empty() {
+            None
+        } else {
+            Some(version.to_string())
+        },
         protocol: Some("modbus_tcp".to_string()),
         port: Some(port),
         discovery_transport: Some("tcp".to_string()),
@@ -377,4 +386,69 @@ fn hex_decode(s: &str) -> Vec<u8> {
 
 fn hex_encode(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn device_id(objects: &[(u8, &str)]) -> ModbusDeviceId {
+        ModbusDeviceId {
+            unit_id: 0x01,
+            objects: objects
+                .iter()
+                .map(|(id, value)| (*id, (*value).to_string()))
+                .collect::<BTreeMap<_, _>>(),
+        }
+    }
+
+    #[test]
+    fn modbus_device_id_marks_schneider_identity() {
+        let dev = device_from_modbus_id(
+            "192.0.2.10",
+            1502,
+            device_id(&[
+                (0x00, "Schneider Electric"),
+                (0x01, "TM241CE24T_U"),
+                (0x02, "V05.01.09.14"),
+            ]),
+        );
+
+        assert!(dev.identity_match);
+        assert_eq!(dev.ip, "192.0.2.10");
+        assert_eq!(dev.name.as_deref(), Some("TM241CE24T_U"));
+        assert_eq!(dev.firmware.as_deref(), Some("V05.01.09.14"));
+        assert_eq!(dev.protocol.as_deref(), Some("modbus_tcp"));
+        assert_eq!(dev.port, Some(1502));
+        assert_eq!(dev.discovery_transport.as_deref(), Some("tcp"));
+        assert_eq!(dev.modbus_unit_id, Some(0x01));
+    }
+
+    #[test]
+    fn modbus_device_id_keeps_generic_modbus_from_identity_match() {
+        let dev = device_from_modbus_id(
+            "192.0.2.20",
+            502,
+            device_id(&[(0x00, "Generic Vendor"), (0x01, "Generic Modbus")]),
+        );
+
+        assert!(!dev.identity_match);
+        assert_eq!(dev.name.as_deref(), Some("Generic Modbus"));
+        assert_eq!(dev.protocol.as_deref(), Some("modbus_tcp"));
+        assert_eq!(dev.port, Some(502));
+        assert_eq!(dev.discovery_transport.as_deref(), Some("tcp"));
+    }
+
+    #[test]
+    fn modbus_device_id_matches_modicon_product_family() {
+        let dev = device_from_modbus_id(
+            "192.0.2.30",
+            502,
+            device_id(&[(0x00, "Vendor"), (0x01, "Modicon M580")]),
+        );
+
+        assert!(dev.identity_match);
+        assert_eq!(dev.name.as_deref(), Some("Modicon M580"));
+    }
 }

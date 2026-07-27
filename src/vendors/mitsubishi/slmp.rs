@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-const SLMP_PORT: u16 = 5007;
+pub const DEFAULT_PORT: u16 = 5007;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_WORD_COUNT: u16 = 960;
 const MAX_BIT_COUNT: u16 = 3584;
@@ -23,9 +23,15 @@ pub struct SlmpValue {
 
 /// Read word devices (D, W, R) via SLMP 3E batch read.
 /// Pass `port = 0` to use the default SLMP port (5007).
-pub fn read_word_devices(ip: &str, port: u16, device: &str, start: u32, count: u16) -> Result<Vec<SlmpValue>> {
-    let code = device_code(device)
-        .ok_or_else(|| anyhow::anyhow!("unknown SLMP device \"{device}\""))?;
+pub fn read_word_devices(
+    ip: &str,
+    port: u16,
+    device: &str,
+    start: u32,
+    count: u16,
+) -> Result<Vec<SlmpValue>> {
+    let code =
+        device_code(device).ok_or_else(|| anyhow::anyhow!("unknown SLMP device \"{device}\""))?;
     let count = count.min(MAX_WORD_COUNT);
     let data = request(ip, port, SUBCMD_WORD, code, start, count)?;
 
@@ -54,9 +60,15 @@ pub fn read_word_devices(ip: &str, port: u16, device: &str, start: u32, count: u
 
 /// Read bit devices (M, X, Y, B) via SLMP 3E batch read.
 /// Pass `port = 0` to use the default SLMP port (5007).
-pub fn read_bit_devices(ip: &str, port: u16, device: &str, start: u32, count: u16) -> Result<Vec<SlmpValue>> {
-    let code = device_code(device)
-        .ok_or_else(|| anyhow::anyhow!("unknown SLMP device \"{device}\""))?;
+pub fn read_bit_devices(
+    ip: &str,
+    port: u16,
+    device: &str,
+    start: u32,
+    count: u16,
+) -> Result<Vec<SlmpValue>> {
+    let code =
+        device_code(device).ok_or_else(|| anyhow::anyhow!("unknown SLMP device \"{device}\""))?;
     let count = count.min(MAX_BIT_COUNT);
     let data = request(ip, port, SUBCMD_BIT, code, start, count)?;
 
@@ -71,11 +83,7 @@ pub fn read_bit_devices(ip: &str, port: u16, device: &str, start: u32, count: u1
     let mut values = Vec::with_capacity(count as usize);
     for i in 0..count as usize {
         let byte = data[i / 2];
-        let nibble = if i % 2 == 0 {
-            byte & 0x0F
-        } else {
-            byte >> 4
-        };
+        let nibble = if i % 2 == 0 { byte & 0x0F } else { byte >> 4 };
         let on = nibble != 0;
         let address = start + i as u32;
         values.push(SlmpValue {
@@ -83,7 +91,11 @@ pub fn read_bit_devices(ip: &str, port: u16, device: &str, start: u32, count: u1
             address,
             display: format!("{device}{address}"),
             raw: u16::from(on),
-            value_str: if on { "ON".to_string() } else { "OFF".to_string() },
+            value_str: if on {
+                "ON".to_string()
+            } else {
+                "OFF".to_string()
+            },
         });
     }
     Ok(values)
@@ -91,9 +103,15 @@ pub fn read_bit_devices(ip: &str, port: u16, device: &str, start: u32, count: u1
 
 /// Batch write word devices (D, W, R) via SLMP 3E.
 /// Pass `port = 0` to use the default SLMP port (5007).
-pub fn write_word_devices(ip: &str, port: u16, device: &str, start: u32, values: &[u16]) -> Result<()> {
-    let code = device_code(device)
-        .ok_or_else(|| anyhow::anyhow!("unknown SLMP device \"{device}\""))?;
+pub fn write_word_devices(
+    ip: &str,
+    port: u16,
+    device: &str,
+    start: u32,
+    values: &[u16],
+) -> Result<()> {
+    let code =
+        device_code(device).ok_or_else(|| anyhow::anyhow!("unknown SLMP device \"{device}\""))?;
     if values.is_empty() {
         anyhow::bail!("write_word_devices: empty values slice");
     }
@@ -110,9 +128,15 @@ pub fn write_word_devices(ip: &str, port: u16, device: &str, start: u32, values:
 /// Batch write bit devices (M, X, Y, B) via SLMP 3E.
 /// Each bool is encoded as a nibble (0x0=OFF, 0x1=ON), two per byte.
 /// Pass `port = 0` to use the default SLMP port (5007).
-pub fn write_bit_devices(ip: &str, port: u16, device: &str, start: u32, values: &[bool]) -> Result<()> {
-    let code = device_code(device)
-        .ok_or_else(|| anyhow::anyhow!("unknown SLMP device \"{device}\""))?;
+pub fn write_bit_devices(
+    ip: &str,
+    port: u16,
+    device: &str,
+    start: u32,
+    values: &[bool],
+) -> Result<()> {
+    let code =
+        device_code(device).ok_or_else(|| anyhow::anyhow!("unknown SLMP device \"{device}\""))?;
     if values.is_empty() {
         anyhow::bail!("write_bit_devices: empty values slice");
     }
@@ -142,8 +166,8 @@ fn write_request(
     payload: &[u8],
 ) -> Result<()> {
     // inner data: timer(2) + cmd(2) + subcmd(2) + device(1) + start(3) + count(2) + payload
-    let inner_len = 12u16
-        + u16::try_from(payload.len()).context("write payload too large for SLMP frame")?;
+    let inner_len =
+        12u16 + u16::try_from(payload.len()).context("write payload too large for SLMP frame")?;
     let mut req = Vec::with_capacity(9 + inner_len as usize);
     req.extend_from_slice(&[0x50, 0x00]);
     req.extend_from_slice(&[0xFF, 0xFF]);
@@ -192,7 +216,14 @@ fn device_code(device: &str) -> Option<u8> {
     }
 }
 
-fn request(ip: &str, port: u16, subcmd: u16, device_code: u8, start: u32, count: u16) -> Result<Vec<u8>> {
+fn request(
+    ip: &str,
+    port: u16,
+    subcmd: u16,
+    device_code: u8,
+    start: u32,
+    count: u16,
+) -> Result<Vec<u8>> {
     let req = build_frame(subcmd, device_code, start, count);
     let mut stream = connect(ip, port)?;
     stream.write_all(&req)?;
@@ -200,7 +231,7 @@ fn request(ip: &str, port: u16, subcmd: u16, device_code: u8, start: u32, count:
 }
 
 fn connect(ip: &str, port: u16) -> Result<TcpStream> {
-    let effective_port = if port == 0 { SLMP_PORT } else { port };
+    let effective_port = if port == 0 { DEFAULT_PORT } else { port };
     let addr = format!("{ip}:{effective_port}");
     let sock_addr = addr
         .to_socket_addrs()?

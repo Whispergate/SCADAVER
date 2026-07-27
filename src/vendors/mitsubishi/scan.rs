@@ -3,6 +3,7 @@ use std::net::UdpSocket;
 use std::time::Duration;
 
 use crate::core::network::NetworkInterface;
+use crate::vendors::mitsubishi::slmp;
 
 const DISCOVERY_PORT: u16 = 5561;
 const SLMP_DISCOVERY_PORT: u16 = 5006;
@@ -17,6 +18,16 @@ pub struct MitsubishiDevice {
     pub plc_type: String,
     pub title: Option<String>,
     pub comment: Option<String>,
+    pub protocol: Option<String>,
+    pub port: Option<u16>,
+    pub discovery_transport: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    Udp,
+    Tcp,
+    Both,
 }
 
 fn parse_gxworks_response(data: &[u8], ip: &str) -> MitsubishiDevice {
@@ -54,6 +65,9 @@ fn parse_gxworks_response(data: &[u8], ip: &str) -> MitsubishiDevice {
         plc_type,
         title,
         comment,
+        protocol: Some("gxworks_udp".to_string()),
+        port: Some(DISCOVERY_PORT),
+        discovery_transport: Some("udp".to_string()),
     }
 }
 
@@ -102,11 +116,30 @@ fn parse_slmp_response(data: &[u8], ip: &str) -> MitsubishiDevice {
         plc_type: model,
         title: None,
         comment: None,
+        protocol: Some("slmp_udp".to_string()),
+        port: Some(SLMP_DISCOVERY_PORT),
+        discovery_transport: Some("udp".to_string()),
+    }
+}
+
+fn tcp_device(ip: &str, port: u16) -> MitsubishiDevice {
+    MitsubishiDevice {
+        ip: ip.to_string(),
+        plc_type: format!("Mitsubishi-compatible SLMP TCP {port}"),
+        title: None,
+        comment: None,
+        protocol: Some("slmp_tcp".to_string()),
+        port: Some(port),
+        discovery_transport: Some("tcp".to_string()),
     }
 }
 
 /// Broadcast-scan for Mitsubishi MELSEC PLCs.
-pub fn scan(interface: &NetworkInterface, timeout: u64, silent: bool) -> Result<Vec<MitsubishiDevice>> {
+pub fn scan(
+    interface: &NetworkInterface,
+    timeout: u64,
+    silent: bool,
+) -> Result<Vec<MitsubishiDevice>> {
     use crate::core::network::create_udp_broadcast_socket;
 
     let sock = create_udp_broadcast_socket(&interface.ip, timeout)?;
@@ -147,6 +180,43 @@ pub fn scan(interface: &NetworkInterface, timeout: u64, silent: bool) -> Result<
 
 /// Send Mitsubishi discovery to a specific IP (GX Works3 first, then SLMP).
 pub fn scan_ip(ip: &str, timeout: u64, silent: bool) -> Result<Vec<MitsubishiDevice>> {
+    scan_ip_with_transport(ip, timeout, silent, 0, Transport::Both)
+}
+
+/// Scan a specific Mitsubishi IP using UDP discovery, TCP SLMP, or both.
+/// Pass `port = 0` to use the default SLMP TCP port (5007).
+pub fn scan_ip_with_transport(
+    ip: &str,
+    timeout: u64,
+    silent: bool,
+    port: u16,
+    transport: Transport,
+) -> Result<Vec<MitsubishiDevice>> {
+    match transport {
+        Transport::Udp => scan_ip_udp(ip, timeout, silent),
+        Transport::Tcp => Ok(scan_ip_tcp(ip, timeout, silent, port)),
+        Transport::Both => {
+            let udp = scan_ip_udp(ip, timeout, true)?;
+            if !udp.is_empty() {
+                if !silent {
+                    for dev in &udp {
+                        print_device(dev);
+                    }
+                }
+                return Ok(udp);
+            }
+            if !silent {
+                println!(
+                    "No Mitsubishi UDP discovery response from {ip}; trying TCP {}...",
+                    effective_slmp_port(port)
+                );
+            }
+            Ok(scan_ip_tcp(ip, timeout, silent, port))
+        }
+    }
+}
+
+fn scan_ip_udp(ip: &str, timeout: u64, silent: bool) -> Result<Vec<MitsubishiDevice>> {
     // GX Works3 probe
     let sock = UdpSocket::bind("0.0.0.0:0")?;
     sock.set_read_timeout(Some(Duration::from_secs(timeout)))?;
@@ -182,6 +252,30 @@ pub fn scan_ip(ip: &str, timeout: u64, silent: bool) -> Result<Vec<MitsubishiDev
         println!("No Mitsubishi response from {ip}");
     }
     Ok(vec![])
+}
+
+fn scan_ip_tcp(ip: &str, _timeout: u64, silent: bool, port: u16) -> Vec<MitsubishiDevice> {
+    let port = effective_slmp_port(port);
+    if slmp::read_word_devices(ip, port, "D", 0, 1).is_ok() {
+        let dev = tcp_device(ip, port);
+        if !silent {
+            println!("  Found {} at {} (SLMP TCP {port})", dev.plc_type, dev.ip);
+        }
+        vec![dev]
+    } else {
+        if !silent {
+            println!("No Mitsubishi TCP SLMP response from {ip}:{port}");
+        }
+        vec![]
+    }
+}
+
+fn effective_slmp_port(port: u16) -> u16 {
+    if port == 0 {
+        slmp::DEFAULT_PORT
+    } else {
+        port
+    }
 }
 
 fn print_device(d: &MitsubishiDevice) {

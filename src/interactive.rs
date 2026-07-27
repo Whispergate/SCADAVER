@@ -9,7 +9,9 @@ use std::io::{self, Write};
 
 fn clear() {
     if cfg!(target_os = "windows") {
-        let _ = std::process::Command::new("cmd").args(["/c", "cls"]).status();
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "cls"])
+            .status();
     } else {
         let _ = std::process::Command::new("clear").status();
     }
@@ -138,7 +140,14 @@ fn manual_vendor_select(ip: &str) {
         "Back",
     ];
     let vendor_keys = &[
-        "beckhoff", "siemens", "mitsubishi", "schneider", "phoenix", "enip", "rockwell", "ewon",
+        "beckhoff",
+        "siemens",
+        "mitsubishi",
+        "schneider",
+        "phoenix",
+        "enip",
+        "rockwell",
+        "ewon",
     ];
     let idx = prompt(items, &format!("SELECT VENDOR — {ip}"));
     if idx < vendor_keys.len() {
@@ -154,7 +163,15 @@ fn menu_device(ip: &str, vendor: &str) {
     loop {
         match vendor {
             "beckhoff" => {
-                let items = &["Device Info", "Get TwinCAT State", "Set State: Run", "Set State: Config", "Reboot (CVE-2015-4051)", "Add User (UPnP)", "Back"];
+                let items = &[
+                    "Device Info",
+                    "Get TwinCAT State",
+                    "Set State: Run",
+                    "Set State: Config",
+                    "Reboot (CVE-2015-4051)",
+                    "Add User (UPnP)",
+                    "Back",
+                ];
                 match prompt(items, &format!("BECKHOFF — {ip}")) {
                     0 => beckhoff_device_info(ip),
                     1 => beckhoff_get_state(ip),
@@ -166,7 +183,15 @@ fn menu_device(ip: &str, vendor: &str) {
                 }
             }
             "siemens" => {
-                let items = &["Device Info", "Read I/O", "Write Outputs", "Write Merkers", "CPU State", "Toggle CPU State", "Back"];
+                let items = &[
+                    "Device Info",
+                    "Read I/O",
+                    "Write Outputs",
+                    "Write Merkers",
+                    "CPU State",
+                    "Toggle CPU State",
+                    "Back",
+                ];
                 match prompt(items, &format!("SIEMENS — {ip}")) {
                     0 => siemens_device_info(ip),
                     1 => siemens_read_io(ip),
@@ -178,7 +203,12 @@ fn menu_device(ip: &str, vendor: &str) {
                 }
             }
             "mitsubishi" => {
-                let items = &["Set State: Run", "Set State: Stop", "Set State: Pause", "Back"];
+                let items = &[
+                    "Set State: Run",
+                    "Set State: Stop",
+                    "Set State: Pause",
+                    "Back",
+                ];
                 match prompt(items, &format!("MITSUBISHI — {ip}")) {
                     0 => mitsubishi_set_state(ip, "run"),
                     1 => mitsubishi_set_state(ip, "stop"),
@@ -187,7 +217,13 @@ fn menu_device(ip: &str, vendor: &str) {
                 }
             }
             "schneider" => {
-                let items = &["Session Hijack (CVE-2017-6026) + Info", "Run PLC", "Stop PLC", "Flash LED", "Back"];
+                let items = &[
+                    "Session Hijack (CVE-2017-6026) + Info",
+                    "Run PLC",
+                    "Stop PLC",
+                    "Flash LED",
+                    "Back",
+                ];
                 match prompt(items, &format!("SCHNEIDER — {ip}")) {
                     0 => schneider_hijack(ip, "info"),
                     1 => schneider_hijack(ip, "start"),
@@ -197,7 +233,16 @@ fn menu_device(ip: &str, vendor: &str) {
                 }
             }
             "phoenix" => {
-                let items = &["Device Info", "Retrieve Passwords (CVE-2016-8366)", "List Tags", "Read Tag Values", "Write Tag Value", "Control ILC 150", "Control ILC 390", "Back"];
+                let items = &[
+                    "Device Info",
+                    "Retrieve Passwords (CVE-2016-8366)",
+                    "List Tags",
+                    "Read Tag Values",
+                    "Write Tag Value",
+                    "Control ILC 150",
+                    "Control ILC 390",
+                    "Back",
+                ];
                 match prompt(items, &format!("PHOENIX — {ip}")) {
                     0 => phoenix_device_info(ip),
                     1 => phoenix_passwords(ip),
@@ -210,7 +255,13 @@ fn menu_device(ip: &str, vendor: &str) {
                 }
             }
             "enip" | "rockwell" => {
-                let items = &["Device Info (Identity)", "Enumerate Tags", "Read Tag", "Write Tag", "Back"];
+                let items = &[
+                    "Device Info (Identity)",
+                    "Enumerate Tags",
+                    "Read Tag",
+                    "Write Tag",
+                    "Back",
+                ];
                 match prompt(items, &format!("ROCKWELL/ENIP — {ip}")) {
                     0 => rockwell_info(ip),
                     1 => rockwell_tags(ip),
@@ -220,7 +271,11 @@ fn menu_device(ip: &str, vendor: &str) {
                 }
             }
             "ewon" => {
-                let items = &["Scan / Device Info", "Extract Credentials (auth bypass)", "Back"];
+                let items = &[
+                    "Scan / Device Info",
+                    "Extract Credentials (auth bypass)",
+                    "Back",
+                ];
                 match prompt(items, &format!("eWON — {ip}")) {
                     0 => ewon_device_info(ip),
                     1 => ewon_credentials(ip),
@@ -343,8 +398,27 @@ fn scan_schneider() {
         if ip.is_empty() {
             return;
         }
-        let pb = crate::display::spinner_start(&format!("Scanning {ip}…"));
-        let result = scan::scan_ip(&ip, 2, false);
+        let transport_input = ask_input("Transport (both/udp/tcp)", "both");
+        let transport = match transport_input.to_ascii_lowercase().as_str() {
+            "udp" => scan::Transport::Udp,
+            "tcp" => scan::Transport::Tcp,
+            "both" => scan::Transport::Both,
+            other => {
+                crate::display::print_warn(&format!("Unknown transport '{other}', using both."));
+                scan::Transport::Both
+            }
+        };
+        let port = if matches!(transport, scan::Transport::Udp) {
+            0
+        } else {
+            ask_input("Modbus TCP port", "502")
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0)
+                .unwrap_or(502)
+        };
+        let pb = crate::display::spinner_start(&format!("Scanning {ip}..."));
+        let result = scan::scan_ip_with_transport(&ip, 2, false, port, transport);
         pb.finish_and_clear();
         match result {
             Ok(devs) => crate::display::print_success(&format!("Found {} device(s).", devs.len())),
@@ -373,8 +447,27 @@ fn scan_mitsubishi() {
         if ip.is_empty() {
             return;
         }
+        let transport_input = ask_input("Transport (both/udp/tcp)", "both");
+        let transport = match transport_input.to_ascii_lowercase().as_str() {
+            "udp" => scan::Transport::Udp,
+            "tcp" => scan::Transport::Tcp,
+            "both" => scan::Transport::Both,
+            other => {
+                crate::display::print_warn(&format!("Unknown transport '{other}', using both."));
+                scan::Transport::Both
+            }
+        };
+        let port = if matches!(transport, scan::Transport::Udp) {
+            0
+        } else {
+            ask_input("SLMP TCP port", "5007")
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0)
+                .unwrap_or(5007)
+        };
         let pb = crate::display::spinner_start(&format!("Scanning {ip}…"));
-        let result = scan::scan_ip(&ip, 3, false);
+        let result = scan::scan_ip_with_transport(&ip, 3, false, port, transport);
         pb.finish_and_clear();
         match result {
             Ok(devs) => crate::display::print_success(&format!("Found {} device(s).", devs.len())),
@@ -518,13 +611,48 @@ fn menu_exploit() {
             "Back",
         ];
         match prompt(items, "EXPLOIT MENU") {
-            0 => { let ip = ask_ip("Target IP"); if !ip.is_empty() { ewon_credentials(&ip); } }
-            1 => { let ip = ask_ip("Target IP"); if !ip.is_empty() { schneider_flash(&ip); } }
-            2 => { let ip = ask_ip("Target IP"); if !ip.is_empty() { schneider_hijack(&ip, "info"); } }
-            3 => { let ip = ask_ip("Target IP"); if !ip.is_empty() { phoenix_passwords(&ip); } }
-            4 => { let ip = ask_ip("Target IP"); if !ip.is_empty() { phoenix_write_tag(&ip); } }
-            5 => { let ip = ask_ip("Target IP"); if !ip.is_empty() { beckhoff_reboot(&ip); } }
-            6 => { let ip = ask_ip("Target IP"); if !ip.is_empty() { beckhoff_add_user(&ip); } }
+            0 => {
+                let ip = ask_ip("Target IP");
+                if !ip.is_empty() {
+                    ewon_credentials(&ip);
+                }
+            }
+            1 => {
+                let ip = ask_ip("Target IP");
+                if !ip.is_empty() {
+                    schneider_flash(&ip);
+                }
+            }
+            2 => {
+                let ip = ask_ip("Target IP");
+                if !ip.is_empty() {
+                    schneider_hijack(&ip, "info");
+                }
+            }
+            3 => {
+                let ip = ask_ip("Target IP");
+                if !ip.is_empty() {
+                    phoenix_passwords(&ip);
+                }
+            }
+            4 => {
+                let ip = ask_ip("Target IP");
+                if !ip.is_empty() {
+                    phoenix_write_tag(&ip);
+                }
+            }
+            5 => {
+                let ip = ask_ip("Target IP");
+                if !ip.is_empty() {
+                    beckhoff_reboot(&ip);
+                }
+            }
+            6 => {
+                let ip = ask_ip("Target IP");
+                if !ip.is_empty() {
+                    beckhoff_add_user(&ip);
+                }
+            }
             _ => return,
         }
         pause();
@@ -739,7 +867,7 @@ fn mitsubishi_set_state(ip: &str, state: &str) {
         mac: None,
     };
     let pb = crate::display::spinner_start(&format!("Sending {state} to Mitsubishi PLC…"));
-    let result = control::set_state(&iface, state);
+    let result = control::set_state_ip(&iface, ip, state);
     pb.finish_and_clear();
     match result {
         Ok(true) => crate::display::print_success("Command sent."),
@@ -936,7 +1064,10 @@ fn rockwell_tags(ip: &str) {
     match result {
         Ok(tags) => {
             for t in &tags {
-                println!("  [{:>5}] {} (type=0x{:04x})", t.instance_id, t.name, t.tag_type);
+                println!(
+                    "  [{:>5}] {} (type=0x{:04x})",
+                    t.instance_id, t.name, t.tag_type
+                );
             }
             crate::display::print_success(&format!("{} tag(s).", tags.len()));
         }
@@ -1016,7 +1147,9 @@ fn ewon_credentials(ip: &str) {
     pb.finish_and_clear();
     match exploit::exploit(ip, 0, "adm", max) {
         Ok(users) if users.is_empty() => crate::display::print_warn("No credentials extracted."),
-        Ok(users) => crate::display::print_success(&format!("{} credential(s) extracted.", users.len())),
+        Ok(users) => {
+            crate::display::print_success(&format!("{} credential(s) extracted.", users.len()))
+        }
         Err(e) => crate::display::print_error(&format!("{e}")),
     }
 }

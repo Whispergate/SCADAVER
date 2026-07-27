@@ -108,8 +108,7 @@ impl Database {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create DB dir {:?}", parent))?;
         }
-        let conn = Connection::open(path)
-            .with_context(|| format!("open database {:?}", path))?;
+        let conn = Connection::open(path).with_context(|| format!("open database {:?}", path))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              CREATE TABLE IF NOT EXISTS devices (
@@ -190,8 +189,15 @@ impl Database {
         let mut devices = Vec::new();
         for row in rows {
             let (id, ip, vendor, last_seen, fields_str) = row?;
-            let fields: Value = serde_json::from_str(&fields_str).unwrap_or(Value::Object(Default::default()));
-            devices.push(DeviceRecord { id, ip, vendor, last_seen, fields });
+            let fields: Value =
+                serde_json::from_str(&fields_str).unwrap_or(Value::Object(Default::default()));
+            devices.push(DeviceRecord {
+                id,
+                ip,
+                vendor,
+                last_seen,
+                fields,
+            });
         }
         Ok(devices)
     }
@@ -217,8 +223,15 @@ impl Database {
         let mut devices = Vec::new();
         for row in rows {
             let (id, ip, vendor, last_seen, fields_str) = row?;
-            let fields: Value = serde_json::from_str(&fields_str).unwrap_or(Value::Object(Default::default()));
-            devices.push(DeviceRecord { id, ip, vendor, last_seen, fields });
+            let fields: Value =
+                serde_json::from_str(&fields_str).unwrap_or(Value::Object(Default::default()));
+            devices.push(DeviceRecord {
+                id,
+                ip,
+                vendor,
+                last_seen,
+                fields,
+            });
         }
         Ok(devices)
     }
@@ -227,10 +240,8 @@ impl Database {
     pub fn upsert_tags(&self, ip: &str, tags: &[(i64, &str, i64)]) -> Result<TagDiff> {
         let now = now_unix();
         let existing = self.load_tags(ip)?;
-        let mut existing_map: HashMap<i64, TagRecord> = existing
-            .into_iter()
-            .map(|t| (t.instance_id, t))
-            .collect();
+        let mut existing_map: HashMap<i64, TagRecord> =
+            existing.into_iter().map(|t| (t.instance_id, t)).collect();
 
         let mut added = Vec::new();
         let mut type_changed = Vec::new();
@@ -277,7 +288,11 @@ impl Database {
             )?;
         }
 
-        Ok(TagDiff { added, removed, type_changed })
+        Ok(TagDiff {
+            added,
+            removed,
+            type_changed,
+        })
     }
 
     pub fn load_tags(&self, ip: &str) -> Result<Vec<TagRecord>> {
@@ -288,14 +303,16 @@ impl Database {
         let rows = stmt.query_map(params![ip], |r| {
             Ok(TagRecord {
                 instance_id: r.get(0)?,
-                name:        r.get(1)?,
-                tag_type:    r.get(2)?,
-                first_seen:  r.get(3)?,
-                last_seen:   r.get(4)?,
+                name: r.get(1)?,
+                tag_type: r.get(2)?,
+                first_seen: r.get(3)?,
+                last_seen: r.get(4)?,
             })
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
@@ -318,33 +335,38 @@ impl Database {
         let mut value_changed = Vec::new();
 
         for &(address, data_type, value) in points {
+            let stored_value = normalize_data_value(protocol, value);
             match existing_map.remove(address) {
                 Some(old) => {
-                    if old.last_value.as_deref() != Some(value) {
+                    let old_value = old
+                        .last_value
+                        .as_deref()
+                        .map(|v| normalize_data_value(protocol, v));
+                    if old_value.as_deref() != Some(stored_value.as_str()) {
                         value_changed.push(ValueChange {
                             address: address.to_string(),
                             old_value: old.last_value.clone(),
-                            new_value: value.to_string(),
+                            new_value: stored_value.clone(),
                         });
                     }
                     self.conn.execute(
                         "UPDATE device_data SET data_type=?1, last_value=?2, last_seen=?3
                          WHERE ip=?4 AND protocol=?5 AND address=?6",
-                        params![data_type, value, now, ip, protocol, address],
+                        params![data_type, stored_value, now, ip, protocol, address],
                     )?;
                 }
                 None => {
                     added.push(DataPoint {
                         address: address.to_string(),
                         data_type: data_type.map(|s| s.to_string()),
-                        last_value: Some(value.to_string()),
+                        last_value: Some(stored_value.clone()),
                         first_seen: now,
                         last_seen: now,
                     });
                     self.conn.execute(
                         "INSERT INTO device_data (ip, protocol, address, data_type, last_value, first_seen, last_seen)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-                        params![ip, protocol, address, data_type, value, now],
+                        params![ip, protocol, address, data_type, stored_value, now],
                     )?;
                 }
             }
@@ -358,7 +380,11 @@ impl Database {
             )?;
         }
 
-        Ok(DataDiff { added, removed, value_changed })
+        Ok(DataDiff {
+            added,
+            removed,
+            value_changed,
+        })
     }
 
     pub fn load_data_points(&self, ip: &str, protocol: &str) -> Result<Vec<DataPoint>> {
@@ -368,15 +394,17 @@ impl Database {
         )?;
         let rows = stmt.query_map(params![ip, protocol], |r| {
             Ok(DataPoint {
-                address:    r.get(0)?,
-                data_type:  r.get(1)?,
+                address: r.get(0)?,
+                data_type: r.get(1)?,
                 last_value: r.get(2)?,
                 first_seen: r.get(3)?,
-                last_seen:  r.get(4)?,
+                last_seen: r.get(4)?,
             })
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
@@ -395,4 +423,98 @@ fn now_unix() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn normalize_data_value(protocol: &str, value: &str) -> String {
+    if protocol.eq_ignore_ascii_case("modbus") {
+        normalize_modbus_value(value)
+    } else {
+        value.to_string()
+    }
+}
+
+fn normalize_modbus_value(value: &str) -> String {
+    let trimmed = value.trim();
+    let Some((decimal, hex_suffix)) = trimmed.split_once(" (0x") else {
+        return trimmed.to_string();
+    };
+    let Some(hex) = hex_suffix.strip_suffix(')') else {
+        return trimmed.to_string();
+    };
+    let Ok(decimal_value) = decimal.parse::<u16>() else {
+        return trimmed.to_string();
+    };
+    let Ok(hex_value) = u16::from_str_radix(hex, 16) else {
+        return trimmed.to_string();
+    };
+    if decimal_value == hex_value {
+        decimal_value.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory_db() -> Database {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE device_data (
+                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                 ip         TEXT    NOT NULL,
+                 protocol   TEXT    NOT NULL,
+                 address    TEXT    NOT NULL,
+                 data_type  TEXT,
+                 last_value TEXT,
+                 first_seen INTEGER NOT NULL DEFAULT 0,
+                 last_seen  INTEGER NOT NULL DEFAULT 0,
+                 UNIQUE(ip, protocol, address)
+             );",
+        )
+        .unwrap();
+        Database { conn }
+    }
+
+    #[test]
+    fn modbus_value_normalization_ignores_display_hex_churn() {
+        let db = memory_db();
+        let first = db
+            .upsert_data_points(
+                "127.0.0.1",
+                "modbus",
+                &[("HR40001", Some("UINT16"), "0 (0x0000)")],
+            )
+            .unwrap();
+        assert_eq!(1, first.added.len());
+
+        let second = db
+            .upsert_data_points("127.0.0.1", "modbus", &[("HR40001", Some("UINT16"), "0")])
+            .unwrap();
+        assert!(second.value_changed.is_empty());
+
+        let stored = db.load_data_points("127.0.0.1", "modbus").unwrap();
+        assert_eq!(Some("0"), stored[0].last_value.as_deref());
+    }
+
+    #[test]
+    fn modbus_table_prefixed_addresses_do_not_collide() {
+        let db = memory_db();
+        let diff = db
+            .upsert_data_points(
+                "127.0.0.1",
+                "modbus",
+                &[
+                    ("HR40001", Some("UINT16"), "1"),
+                    ("IR40001", Some("UINT16"), "2"),
+                    ("CO10001", Some("BOOL"), "OFF"),
+                    ("DI10001", Some("BOOL"), "ON"),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(4, diff.added.len());
+        assert_eq!(4, db.load_data_points("127.0.0.1", "modbus").unwrap().len());
+    }
 }

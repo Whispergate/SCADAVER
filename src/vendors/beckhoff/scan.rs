@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};
 use std::time::Duration;
 
-use crate::core::bytes::{get_netid_as_string, reverse_bytes};
+use crate::core::bytes::{get_netid_as_string, ip_to_hex, reverse_bytes};
 use crate::core::network::NetworkInterface;
 use crate::vendors::beckhoff::ads::{
     build_local_netid, construct_ams_packet, decode_ads_value, parse_ads_response,
@@ -11,7 +11,7 @@ use crate::vendors::beckhoff::ads::{
 };
 
 const DISCOVERY_PORT: u16 = 48899;
-const ADS_TCP_PORT: u16 = 48898;
+pub const DEFAULT_ADS_PORT: u16 = 48898;
 
 #[derive(Debug, Clone)]
 pub struct BeckhoffDevice {
@@ -22,6 +22,28 @@ pub struct BeckhoffDevice {
     pub tc_version: String,
     pub kernel: String,
     pub ssl_thumbprint: Option<String>,
+}
+
+fn derived_ads_device(ip: &str, port: u16) -> Option<BeckhoffDevice> {
+    ip.parse::<std::net::Ipv4Addr>().ok()?;
+    let netid = format!("{}0101", ip_to_hex(ip));
+    Some(BeckhoffDevice {
+        ip: ip.to_string(),
+        name: format!("Beckhoff ADS TCP {}", effective_ads_port(port)),
+        netid_str: get_netid_as_string(&netid),
+        netid,
+        tc_version: "Unknown".to_string(),
+        kernel: "Unknown".to_string(),
+        ssl_thumbprint: None,
+    })
+}
+
+fn effective_ads_port(port: u16) -> u16 {
+    if port == 0 {
+        DEFAULT_ADS_PORT
+    } else {
+        port
+    }
 }
 
 fn parse_discovery_frame(data: &[u8], src_ip: &str) -> Option<BeckhoffDevice> {
@@ -56,16 +78,12 @@ fn parse_discovery_frame(data: &[u8], src_ip: &str) -> Option<BeckhoffDevice> {
         )
         .unwrap_or(0);
         let k1 = u32::from_str_radix(
-            &reverse_bytes(
-                std::str::from_utf8(&hexdata[i + 8..i + 16]).unwrap_or("00000000"),
-            ),
+            &reverse_bytes(std::str::from_utf8(&hexdata[i + 8..i + 16]).unwrap_or("00000000")),
             16,
         )
         .unwrap_or(0);
         let k2 = u32::from_str_radix(
-            &reverse_bytes(
-                std::str::from_utf8(&hexdata[i + 16..i + 24]).unwrap_or("00000000"),
-            ),
+            &reverse_bytes(std::str::from_utf8(&hexdata[i + 16..i + 24]).unwrap_or("00000000")),
             16,
         )
         .unwrap_or(0);
@@ -87,9 +105,7 @@ fn parse_discovery_frame(data: &[u8], src_ip: &str) -> Option<BeckhoffDevice> {
         )
         .unwrap_or(0);
         let patch = u32::from_str_radix(
-            &reverse_bytes(
-                std::str::from_utf8(&hexdata[tc_i + 4..tc_i + 8]).unwrap_or("0000"),
-            ),
+            &reverse_bytes(std::str::from_utf8(&hexdata[tc_i + 4..tc_i + 8]).unwrap_or("0000")),
             16,
         )
         .unwrap_or(0);
@@ -107,10 +123,7 @@ fn parse_discovery_frame(data: &[u8], src_ip: &str) -> Option<BeckhoffDevice> {
             data[start..]
                 .iter()
                 .position(|&b| b == 0)
-                .map(|end| {
-                    String::from_utf8_lossy(&data[start..start + end])
-                        .to_uppercase()
-                })
+                .map(|end| String::from_utf8_lossy(&data[start..start + end]).to_uppercase())
         });
 
     Some(BeckhoffDevice {
@@ -125,16 +138,17 @@ fn parse_discovery_frame(data: &[u8], src_ip: &str) -> Option<BeckhoffDevice> {
 }
 
 /// Broadcast-discover Beckhoff TwinCAT devices.
-pub fn discover(interface: &NetworkInterface, timeout: u64, silent: bool) -> Result<Vec<BeckhoffDevice>> {
+pub fn discover(
+    interface: &NetworkInterface,
+    timeout: u64,
+    silent: bool,
+) -> Result<Vec<BeckhoffDevice>> {
     use crate::core::network::create_udp_broadcast_socket;
 
     let local_netid = build_local_netid(&interface.ip);
     let sock = create_udp_broadcast_socket(&interface.ip, timeout)?;
 
-    let discovery_pkt = format!(
-        "036614710000000001000000{}1027{:08x}",
-        local_netid, 0u32
-    );
+    let discovery_pkt = format!("036614710000000001000000{}1027{:08x}", local_netid, 0u32);
     let pkt = hex_decode(&discovery_pkt.replace(' ', ""));
     sock.send_to(&pkt, format!("255.255.255.255:{DISCOVERY_PORT}"))?;
 
@@ -182,8 +196,8 @@ pub fn discover_ip(ip: &str, timeout: u64, silent: bool) -> Result<Vec<BeckhoffD
     let local_ip = local_ip_for(ip);
     let local_netid = build_local_netid(&local_ip);
 
-    let sock = UdpSocket::bind(format!("{local_ip}:0"))
-        .or_else(|_| UdpSocket::bind("0.0.0.0:0"))?;
+    let sock =
+        UdpSocket::bind(format!("{local_ip}:0")).or_else(|_| UdpSocket::bind("0.0.0.0:0"))?;
     sock.set_read_timeout(Some(Duration::from_secs(timeout)))?;
 
     let discovery_pkt = format!("036614710000000001000000{local_netid}1027{:08x}", 0u32);
@@ -215,9 +229,58 @@ pub fn discover_ip(ip: &str, timeout: u64, silent: bool) -> Result<Vec<BeckhoffD
     Ok(vec![dev])
 }
 
+/// Target a Beckhoff device by UDP discovery first, then fall back to ADS/TCP.
+/// Pass `port = 0` to use the default ADS port (48898).
+pub fn discover_ip_with_port(
+    ip: &str,
+    timeout: u64,
+    silent: bool,
+    port: u16,
+) -> Result<Vec<BeckhoffDevice>> {
+    let udp = discover_ip(ip, timeout, true)?;
+    if !udp.is_empty() {
+        if !silent {
+            for dev in &udp {
+                println!(
+                    "  {}: {} (NetID: {}, TC: {}, OS: {})",
+                    dev.ip, dev.name, dev.netid_str, dev.tc_version, dev.kernel
+                );
+            }
+        }
+        return Ok(udp);
+    }
+
+    let Some(dev) = derived_ads_device(ip, port) else {
+        if !silent {
+            println!("No Beckhoff response from {ip}");
+        }
+        return Ok(vec![]);
+    };
+
+    let local_netid = build_local_netid(&crate::core::network::local_ip_for(ip));
+    let state = get_state(&dev, &local_netid, port);
+    if state == "ERROR" {
+        if !silent {
+            println!("No Beckhoff UDP discovery or ADS TCP response from {ip}");
+        }
+        return Ok(vec![]);
+    }
+
+    if !silent {
+        println!(
+            "  {}: {} (NetID: {}, ADS TCP {}, state {state})",
+            dev.ip,
+            dev.name,
+            dev.netid_str,
+            effective_ads_port(port)
+        );
+    }
+    Ok(vec![dev])
+}
+
 /// Query the TwinCAT state via ADS. Pass `port = 0` to use the default ADS port (48898).
 pub fn get_state(device: &BeckhoffDevice, local_netid: &str, port: u16) -> String {
-    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
+    let effective_port = effective_ads_port(port);
     let mut stream = match TcpStream::connect_timeout(
         &format!("{}:{effective_port}", device.ip).parse().unwrap(),
         Duration::from_secs(3),
@@ -322,13 +385,13 @@ pub fn set_twincat_state(
     port: u16,
 ) -> Result<bool> {
     let ads_state: u16 = match mode.to_lowercase().as_str() {
-        "run" => 5,    // ADS_STATE_RUN
-        "reset" => 2,  // ADS_STATE_RESET
-        "stop" => 6,   // ADS_STATE_STOP
+        "run" => 5,     // ADS_STATE_RUN
+        "reset" => 2,   // ADS_STATE_RESET
+        "stop" => 6,    // ADS_STATE_STOP
         "config" => 16, // ADS_STATE_CONFIG
         _ => anyhow::bail!("Invalid mode '{mode}'. Use: run, stop, config, reset"),
     };
-    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
+    let effective_port = effective_ads_port(port);
     let mut stream = TcpStream::connect_timeout(
         &format!("{}:{effective_port}", device.ip).parse()?,
         Duration::from_secs(5),
@@ -372,15 +435,13 @@ pub fn get_device_info_full(
     local_netid: &str,
     port: u16,
 ) -> Option<BeckhoffDeviceInfo> {
-    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
+    let effective_port = effective_ads_port(port);
     let mut stream = TcpStream::connect_timeout(
         &format!("{}:{effective_port}", device.ip).parse().ok()?,
         Duration::from_secs(5),
     )
     .ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
 
     let mut info = BeckhoffDeviceInfo {
         ip: device.ip.clone(),
@@ -408,33 +469,32 @@ pub fn get_device_info_full(
             10000,
             31337,
         );
-        let _ = send_recv_ams(&mut stream, &hex_decode(&pkt1))
-            .and_then(|resp| {
-                let ams = parse_ams_response(&resp)?;
-                let (_, ads_data) = parse_ads_response(&ams.ads_data)?;
-                let resp_len = u32::from_str_radix(&reverse_bytes(&ads_data), 16).ok()? as u32;
+        let _ = send_recv_ams(&mut stream, &hex_decode(&pkt1)).and_then(|resp| {
+            let ams = parse_ams_response(&resp)?;
+            let (_, ads_data) = parse_ads_response(&ams.ads_data)?;
+            let resp_len = u32::from_str_radix(&reverse_bytes(&ads_data), 16).ok()? as u32;
 
-                let pkt2 = construct_ams_packet(
-                    &device.netid,
-                    local_netid,
-                    2,
-                    &AdsParams::Read(700, 1, resp_len),
-                    None,
-                    true,
-                    10000,
-                    31337,
-                );
-                let resp2 = send_recv_ams(&mut stream, &hex_decode(&pkt2))?;
-                let ams2 = parse_ams_response(&resp2)?;
-                let (_, xml_hex) = parse_ads_response(&ams2.ads_data)?;
-                let xml_bytes: Vec<u8> = hex_decode(&xml_hex)
-                    .into_iter()
-                    .filter(|&b| b != 0)
-                    .collect();
-                let xml_str = String::from_utf8_lossy(&xml_bytes).to_string();
-                parse_tc3_xml(&xml_str, &mut info);
-                Some(())
-            });
+            let pkt2 = construct_ams_packet(
+                &device.netid,
+                local_netid,
+                2,
+                &AdsParams::Read(700, 1, resp_len),
+                None,
+                true,
+                10000,
+                31337,
+            );
+            let resp2 = send_recv_ams(&mut stream, &hex_decode(&pkt2))?;
+            let ams2 = parse_ams_response(&resp2)?;
+            let (_, xml_hex) = parse_ads_response(&ams2.ads_data)?;
+            let xml_bytes: Vec<u8> = hex_decode(&xml_hex)
+                .into_iter()
+                .filter(|&b| b != 0)
+                .collect();
+            let xml_str = String::from_utf8_lossy(&xml_bytes).to_string();
+            parse_tc3_xml(&xml_str, &mut info);
+            Some(())
+        });
     }
 
     Some(info)
@@ -512,7 +572,7 @@ pub struct AdsSymbol {
 /// device does not support symbol upload or on any communication error.
 /// Pass `port = 0` to use the default ADS port (48898).
 pub fn enumerate_symbols(device: &BeckhoffDevice, local_netid: &str, port: u16) -> Vec<AdsSymbol> {
-    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
+    let effective_port = effective_ads_port(port);
     let addr = match format!("{}:{effective_port}", device.ip).parse() {
         Ok(a) => a,
         Err(_) => return Vec::new(),
@@ -521,7 +581,10 @@ pub fn enumerate_symbols(device: &BeckhoffDevice, local_netid: &str, port: u16) 
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    if stream.set_read_timeout(Some(Duration::from_secs(5))).is_err() {
+    if stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .is_err()
+    {
         return Vec::new();
     }
 
@@ -767,7 +830,7 @@ pub fn write_symbol_value(
     value_bytes: Vec<u8>,
     port: u16,
 ) -> Result<bool> {
-    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
+    let effective_port = effective_ads_port(port);
     let addr = format!("{}:{effective_port}", device.ip).parse()?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -783,7 +846,14 @@ pub fn write_symbol_value(
         .find(|s| s.name.eq_ignore_ascii_case(symbol_name))
         .ok_or_else(|| anyhow::anyhow!("ADS symbol '{symbol_name}' not found on device"))?;
 
-    write_to_stream(&mut stream, device, local_netid, sym.index_group, sym.index_offset, value_bytes)
+    write_to_stream(
+        &mut stream,
+        device,
+        local_netid,
+        sym.index_group,
+        sym.index_offset,
+        value_bytes,
+    )
 }
 
 /// Write raw bytes to a symbol identified by its ADS index group and offset.
@@ -796,11 +866,18 @@ pub fn write_symbol_by_index(
     data: Vec<u8>,
     port: u16,
 ) -> Result<bool> {
-    let effective_port = if port == 0 { ADS_TCP_PORT } else { port };
+    let effective_port = effective_ads_port(port);
     let addr = format!("{}:{effective_port}", device.ip).parse()?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    write_to_stream(&mut stream, device, local_netid, index_group, index_offset, data)
+    write_to_stream(
+        &mut stream,
+        device,
+        local_netid,
+        index_group,
+        index_offset,
+        data,
+    )
 }
 
 fn write_to_stream(
@@ -834,4 +911,88 @@ fn hostname_or_default() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "scadaver-rs".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_discovery_frame() -> Vec<u8> {
+        let name = b"SCADAVER-CX";
+        let name_len = name.len() + 1;
+        let mut frame = vec![0u8; 340];
+        frame[12..18].copy_from_slice(&[127, 0, 0, 1, 1, 1]);
+        frame[26..28].copy_from_slice(&(name_len as u16).to_le_bytes());
+        frame[28..28 + name.len()].copy_from_slice(name);
+
+        let kernel_offset = 27 + name_len + 9;
+        frame[kernel_offset..kernel_offset + 4].copy_from_slice(&3u32.to_le_bytes());
+        frame[kernel_offset + 4..kernel_offset + 8].copy_from_slice(&1u32.to_le_bytes());
+        frame[kernel_offset + 8..kernel_offset + 12].copy_from_slice(&4024u32.to_le_bytes());
+
+        let tc_offset = kernel_offset + 12 + 264;
+        frame[tc_offset] = 3;
+        frame[tc_offset + 1] = 1;
+        frame[tc_offset + 2..tc_offset + 4].copy_from_slice(&4024u16.to_le_bytes());
+        frame
+    }
+
+    fn symbol_entry(
+        name: &str,
+        type_name: &str,
+        index_group: u32,
+        index_offset: u32,
+        size: u32,
+    ) -> Vec<u8> {
+        let name_b = name.as_bytes();
+        let type_b = type_name.as_bytes();
+        let entry_len = 30 + name_b.len() + 1 + type_b.len() + 1;
+        let mut entry = vec![0u8; entry_len];
+        entry[0..4].copy_from_slice(&(entry_len as u32).to_le_bytes());
+        entry[4..8].copy_from_slice(&index_group.to_le_bytes());
+        entry[8..12].copy_from_slice(&index_offset.to_le_bytes());
+        entry[12..16].copy_from_slice(&size.to_le_bytes());
+        entry[24..26].copy_from_slice(&(name_b.len() as u16).to_le_bytes());
+        entry[26..28].copy_from_slice(&(type_b.len() as u16).to_le_bytes());
+        let type_start = 30 + name_b.len() + 1;
+        entry[30..30 + name_b.len()].copy_from_slice(name_b);
+        entry[type_start..type_start + type_b.len()].copy_from_slice(type_b);
+        entry
+    }
+
+    #[test]
+    fn discovery_frame_parser_extracts_core_metadata() {
+        let dev = parse_discovery_frame(&sample_discovery_frame(), "127.0.0.1").unwrap();
+        assert_eq!(dev.ip, "127.0.0.1");
+        assert_eq!(dev.name, "SCADAVER-CX");
+        assert_eq!(dev.netid_str, "127.0.0.1.1.1");
+        assert_eq!(dev.kernel, "3.1.4024");
+        assert_eq!(dev.tc_version, "3.1.4024");
+    }
+
+    #[test]
+    fn symbol_blob_parser_extracts_symbol_entries() {
+        let mut blob = symbol_entry("MAIN.counter", "UINT", 0x4020, 0, 2);
+        blob.extend(symbol_entry("MAIN.running", "BOOL", 0x4020, 2, 1));
+
+        let symbols = parse_symbol_entries(&blob);
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(symbols[0].name, "MAIN.counter");
+        assert_eq!(symbols[0].type_name, "UINT");
+        assert_eq!(symbols[0].index_group, 0x4020);
+        assert_eq!(symbols[0].index_offset, 0);
+        assert_eq!(symbols[0].size, 2);
+        assert_eq!(symbols[1].name, "MAIN.running");
+        assert_eq!(symbols[1].type_name, "BOOL");
+    }
+
+    #[test]
+    fn derived_ads_device_uses_ipv4_netid_fallback() {
+        let dev = derived_ads_device("192.168.1.20", 49001).unwrap();
+        assert_eq!(dev.ip, "192.168.1.20");
+        assert_eq!(dev.netid, "c0a801140101");
+        assert_eq!(dev.netid_str, "192.168.1.20.1.1");
+        assert!(dev.name.contains("49001"));
+        assert!(derived_ads_device("not-an-ip", 49001).is_none());
+    }
 }

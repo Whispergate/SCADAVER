@@ -1,3 +1,6 @@
 /target/
 *.pdb
 .env
+__pycache__/
+*.pyc
+sim/logs/

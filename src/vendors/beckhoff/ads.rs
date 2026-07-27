@@ -259,6 +259,64 @@ fn decode_int_le(bytes: &[u8], n: usize) -> String {
     signed.to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ams_response(ads_data: &[u8]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
+        body.extend_from_slice(&10000u16.to_le_bytes());
+        body.extend_from_slice(&[127, 0, 0, 1, 1, 1]);
+        body.extend_from_slice(&31337u16.to_le_bytes());
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(&5u16.to_le_bytes());
+        body.extend_from_slice(&(ads_data.len() as u32).to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0xAABBCCDDu32.to_le_bytes());
+        body.extend_from_slice(ads_data);
+
+        let mut response = Vec::new();
+        response.extend_from_slice(&[0, 0]);
+        response.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        response.extend_from_slice(&body);
+        response
+    }
+
+    #[test]
+    fn parse_ads_response_extracts_error_and_data() {
+        let ads = "0000000002000000d204";
+        let (error, data) = parse_ads_response(ads).unwrap();
+        assert_eq!(error, "00000000");
+        assert_eq!(data, "d204");
+    }
+
+    #[test]
+    fn parse_ams_response_extracts_header_and_payload() {
+        let response = ams_response(&[0, 0, 0, 0, 2, 0, 0, 0, 0xD2, 0x04]);
+        let ams = parse_ams_response(&response).unwrap();
+        assert_eq!(ams.dst_netid, "010203040506");
+        assert_eq!(ams.dst_port, 10000);
+        assert_eq!(ams.src_netid, "7f0000010101");
+        assert_eq!(ams.src_port, 31337);
+        assert_eq!(ams.cmd_id, 2);
+        assert_eq!(ams.error_code, "00000000");
+        assert_eq!(ams.invoke_id, "aabbccdd");
+        assert_eq!(ams.ads_data, "0000000002000000d204");
+    }
+
+    #[test]
+    fn decode_ads_scalar_values() {
+        assert_eq!(decode_ads_value("BOOL", &[1]), "true");
+        assert_eq!(decode_ads_value("UINT", &1234u16.to_le_bytes()), "1234");
+        assert_eq!(decode_ads_value("DINT", &(-42i32).to_le_bytes()), "-42");
+        assert_eq!(
+            decode_ads_value("STRING(80)", b"hello\0ignored"),
+            "\"hello\""
+        );
+    }
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

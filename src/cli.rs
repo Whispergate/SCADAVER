@@ -60,6 +60,11 @@ pub enum Command {
         #[command(subcommand)]
         sub: DbCmd,
     },
+    /// SNMP enumeration, community scan, and write testing (UDP 161)
+    Snmp {
+        #[command(subcommand)]
+        sub: SnmpCmd,
+    },
 }
 
 // ===================================================================
@@ -68,6 +73,13 @@ pub enum Command {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum SchneiderScanTransport {
+    Both,
+    Udp,
+    Tcp,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum MitsubishiScanTransport {
     Both,
     Udp,
     Tcp,
@@ -108,18 +120,29 @@ pub enum ScanCmd {
         timeout: u64,
         #[arg(short, long)]
         ip: Option<String>,
+        /// Transport for targeted scans: udp, tcp, or both
+        #[arg(long, value_enum, default_value = "both")]
+        transport: MitsubishiScanTransport,
+        /// SLMP TCP port for targeted TCP scans
+        #[arg(long, default_value = "5007")]
+        port: u16,
     },
-    /// Scan for Beckhoff TwinCAT devices (UDP 48899)
+    /// Scan for Beckhoff TwinCAT devices (UDP 48899, ADS TCP fallback)
     Beckhoff {
         #[arg(short, long, default_value = "2")]
         timeout: u64,
         #[arg(short, long)]
         ip: Option<String>,
+        /// ADS TCP port for targeted fallback scans (default: 48898)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// Scan a Siemens device by IP (S7Comm TCP 102)
     Siemens {
         #[arg(short, long)]
         ip: String,
+        #[arg(short, long, default_value = "102")]
+        port: u16,
     },
     /// Auto-detect vendor and info for any IP
     Auto {
@@ -184,6 +207,9 @@ pub enum ControlCmd {
     BeckhoffTc {
         #[arg(short, long)]
         target: String,
+        /// Override ADS TCP port (default: 48898)
+        #[arg(short, long, default_value = "0")]
+        port: u16,
         /// State: run / config / stop (omit for info only)
         #[arg(short, long)]
         state: Option<String>,
@@ -223,11 +249,17 @@ pub enum ExploitCmd {
     PhoenixPasswords {
         #[arg(short, long)]
         target: String,
+        /// Override HTTP port (default: 80)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// CVE-2016-8380: Read/write HMI tag values on Phoenix PLCs
     PhoenixTags {
         #[arg(short, long)]
         target: String,
+        /// Override HTTP port (default: 80)
+        #[arg(long, default_value = "0")]
+        port: u16,
         #[arg(long)]
         read: bool,
         /// TAG=value to write
@@ -238,11 +270,17 @@ pub enum ExploitCmd {
     BeckhoffReboot {
         #[arg(short, long)]
         target: String,
+        /// Override web control port (default: 5120)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// Add admin user to Beckhoff CX9020 via UPnP/SOAP
     BeckhoffUser {
         #[arg(short, long)]
         target: String,
+        /// Override web control port (default: 5120)
+        #[arg(long, default_value = "0")]
+        port: u16,
         #[arg(short, long, default_value = "scadaver_admin")]
         username: String,
         #[arg(short, long, default_value = "Sc4d4v3r!")]
@@ -252,6 +290,9 @@ pub enum ExploitCmd {
     BeckhoffWriteSymbol {
         #[arg(short, long)]
         target: String,
+        /// Override ADS TCP port (default: 48898)
+        #[arg(long, default_value = "0")]
+        port: u16,
         /// SymbolName=hexbytes, e.g. MAIN.valve=01
         input: String,
     },
@@ -381,6 +422,30 @@ pub enum ExploitCmd {
         #[arg(long, default_value = "0")]
         port: u16,
     },
+    /// SLMP: read D (word) registers on Mitsubishi MELSEC
+    SlmpReadD {
+        #[arg(short, long)]
+        target: String,
+        #[arg(long, default_value = "0")]
+        start: u32,
+        #[arg(short, long, default_value = "10")]
+        count: u16,
+        /// Override port (default: 5007)
+        #[arg(long, default_value = "0")]
+        port: u16,
+    },
+    /// SLMP: read M (bit) devices on Mitsubishi MELSEC
+    SlmpReadM {
+        #[arg(short, long)]
+        target: String,
+        #[arg(long, default_value = "0")]
+        start: u32,
+        #[arg(short, long, default_value = "16")]
+        count: u16,
+        /// Override port (default: 5007)
+        #[arg(long, default_value = "0")]
+        port: u16,
+    },
     /// SLMP: write D (word) registers on Mitsubishi MELSEC
     SlmpWriteD {
         #[arg(short, long)]
@@ -389,6 +454,9 @@ pub enum ExploitCmd {
         start: u32,
         /// Comma-separated u16 values, e.g. 100,200
         values: String,
+        /// Override port (default: 5007)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// SLMP: write M (bit) devices on Mitsubishi MELSEC
     SlmpWriteM {
@@ -398,6 +466,9 @@ pub enum ExploitCmd {
         start: u32,
         /// Binary string of bit values, e.g. 0110
         bits: String,
+        /// Override port (default: 5007)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
 }
 
@@ -622,16 +693,25 @@ pub enum PhoenixCmd {
     Tags {
         #[arg(short, long)]
         target: String,
+        /// Override HTTP port (default: 80)
+        #[arg(short, long, default_value = "0")]
+        port: u16,
     },
     /// Read current tag values from Phoenix WebVisit HMI
     ReadTags {
         #[arg(short, long)]
         target: String,
+        /// Override HTTP port (default: 80)
+        #[arg(short, long, default_value = "0")]
+        port: u16,
     },
     /// Write a tag value to Phoenix WebVisit HMI
     WriteTag {
         #[arg(short, long)]
         target: String,
+        /// Override HTTP port (default: 80)
+        #[arg(short, long, default_value = "0")]
+        port: u16,
         /// Tag name
         name: String,
         /// New value
@@ -641,11 +721,17 @@ pub enum PhoenixCmd {
     Passwords {
         #[arg(short, long)]
         target: String,
+        /// Override HTTP port (default: 80)
+        #[arg(short, long, default_value = "0")]
+        port: u16,
     },
     /// Get Phoenix ProConOS device info (port 1962)
     Info {
         #[arg(short, long)]
         target: String,
+        /// Override ProConOS info port (default: 1962)
+        #[arg(short, long, default_value = "0")]
+        port: u16,
     },
 }
 
@@ -667,6 +753,7 @@ pub fn run(args: Args) -> Result<()> {
         Some(Command::Omron { sub }) => run_omron(sub),
         Some(Command::Iec104 { sub }) => run_iec104(sub),
         Some(Command::Db { sub }) => run_db(sub),
+        Some(Command::Snmp { sub }) => run_snmp(sub),
     }
 }
 
@@ -712,7 +799,12 @@ fn run_scan(cmd: ScanCmd) -> Result<()> {
             }
         }
 
-        ScanCmd::Schneider { timeout, ip, transport, port } => {
+        ScanCmd::Schneider {
+            timeout,
+            ip,
+            transport,
+            port,
+        } => {
             use crate::vendors::schneider::scan;
             if let Some(target) = ip {
                 crate::display::print_info(&format!("Scanning {target} for Schneider…"));
@@ -738,15 +830,29 @@ fn run_scan(cmd: ScanCmd) -> Result<()> {
             }
         }
 
-        ScanCmd::Mitsubishi { timeout, ip } => {
+        ScanCmd::Mitsubishi {
+            timeout,
+            ip,
+            transport,
+            port,
+        } => {
             use crate::vendors::mitsubishi::scan;
             if let Some(target) = ip {
                 crate::display::print_info(&format!("Scanning {target} for Mitsubishi…"));
-                let devs = scan::scan_ip(&target, timeout, false)?;
+                let transport = match transport {
+                    MitsubishiScanTransport::Both => scan::Transport::Both,
+                    MitsubishiScanTransport::Udp => scan::Transport::Udp,
+                    MitsubishiScanTransport::Tcp => scan::Transport::Tcp,
+                };
+                let devs = scan::scan_ip_with_transport(&target, timeout, false, port, transport)?;
                 if devs.is_empty() {
                     crate::display::print_warn("No Mitsubishi devices found.");
                 }
             } else {
+                if matches!(transport, MitsubishiScanTransport::Tcp) {
+                    crate::display::print_error("TCP Mitsubishi scans require --ip.");
+                    return Ok(());
+                }
                 let ifaces = get_interfaces();
                 let iface = select_interface(&ifaces)?;
                 crate::display::print_info("Broadcasting Mitsubishi MELSEC discovery…");
@@ -755,11 +861,11 @@ fn run_scan(cmd: ScanCmd) -> Result<()> {
             }
         }
 
-        ScanCmd::Beckhoff { timeout, ip } => {
+        ScanCmd::Beckhoff { timeout, ip, port } => {
             use crate::vendors::beckhoff::scan;
             if let Some(target) = ip {
                 crate::display::print_info(&format!("Scanning {target} for Beckhoff TwinCAT…"));
-                let devs = scan::discover_ip(&target, timeout, false)?;
+                let devs = scan::discover_ip_with_port(&target, timeout, false, port)?;
                 if devs.is_empty() {
                     crate::display::print_warn("No Beckhoff devices found.");
                 }
@@ -772,10 +878,10 @@ fn run_scan(cmd: ScanCmd) -> Result<()> {
             }
         }
 
-        ScanCmd::Siemens { ip } => {
+        ScanCmd::Siemens { ip, port } => {
             use crate::vendors::siemens::scan;
             crate::display::print_info(&format!("Scanning {ip} for Siemens S7…"));
-            let dev = scan::scan_ip(&ip)?;
+            let dev = scan::scan_ip_with_port(&ip, port)?;
             println!("  IP:       {}", dev.ip);
             if let Some(hw) = &dev.hardware {
                 println!("  Hardware: {hw}");
@@ -799,7 +905,11 @@ fn run_scan(cmd: ScanCmd) -> Result<()> {
             pb.finish_and_clear();
             match info {
                 Some(d) => {
-                    crate::display::print_success(&format!("Detected: {} ({})", d.vendor.to_uppercase(), ip));
+                    crate::display::print_success(&format!(
+                        "Detected: {} ({})",
+                        d.vendor.to_uppercase(),
+                        ip
+                    ));
                     for (k, v) in &d.fields {
                         println!("  {k}: {v}");
                     }
@@ -827,14 +937,18 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
                 mac: None,
             };
             crate::display::print_info(&format!("Setting Mitsubishi PLC to {state}…"));
-            match control::set_state(&iface, &state.to_lowercase()) {
+            match control::set_state_ip(&iface, &target, &state.to_lowercase()) {
                 Ok(true) => crate::display::print_success("Command sent."),
                 Ok(false) => crate::display::print_warn("Command sent (no confirmation)."),
                 Err(e) => crate::display::print_error(&format!("Failed: {e}")),
             }
         }
 
-        ControlCmd::Phoenix { target, model, action } => {
+        ControlCmd::Phoenix {
+            target,
+            model,
+            action,
+        } => {
             use crate::vendors::phoenix::control;
             match action.to_lowercase().as_str() {
                 "info" => {
@@ -875,7 +989,13 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
             }
         }
 
-        ControlCmd::SiemensIo { target, port, read, outputs, merkers } => {
+        ControlCmd::SiemensIo {
+            target,
+            port,
+            read,
+            outputs,
+            merkers,
+        } => {
             use crate::vendors::siemens::s7comm;
             let wrote_outputs = outputs.is_some();
             let wrote_merkers = merkers.is_some();
@@ -891,7 +1011,9 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
                 let parts: Vec<&str> = merker_str.splitn(2, ',').collect();
                 let bits = parts[0];
                 let offset: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-                crate::display::print_info(&format!("Writing merkers to {target} (offset {offset})…"));
+                crate::display::print_info(&format!(
+                    "Writing merkers to {target} (offset {offset})…"
+                ));
                 if s7comm::set_merkers(&target, bits, offset, port, 5, None) {
                     crate::display::print_success("Merkers written.");
                 } else {
@@ -929,13 +1051,17 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
             }
         }
 
-        ControlCmd::BeckhoffTc { target, state } => {
+        ControlCmd::BeckhoffTc {
+            target,
+            port,
+            state,
+        } => {
             use crate::vendors::beckhoff::{ads, scan};
             let local_ip = local_ip_for(&target);
             let local_netid = ads::build_local_netid(&local_ip);
 
             let pb = crate::display::spinner_start(&format!("Discovering {target}…"));
-            let devs = scan::discover_ip(&target, 2, true).unwrap_or_default();
+            let devs = scan::discover_ip_with_port(&target, 2, true, port).unwrap_or_default();
             pb.finish_and_clear();
 
             let dev = match devs.into_iter().next() {
@@ -948,13 +1074,13 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
 
             if let Some(s) = state {
                 crate::display::print_info(&format!("Setting TwinCAT state to {s}…"));
-                match scan::set_twincat_state(&dev, &local_netid, &s, 0) {
+                match scan::set_twincat_state(&dev, &local_netid, &s, port) {
                     Ok(_) => crate::display::print_success("State command sent."),
                     Err(e) => crate::display::print_error(&format!("{e}")),
                 }
             } else {
                 let pb2 = crate::display::spinner_start("Reading full device info…");
-                let result = scan::get_device_info_full(&dev, &local_netid, 0);
+                let result = scan::get_device_info_full(&dev, &local_netid, port);
                 pb2.finish_and_clear();
                 match result {
                     Some(info) => {
@@ -979,7 +1105,11 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
 
 fn run_exploit(cmd: ExploitCmd) -> Result<()> {
     match cmd {
-        ExploitCmd::EwonCreds { target, max_users, port } => {
+        ExploitCmd::EwonCreds {
+            target,
+            max_users,
+            port,
+        } => {
             use crate::vendors::ewon::exploit;
             crate::display::print_info(&format!("Extracting credentials from {target}…"));
             match exploit::exploit(&target, port, "adm", max_users) {
@@ -987,7 +1117,10 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
                     crate::display::print_warn("No credentials extracted.");
                 }
                 Ok(users) => {
-                    crate::display::print_success(&format!("Extracted {} credential(s).", users.len()));
+                    crate::display::print_success(&format!(
+                        "Extracted {} credential(s).",
+                        users.len()
+                    ));
                 }
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
@@ -1020,7 +1153,12 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             ));
             match action.as_str() {
                 "info" => {
-                    session_hijack::get_device_info(&target, 0, &session.cookie_value, "Administrator");
+                    session_hijack::get_device_info(
+                        &target,
+                        0,
+                        &session.cookie_value,
+                        "Administrator",
+                    );
                 }
                 a => {
                     let ok = session_hijack::control_plc(
@@ -1039,17 +1177,20 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::PhoenixPasswords { target } => {
+        ExploitCmd::PhoenixPasswords { target, port } => {
             use crate::vendors::phoenix::webvisit;
             let pb = crate::display::spinner_start(&format!("Retrieving passwords from {target}…"));
-            let result = webvisit::retrieve_passwords(&target, 0);
+            let result = webvisit::retrieve_passwords(&target, port);
             pb.finish_and_clear();
             match result {
                 Ok(entries) if entries.is_empty() => {
                     crate::display::print_warn("No passwords retrieved.");
                 }
                 Ok(entries) => {
-                    crate::display::print_success(&format!("Found {} password entry/entries.", entries.len()));
+                    crate::display::print_success(&format!(
+                        "Found {} password entry/entries.",
+                        entries.len()
+                    ));
                     for e in &entries {
                         if let Some(p) = &e.password {
                             println!("  User Level {}: {p}", e.user_level);
@@ -1062,48 +1203,64 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::PhoenixTags { target, read, write } => {
+        ExploitCmd::PhoenixTags {
+            target,
+            port,
+            read,
+            write,
+        } => {
             use crate::vendors::phoenix::webvisit;
-            let (_, tags) = webvisit::get_tags(&target, 0)?;
+            let (_, tags) = webvisit::get_tags(&target, port)?;
             crate::display::print_success(&format!("Found {} tag(s).", tags.len()));
             if read {
-                let values = webvisit::read_tag_values(&target, 0, &tags)?;
+                let values = webvisit::read_tag_values(&target, port, &tags)?;
                 for (name, val) in &values {
                     println!("  {name}: {val}");
                 }
             }
             if let Some(pair) = write {
                 let (tag_name, value) = pair.split_once('=').unwrap_or((&pair, "0"));
-                webvisit::write_tag_value(&target, 0, tag_name, value)?;
+                webvisit::write_tag_value(&target, port, tag_name, value)?;
                 crate::display::print_success(&format!("Wrote {tag_name} = {value}"));
             }
         }
 
-        ExploitCmd::BeckhoffReboot { target } => {
+        ExploitCmd::BeckhoffReboot { target, port } => {
             use crate::vendors::beckhoff::webcontrol;
             crate::display::print_info(&format!("Sending reboot to {target}…"));
-            match webcontrol::reboot(&target, 0) {
+            match webcontrol::reboot(&target, port) {
                 Ok(true) => crate::display::print_success("Reboot command sent."),
                 Ok(false) => crate::display::print_warn("Reboot sent (no confirmation)."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::BeckhoffUser { target, username, password } => {
+        ExploitCmd::BeckhoffUser {
+            target,
+            port,
+            username,
+            password,
+        } => {
             use crate::vendors::beckhoff::webcontrol;
             crate::display::print_info(&format!("Adding user '{username}' to {target}…"));
-            match webcontrol::add_user(&target, 0, &username, &password) {
+            match webcontrol::add_user(&target, port, &username, &password) {
                 Ok(true) => crate::display::print_success("User creation command sent."),
                 Ok(false) => crate::display::print_warn("Command sent (no confirmation)."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::BeckhoffWriteSymbol { target, input } => {
+        ExploitCmd::BeckhoffWriteSymbol {
+            target,
+            port,
+            input,
+        } => {
             use crate::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(&target));
             let (sym_name, hex_val) = input.split_once('=').unwrap_or((&input, "00"));
-            let value_bytes: Vec<u8> = hex_val.as_bytes().chunks(2)
+            let value_bytes: Vec<u8> = hex_val
+                .as_bytes()
+                .chunks(2)
                 .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
                 .collect();
             if value_bytes.is_empty() {
@@ -1111,7 +1268,7 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
                 return Ok(());
             }
             let pb = crate::display::spinner_start(&format!("Discovering {target}…"));
-            let devs = scan::discover_ip(&target, 3, true).unwrap_or_default();
+            let devs = scan::discover_ip_with_port(&target, 3, true, port).unwrap_or_default();
             pb.finish_and_clear();
             let dev = match devs.into_iter().next() {
                 Some(d) => d,
@@ -1120,20 +1277,30 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
                     return Ok(());
                 }
             };
-            match scan::write_symbol_value(&dev, &local_netid, sym_name, value_bytes, 0) {
+            match scan::write_symbol_value(&dev, &local_netid, sym_name, value_bytes, port) {
                 Ok(true) => crate::display::print_success(&format!("Symbol '{sym_name}' written.")),
                 Ok(false) => crate::display::print_warn("Write sent — ADS error code returned."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::ModbusReadCoils { target, start, count, port } => {
+        ExploitCmd::ModbusReadCoils {
+            target,
+            start,
+            count,
+            port,
+        } => {
             use crate::vendors::schneider::modbus;
-            crate::display::print_info(&format!("Reading {count} coils from {target} (start={start})…"));
+            crate::display::print_info(&format!(
+                "Reading {count} coils from {target} (start={start})…"
+            ));
             match modbus::read_coils(&target, port, start, count) {
                 Ok(regs) => {
                     for r in &regs {
-                        crate::display::print_success(&format!("  {:>6}  {}", r.display_addr, r.value_str));
+                        crate::display::print_success(&format!(
+                            "  {:>6}  {}",
+                            r.display_addr, r.value_str
+                        ));
                     }
                     println!("[+] {} coil(s) read", regs.len());
                 }
@@ -1141,13 +1308,23 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::ModbusReadRegisters { target, start, count, port } => {
+        ExploitCmd::ModbusReadRegisters {
+            target,
+            start,
+            count,
+            port,
+        } => {
             use crate::vendors::schneider::modbus;
-            crate::display::print_info(&format!("Reading {count} holding registers from {target} (start={start})…"));
+            crate::display::print_info(&format!(
+                "Reading {count} holding registers from {target} (start={start})…"
+            ));
             match modbus::read_holding_registers(&target, port, start, count) {
                 Ok(regs) => {
                     for r in &regs {
-                        crate::display::print_success(&format!("  {:>6}  {}", r.display_addr, r.value_str));
+                        crate::display::print_success(&format!(
+                            "  {:>6}  {}",
+                            r.display_addr, r.value_str
+                        ));
                     }
                     println!("[+] {} register(s) read", regs.len());
                 }
@@ -1155,13 +1332,23 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::ModbusReadInputRegisters { target, start, count, port } => {
+        ExploitCmd::ModbusReadInputRegisters {
+            target,
+            start,
+            count,
+            port,
+        } => {
             use crate::vendors::schneider::modbus;
-            crate::display::print_info(&format!("Reading {count} input registers from {target} (start={start})…"));
+            crate::display::print_info(&format!(
+                "Reading {count} input registers from {target} (start={start})…"
+            ));
             match modbus::read_input_registers(&target, port, start, count) {
                 Ok(regs) => {
                     for r in &regs {
-                        crate::display::print_success(&format!("  {:>6}  {}", r.display_addr, r.value_str));
+                        crate::display::print_success(&format!(
+                            "  {:>6}  {}",
+                            r.display_addr, r.value_str
+                        ));
                     }
                     println!("[+] {} register(s) read", regs.len());
                 }
@@ -1169,11 +1356,17 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::ModbusWriteCoil { target, address, state, port } => {
+        ExploitCmd::ModbusWriteCoil {
+            target,
+            address,
+            state,
+            port,
+        } => {
             use crate::vendors::schneider::modbus;
             let on = !state.eq_ignore_ascii_case("off");
             crate::display::print_info(&format!(
-                "Writing coil {address} = {} on {target}…", if on { "ON" } else { "OFF" }
+                "Writing coil {address} = {} on {target}…",
+                if on { "ON" } else { "OFF" }
             ));
             match modbus::write_single_coil(&target, port, address, on) {
                 Ok(()) => crate::display::print_success("Coil written."),
@@ -1181,19 +1374,33 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::ModbusWriteRegister { target, address, value, port } => {
+        ExploitCmd::ModbusWriteRegister {
+            target,
+            address,
+            value,
+            port,
+        } => {
             use crate::vendors::schneider::modbus;
-            crate::display::print_info(&format!("Writing register {address} = {value} on {target}…"));
+            crate::display::print_info(&format!(
+                "Writing register {address} = {value} on {target}…"
+            ));
             match modbus::write_single_register(&target, port, address, value) {
                 Ok(()) => crate::display::print_success("Register written."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::ModbusWriteRegisters { target, start, values, port } => {
+        ExploitCmd::ModbusWriteRegisters {
+            target,
+            start,
+            values,
+            port,
+        } => {
             use crate::vendors::schneider::modbus;
-            let parsed: Vec<u16> = values.split(',')
-                .filter_map(|s| s.trim().parse::<u16>().ok()).collect();
+            let parsed: Vec<u16> = values
+                .split(',')
+                .filter_map(|s| s.trim().parse::<u16>().ok())
+                .collect();
             if parsed.is_empty() {
                 crate::display::print_error("No valid register values.");
                 return Ok(());
@@ -1244,12 +1451,15 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::Fc90Force { target, output, state, port } => {
+        ExploitCmd::Fc90Force {
+            target,
+            output,
+            state,
+            port,
+        } => {
             use crate::vendors::schneider::modicon_fc90::{self, ForceState};
-            let output_byte = u8::from_str_radix(
-                output.trim().trim_start_matches("0x"),
-                16,
-            ).unwrap_or(0x11);
+            let output_byte =
+                u8::from_str_radix(output.trim().trim_start_matches("0x"), 16).unwrap_or(0x11);
             let force_state = match state.to_lowercase().as_str() {
                 "off" => ForceState::Off,
                 "unforce" => ForceState::Unforce,
@@ -1265,34 +1475,96 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             }
         }
 
-        ExploitCmd::SlmpWriteD { target, start, values } => {
+        ExploitCmd::SlmpReadD {
+            target,
+            start,
+            count,
+            port,
+        } => {
             use crate::vendors::mitsubishi::slmp;
-            let parsed: Vec<u16> = values.split(',')
-                .filter_map(|s| s.trim().parse::<u16>().ok()).collect();
+            crate::display::print_info(&format!(
+                "Reading {count} D register(s) from {target} starting at D{start}..."
+            ));
+            match slmp::read_word_devices(&target, port, "D", start, count) {
+                Ok(values) => {
+                    for value in &values {
+                        println!("  {:>8}  {}", value.display, value.value_str);
+                    }
+                    crate::display::print_success(&format!("{} D register(s) read.", values.len()));
+                }
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+
+        ExploitCmd::SlmpReadM {
+            target,
+            start,
+            count,
+            port,
+        } => {
+            use crate::vendors::mitsubishi::slmp;
+            crate::display::print_info(&format!(
+                "Reading {count} M bit(s) from {target} starting at M{start}..."
+            ));
+            match slmp::read_bit_devices(&target, port, "M", start, count) {
+                Ok(values) => {
+                    for value in &values {
+                        println!("  {:>8}  {}", value.display, value.value_str);
+                    }
+                    crate::display::print_success(&format!("{} M bit(s) read.", values.len()));
+                }
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+
+        ExploitCmd::SlmpWriteD {
+            target,
+            start,
+            values,
+            port,
+        } => {
+            use crate::vendors::mitsubishi::slmp;
+            let parsed: Vec<u16> = values
+                .split(',')
+                .filter_map(|s| s.trim().parse::<u16>().ok())
+                .collect();
             if parsed.is_empty() {
                 crate::display::print_error("No valid D register values.");
                 return Ok(());
             }
-            match slmp::write_word_devices(&target, 0, "D", start, &parsed) {
+            match slmp::write_word_devices(&target, port, "D", start, &parsed) {
                 Ok(()) => crate::display::print_success(&format!(
-                    "{} D register(s) written starting at D{start}.", parsed.len()
+                    "{} D register(s) written starting at D{start}.",
+                    parsed.len()
                 )),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        ExploitCmd::SlmpWriteM { target, start, bits } => {
+        ExploitCmd::SlmpWriteM {
+            target,
+            start,
+            bits,
+            port,
+        } => {
             use crate::vendors::mitsubishi::slmp;
-            let parsed: Vec<bool> = bits.trim().chars()
-                .filter_map(|c| match c { '0' => Some(false), '1' => Some(true), _ => None })
+            let parsed: Vec<bool> = bits
+                .trim()
+                .chars()
+                .filter_map(|c| match c {
+                    '0' => Some(false),
+                    '1' => Some(true),
+                    _ => None,
+                })
                 .collect();
             if parsed.is_empty() {
                 crate::display::print_error("No valid bit values (use 0/1 characters).");
                 return Ok(());
             }
-            match slmp::write_bit_devices(&target, 0, "M", start, &parsed) {
+            match slmp::write_bit_devices(&target, port, "M", start, &parsed) {
                 Ok(()) => crate::display::print_success(&format!(
-                    "{} M bit(s) written starting at M{start}.", parsed.len()
+                    "{} M bit(s) written starting at M{start}.",
+                    parsed.len()
                 )),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
@@ -1372,7 +1644,11 @@ fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
             }
         }
 
-        RockwellCmd::Write { target, port, assignments } => {
+        RockwellCmd::Write {
+            target,
+            port,
+            assignments,
+        } => {
             use crate::vendors::rockwell::driver;
             for pair in &assignments {
                 let (name, hex_val) = match pair.split_once('=') {
@@ -1413,7 +1689,12 @@ fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
 
 fn run_siemens(cmd: SiemensCmd) -> Result<()> {
     match cmd {
-        SiemensCmd::Cpu { target, port, flip, password } => {
+        SiemensCmd::Cpu {
+            target,
+            port,
+            flip,
+            password,
+        } => {
             use crate::vendors::siemens::s7comm;
             let state = s7comm::get_cpu_state(&target, port, 5, password.as_deref());
             crate::display::print_info(&format!("CPU state: {state}"));
@@ -1426,7 +1707,11 @@ fn run_siemens(cmd: SiemensCmd) -> Result<()> {
                 }
             }
         }
-        SiemensCmd::Io { target, port, password } => {
+        SiemensCmd::Io {
+            target,
+            port,
+            password,
+        } => {
             use crate::vendors::siemens::s7comm;
             let pb = crate::display::spinner_start(&format!("Reading I/O from {target}…"));
             let data = s7comm::read_all_data(&target, port, 5, password.as_deref());
@@ -1448,9 +1733,18 @@ fn run_siemens(cmd: SiemensCmd) -> Result<()> {
             }
         }
 
-        SiemensCmd::WriteDb { target, port, db, offset, data, password } => {
+        SiemensCmd::WriteDb {
+            target,
+            port,
+            db,
+            offset,
+            data,
+            password,
+        } => {
             use crate::vendors::siemens::s7comm;
-            let bytes: Vec<u8> = data.as_bytes().chunks(2)
+            let bytes: Vec<u8> = data
+                .as_bytes()
+                .chunks(2)
                 .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
                 .collect();
             if bytes.is_empty() {
@@ -1458,9 +1752,18 @@ fn run_siemens(cmd: SiemensCmd) -> Result<()> {
                 return Ok(());
             }
             crate::display::print_info(&format!(
-                "Writing {} byte(s) to DB{db}:{offset} on {target}…", bytes.len()
+                "Writing {} byte(s) to DB{db}:{offset} on {target}…",
+                bytes.len()
             ));
-            match s7comm::write_data_block(&target, db, offset, &bytes, port, 5, password.as_deref()) {
+            match s7comm::write_data_block(
+                &target,
+                db,
+                offset,
+                &bytes,
+                port,
+                5,
+                password.as_deref(),
+            ) {
                 Ok(true) => crate::display::print_success("DB write acknowledged."),
                 Ok(false) => crate::display::print_warn("Write sent — PLC did not acknowledge."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
@@ -1492,10 +1795,16 @@ fn run_omron(cmd: OmronCmd) -> Result<()> {
             }
         }
 
-        OmronCmd::ReadDm { target, port, start, count } => {
+        OmronCmd::ReadDm {
+            target,
+            port,
+            start,
+            count,
+        } => {
             use crate::vendors::omron::fins;
             let pb = crate::display::spinner_start(&format!(
-                "Reading DM{start}..DM{} from {target}…", start + count - 1
+                "Reading DM{start}..DM{} from {target}…",
+                start + count - 1
             ));
             let result = fins::read_dm_words(&target, port, 0, start, count);
             pb.finish_and_clear();
@@ -1511,17 +1820,25 @@ fn run_omron(cmd: OmronCmd) -> Result<()> {
             }
         }
 
-        OmronCmd::WriteDm { target, port, start, values } => {
+        OmronCmd::WriteDm {
+            target,
+            port,
+            start,
+            values,
+        } => {
             use crate::vendors::omron::fins;
-            let parsed: Vec<u16> = values.split(',')
-                .filter_map(|s| s.trim().parse::<u16>().ok()).collect();
+            let parsed: Vec<u16> = values
+                .split(',')
+                .filter_map(|s| s.trim().parse::<u16>().ok())
+                .collect();
             if parsed.is_empty() {
                 crate::display::print_error("No valid values.");
                 return Ok(());
             }
             match fins::write_dm_words(&target, port, 0, start, &parsed) {
                 Ok(()) => crate::display::print_success(&format!(
-                    "{} DM word(s) written at DM{start}.", parsed.len()
+                    "{} DM word(s) written at DM{start}.",
+                    parsed.len()
                 )),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
@@ -1575,7 +1892,10 @@ fn run_iec104(cmd: Iec104Cmd) -> Result<()> {
                     match client::general_interrogation(&mut sess) {
                         Ok(objs) => {
                             for obj in &objs {
-                                println!("  IOA {:>6}: type=0x{:02x} data={:?}", obj.ioa, obj.type_id, obj.value);
+                                println!(
+                                    "  IOA {:>6}: type=0x{:02x} data={:?}",
+                                    obj.ioa, obj.type_id, obj.value
+                                );
                             }
                             crate::display::print_success(&format!("{} object(s).", objs.len()));
                         }
@@ -1590,7 +1910,9 @@ fn run_iec104(cmd: Iec104Cmd) -> Result<()> {
             use crate::vendors::iec104::client;
             let mut sess = client::connect(&target, port)?;
             match client::single_command(&mut sess, ioa, true) {
-                Ok(true) => crate::display::print_success(&format!("IOA {ioa}: Single Command ON confirmed.")),
+                Ok(true) => crate::display::print_success(&format!(
+                    "IOA {ioa}: Single Command ON confirmed."
+                )),
                 Ok(false) => crate::display::print_warn("Command sent — negative confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
@@ -1600,16 +1922,29 @@ fn run_iec104(cmd: Iec104Cmd) -> Result<()> {
             use crate::vendors::iec104::client;
             let mut sess = client::connect(&target, port)?;
             match client::single_command(&mut sess, ioa, false) {
-                Ok(true) => crate::display::print_success(&format!("IOA {ioa}: Single Command OFF confirmed.")),
+                Ok(true) => crate::display::print_success(&format!(
+                    "IOA {ioa}: Single Command OFF confirmed."
+                )),
                 Ok(false) => crate::display::print_warn("Command sent — negative confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
 
-        Iec104Cmd::Dc { target, port, ioa, state } => {
+        Iec104Cmd::Dc {
+            target,
+            port,
+            ioa,
+            state,
+        } => {
             use crate::vendors::iec104::client;
-            let state_name = match state { 1 => "OFF", 2 => "ON", _ => "INDETERMINATE" };
-            crate::display::print_info(&format!("IEC 104 Double Command IOA {ioa} → {state_name} on {target}…"));
+            let state_name = match state {
+                1 => "OFF",
+                2 => "ON",
+                _ => "INDETERMINATE",
+            };
+            crate::display::print_info(&format!(
+                "IEC 104 Double Command IOA {ioa} → {state_name} on {target}…"
+            ));
             let mut sess = client::connect(&target, port)?;
             match client::double_command(&mut sess, ioa, state) {
                 Ok(true) => crate::display::print_success("Double Command confirmed."),
@@ -1627,10 +1962,10 @@ fn run_iec104(cmd: Iec104Cmd) -> Result<()> {
 
 fn run_phoenix(cmd: PhoenixCmd) -> Result<()> {
     match cmd {
-        PhoenixCmd::Info { target } => {
+        PhoenixCmd::Info { target, port } => {
             use crate::vendors::phoenix::control;
             let pb = crate::display::spinner_start(&format!("Querying {target}…"));
-            let result = control::get_device_info(&target, 0, false);
+            let result = control::get_device_info(&target, port, false);
             pb.finish_and_clear();
             match result {
                 Ok(info) => {
@@ -1646,9 +1981,9 @@ fn run_phoenix(cmd: PhoenixCmd) -> Result<()> {
             }
         }
 
-        PhoenixCmd::Tags { target } => {
+        PhoenixCmd::Tags { target, port } => {
             use crate::vendors::phoenix::webvisit;
-            let (project, tags) = webvisit::get_tags(&target, 0)?;
+            let (project, tags) = webvisit::get_tags(&target, port)?;
             println!("  Project: {project}");
             for (i, tag) in tags.iter().enumerate() {
                 println!("  [{i:>4}] {tag}");
@@ -1656,25 +1991,30 @@ fn run_phoenix(cmd: PhoenixCmd) -> Result<()> {
             crate::display::print_success(&format!("{} tag(s).", tags.len()));
         }
 
-        PhoenixCmd::ReadTags { target } => {
+        PhoenixCmd::ReadTags { target, port } => {
             use crate::vendors::phoenix::webvisit;
-            let (_, tags) = webvisit::get_tags(&target, 0)?;
-            let values = webvisit::read_tag_values(&target, 0, &tags)?;
+            let (_, tags) = webvisit::get_tags(&target, port)?;
+            let values = webvisit::read_tag_values(&target, port, &tags)?;
             for (name, val) in &values {
                 println!("  {name}: {val}");
             }
         }
 
-        PhoenixCmd::WriteTag { target, name, value } => {
+        PhoenixCmd::WriteTag {
+            target,
+            port,
+            name,
+            value,
+        } => {
             use crate::vendors::phoenix::webvisit;
-            webvisit::write_tag_value(&target, 0, &name, &value)?;
+            webvisit::write_tag_value(&target, port, &name, &value)?;
             crate::display::print_success(&format!("Wrote {name} = {value}"));
         }
 
-        PhoenixCmd::Passwords { target } => {
+        PhoenixCmd::Passwords { target, port } => {
             use crate::vendors::phoenix::webvisit;
             let pb = crate::display::spinner_start(&format!("Retrieving passwords from {target}…"));
-            let result = webvisit::retrieve_passwords(&target, 0);
+            let result = webvisit::retrieve_passwords(&target, port);
             pb.finish_and_clear();
             match result {
                 Ok(entries) if entries.is_empty() => {
@@ -1706,12 +2046,171 @@ fn run_db(cmd: DbCmd) -> Result<()> {
     match cmd {
         DbCmd::Add { ip, vendor } => {
             let vendor = vendor.as_deref().unwrap_or("unknown");
-            let id = db.upsert_device(&ip, vendor, &serde_json::Value::Object(Default::default()))?;
+            let id =
+                db.upsert_device(&ip, vendor, &serde_json::Value::Object(Default::default()))?;
             crate::display::print_success(&format!("Added {ip} (vendor={vendor}, id={id})"));
         }
         DbCmd::Remove { id } => {
             db.delete_device(id)?;
             crate::display::print_success(&format!("Removed device id={id}"));
+        }
+    }
+    Ok(())
+}
+
+// ===================================================================
+// SNMP command definitions and handler
+// ===================================================================
+
+#[derive(Subcommand)]
+pub enum SnmpCmd {
+    /// GET a single OID and print its value
+    Get {
+        #[arg(short, long)]
+        target: String,
+        #[arg(short, long)]
+        oid: String,
+        #[arg(short, long, default_value = "public")]
+        community: String,
+        #[arg(short, long, default_value = "161")]
+        port: u16,
+    },
+    /// Walk an OID subtree (GETNEXT loop) and print all results
+    Walk {
+        #[arg(short, long)]
+        target: String,
+        #[arg(short, long)]
+        oid: String,
+        #[arg(short, long, default_value = "public")]
+        community: String,
+        #[arg(short, long, default_value = "161")]
+        port: u16,
+    },
+    /// Enumerate system info, interfaces, and network topology
+    Enum {
+        #[arg(short, long)]
+        target: String,
+        #[arg(short, long, default_value = "public")]
+        community: String,
+        #[arg(short, long, default_value = "161")]
+        port: u16,
+    },
+    /// Probe common community strings and show what responds
+    Scan {
+        #[arg(short, long)]
+        target: String,
+        #[arg(short, long, default_value = "161")]
+        port: u16,
+    },
+    /// SET an OID value (requires write community, --confirm mandatory)
+    Set {
+        #[arg(short, long)]
+        target: String,
+        #[arg(short, long)]
+        oid: String,
+        #[arg(short, long)]
+        value: String,
+        /// Value type: int | str
+        #[arg(long, default_value = "str")]
+        r#type: String,
+        #[arg(long)]
+        community: String,
+        #[arg(short, long, default_value = "161")]
+        port: u16,
+        /// Confirm you intend to write to this device
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+fn run_snmp(cmd: SnmpCmd) -> Result<()> {
+    use crate::vendors::snmp::{client, enumerate, oids};
+    match cmd {
+        SnmpCmd::Get { target, oid, community, port } => {
+            let val = client::get(&target, port, &community, &oid)?;
+            println!("  {oid} = {}", val.display());
+        }
+
+        SnmpCmd::Walk { target, oid, community, port } => {
+            let pb = crate::display::spinner_start(&format!("Walking {oid} on {target}…"));
+            let entries = client::walk(&target, port, &community, &oid)?;
+            pb.finish_and_clear();
+            if entries.is_empty() {
+                crate::display::print_warn("No results (end of MIB or wrong community).");
+            } else {
+                for (o, v) in &entries {
+                    println!("  {o} = {}", v.display());
+                }
+                crate::display::print_success(&format!("{} object(s).", entries.len()));
+            }
+        }
+
+        SnmpCmd::Enum { target, community, port } => {
+            let pb = crate::display::spinner_start(&format!("Enumerating {target}…"));
+            let info = enumerate::get_system_info(&target, port, &community)?;
+            let ifaces = enumerate::get_interfaces(&target, port, &community).unwrap_or_default();
+            let topo = enumerate::get_topology(&target, port, &community).unwrap_or_default();
+            pb.finish_and_clear();
+
+            println!("  sysDescr:   {}", info.descr);
+            println!("  sysOID:     {}", info.object_id);
+            println!("  sysName:    {}", info.name);
+            println!("  sysContact: {}", info.contact);
+            println!("  sysLocatn:  {}", info.location);
+            println!("  Uptime:     {}s", info.uptime_secs);
+            if let Some(v) = info.ics_vendor { println!("  ICS Vendor: {v}"); }
+            if info.is_apc_ups { println!("  APC UPS:    yes"); }
+
+            if !ifaces.is_empty() {
+                println!("\n  Interfaces:");
+                for i in &ifaces {
+                    let state = if i.oper_up { "up" } else { "DOWN" };
+                    println!("    [{:>2}] {:<16} {} {:<5}  {}Mbps  err in:{} out:{}",
+                        i.index, i.descr, i.mac, state, i.speed_mbps, i.in_errors, i.out_errors);
+                }
+            }
+            for line in &topo { println!("{line}"); }
+
+            let cves = enumerate::check_cves(&info);
+            if !cves.is_empty() {
+                println!("\n  CVE / advisory matches:");
+                for c in &cves {
+                    println!("    [{}] CVSS:{} {}", c.id, c.cvss, c.summary);
+                }
+            }
+            crate::display::print_success("Enumeration complete.");
+        }
+
+        SnmpCmd::Scan { target, port } => {
+            let pb = crate::display::spinner_start(&format!("Scanning communities on {target}…"));
+            let mut found = Vec::new();
+            for &c in oids::COMMON_COMMUNITIES {
+                if let Ok(val) = client::get(&target, port, c, oids::SYS_DESCR) {
+                    found.push((c, val.display()));
+                }
+            }
+            pb.finish_and_clear();
+            if found.is_empty() {
+                crate::display::print_warn("No community strings responded.");
+            } else {
+                for (c, descr) in &found {
+                    println!("  community={c:<12}  sysDescr={descr}");
+                }
+                crate::display::print_success(&format!("{} community string(s) found.", found.len()));
+            }
+        }
+
+        SnmpCmd::Set { target, oid, value, r#type, community, port, confirm } => {
+            if !confirm {
+                anyhow::bail!("Add --confirm to confirm you intend to write to {target}");
+            }
+            let snmp_val = match r#type.as_str() {
+                "int" => client::SnmpValue::Integer(value.parse::<i64>()?),
+                _ => client::SnmpValue::OctetString(value.into_bytes()),
+            };
+            let result = client::set(&target, port, &community, &oid, snmp_val)?;
+            println!("  {oid} → {}", result.display());
+            crate::display::print_success("SET accepted.");
         }
     }
     Ok(())

@@ -23,6 +23,15 @@ const CMD_RUN: &str = "57010000001111070000ffff030000fe030000220 01c0a1614000000
 
 /// Send a RUN, STOP, or PAUSE command to a Mitsubishi PLC.
 pub fn set_state(interface: &NetworkInterface, action: &str) -> Result<bool> {
+    set_state_to(interface, "255.255.255.255", action)
+}
+
+/// Send a RUN, STOP, or PAUSE command to a specific Mitsubishi PLC IP.
+pub fn set_state_ip(interface: &NetworkInterface, target_ip: &str, action: &str) -> Result<bool> {
+    set_state_to(interface, target_ip, action)
+}
+
+fn set_state_to(interface: &NetworkInterface, target_ip: &str, action: &str) -> Result<bool> {
     let cmd = match action.to_lowercase().as_str() {
         "stop" => CMD_STOP,
         "pause" => CMD_PAUSE,
@@ -31,13 +40,13 @@ pub fn set_state(interface: &NetworkInterface, action: &str) -> Result<bool> {
     };
 
     println!("Initializing connection...");
-    init_connection(interface)?;
+    init_connection(interface, target_ip)?;
 
     println!("Sending {} command...", action.to_uppercase());
     let sock = create_socket(interface)?;
 
     let pkt = hex_decode(cmd);
-    sock.send_to(&pkt, format!("255.255.255.255:{CONTROL_PORT}"))?;
+    sock.send_to(&pkt, format!("{target_ip}:{CONTROL_PORT}"))?;
 
     let mut buf = [0u8; 1024];
     match sock.recv_from(&mut buf) {
@@ -58,11 +67,11 @@ pub fn set_state(interface: &NetworkInterface, action: &str) -> Result<bool> {
     }
 }
 
-fn init_connection(interface: &NetworkInterface) -> Result<()> {
+fn init_connection(interface: &NetworkInterface, target_ip: &str) -> Result<()> {
     let sock = create_socket(interface)?;
     for pkt_hex in INIT_PACKETS {
         let pkt = hex_decode(pkt_hex);
-        let _ = sock.send_to(&pkt, format!("255.255.255.255:{CONTROL_PORT}"));
+        let _ = sock.send_to(&pkt, format!("{target_ip}:{CONTROL_PORT}"));
         let mut buf = [0u8; 1024];
         let _ = sock.recv_from(&mut buf);
     }
