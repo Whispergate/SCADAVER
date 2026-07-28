@@ -406,6 +406,9 @@ pub fn walk(ip: &str, port: u16, community: &str, root_oid: &str) -> Result<Vec<
         if matches!(val, SnmpValue::EndOfMibView | SnmpValue::NoSuchObject | SnmpValue::NoSuchInstance) {
             break;
         }
+        if oid <= cur {
+            break;
+        }
         cur.clone_from(&oid);
         results.push((arcs_to_str(&oid), val));
     }

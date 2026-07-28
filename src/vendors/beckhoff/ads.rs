@@ -37,12 +37,12 @@ pub fn construct_ams_packet(
     };
 
     let ams_data = format!(
-        "{}{}{}{}{}{}{}{:016}{}{ads_data}",
-        route.remote_netid, r_port, route.local_netid, l_port, s_cmd, s_state, data_len, 0u64, invoke
+        "{}{}{}{}{}{}{}{:08x}{}{ads_data}",
+        route.remote_netid, r_port, route.local_netid, l_port, s_cmd, s_state, data_len, 0u32, invoke
     );
 
     let ams_len = reverse_bytes(&format!("{:08x}", ams_data.len() / 2));
-    format!("{:08}{ams_len}{ams_data}", 0u32)
+    format!("0000{ams_len}{ams_data}")
 }
 
 pub enum AdsParams {

@@ -37,7 +37,7 @@ pub fn setup_connection(ip: &str, port: u16, timeout_secs: u64) -> Option<TcpStr
         let Ok(mut stream) = TcpStream::connect_timeout(
             &addr.parse().ok()?,
             Duration::from_secs(timeout_secs),
-        ) else { return None };
+        ) else { continue };
         let _ = stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)));
 
         // COTP Connection Request
@@ -211,7 +211,10 @@ pub fn set_merkers(
     password: Option<&str>,
 ) -> bool {
     let hex_val = bits_to_hex_byte(binary_str);
-    let bit_addr = usize::try_from(u64::from(offset) * 8).unwrap_or(usize::MAX);
+    if offset > 0x1F_FFFF {
+        return false;
+    }
+    let bit_addr = offset * 8;
     let merker_offset = format!("{bit_addr:06x}");
 
     let Some(mut stream) = connect_authenticated(ip, port, timeout_secs, password) else {
@@ -290,6 +293,9 @@ pub fn write_data_block(
         .ok_or_else(|| anyhow::anyhow!("failed to establish S7Comm session to {ip}:{port}"))?;
 
     let n = data.len();
+    if n > 8191 {
+        anyhow::bail!("write_data_block: data too large ({n} bytes, max 8191)");
+    }
     let bit_addr = u32::from(offset) * 8;
     // data section: error_code(1) + transport_size(1) + bit_count(2) + data(n)
     let data_section_len = 4 + n;

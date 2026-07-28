@@ -661,6 +661,10 @@ impl App {
                 &["iec104_port", "port"],
                 crate::vendors::iec104::client::IEC104_PORT,
             ),
+            "snmp" => self.field_port(
+                &["snmp_port", "port"],
+                crate::vendors::snmp::client::SNMP_PORT,
+            ),
             _ => self.device_port(0),
         }
     }

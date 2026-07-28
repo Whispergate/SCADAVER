@@ -60,7 +60,7 @@ fn parse_discovery_frame(data: &[u8], src_ip: &str) -> Option<BeckhoffDevice> {
     );
     let name_len = usize::from_str_radix(&name_len_str, 16).ok()?;
 
-    if data.len() < 27 + name_len {
+    if name_len == 0 || data.len() < 27 + name_len {
         return None;
     }
     let name = String::from_utf8_lossy(&data[28..28 + name_len - 1]).to_string();
@@ -711,6 +711,9 @@ fn send_recv_ams(stream: &mut TcpStream, data: &[u8]) -> Option<Vec<u8>> {
     let mut header = [0u8; 6];
     stream.read_exact(&mut header).ok()?;
     let len = u32::from_le_bytes([header[2], header[3], header[4], header[5]]) as usize;
+    if len > 65536 {
+        return None;
+    }
     let mut rest = vec![0u8; len];
     stream.read_exact(&mut rest).ok()?;
     let mut full = Vec::with_capacity(6 + len);

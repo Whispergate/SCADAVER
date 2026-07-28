@@ -99,7 +99,11 @@ impl EipSession {
         if d[2] != 0 {
             anyhow::bail!("CIP read error 0x{:02x}", d[2]);
         }
-        Ok(d[4..].to_vec()) // [type_lo, type_hi, val_bytes...]
+        let skip = 4 + usize::from(d[3]) * 2;
+        if d.len() < skip {
+            anyhow::bail!("CIP read response truncated (ext_status_size={})", d[3]);
+        }
+        Ok(d[skip..].to_vec()) // [type_lo, type_hi, val_bytes...]
     }
 
     fn send_rr_data(&mut self, cip_data: &[u8]) -> Result<Vec<u8>> {
@@ -135,6 +139,10 @@ impl EipSession {
         // Read the fixed 24-byte EIP header, then the variable-length payload.
         let mut hdr = [0u8; 24];
         self.stream.read_exact(&mut hdr).context("EIP: short response header")?;
+        let eip_status = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]);
+        if eip_status != 0 {
+            anyhow::bail!("EIP encapsulation error 0x{eip_status:08x}");
+        }
         let body_len = u16::from_le_bytes([hdr[2], hdr[3]]) as usize;
         let mut body = vec![0u8; body_len];
         self.stream.read_exact(&mut body).context("EIP: short response body")?;
@@ -279,6 +287,7 @@ fn get_device_info_cip(ip: &str, port: u16) -> Result<LogixDevice> {
 }
 
 /// Enumerate tags from Logix controller's symbol list. Pass `port = 0` for the default (44818).
+#[allow(clippy::too_many_lines)]
 pub fn enumerate_tags(ip: &str, port: u16) -> Result<Vec<LogixTag>> {
     const CIP_OFF: usize = 40;
     let mut session = EipSession::connect(ip, port).context("EIP session failed")?;
@@ -344,7 +353,11 @@ pub fn enumerate_tags(ip: &str, port: u16) -> Result<Vec<LogixTag>> {
 
         // ext_status_size words precede the actual data
         let ext_size = d[3] as usize;
-        let attr_data = &d[4 + ext_size * 2..];
+        let skip = 4 + ext_size * 2;
+        if d.len() < skip {
+            break;
+        }
+        let attr_data = &d[skip..];
         let mut pos = 0;
 
         while pos + 4 <= attr_data.len() {
@@ -380,7 +393,10 @@ pub fn enumerate_tags(ip: &str, port: u16) -> Result<Vec<LogixTag>> {
             let dimensions = ((tag_type >> 12) & 0x07) as u8;
             pos += 2;
 
-            last_instance = instance_id + 1;
+            last_instance = match instance_id.checked_add(1) {
+                Some(n) => n,
+                None => break,
+            };
 
             if !name.starts_with("__") {
                 tags.push(LogixTag {
