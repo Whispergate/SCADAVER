@@ -39,10 +39,10 @@ fn build_discovery_packet(src_ip: &str, subnet: &str) -> Vec<u8> {
 
     // Subnet field in the Schneider discovery packet is the broadcast address
     let mut b_parts = [0u8; 4];
-    for i in 0..4 {
+    for (i, b) in b_parts.iter_mut().enumerate() {
         let ip_byte = src_parts.get(i).copied().unwrap_or(0);
         let mask_byte = sub_parts.get(i).copied().unwrap_or(0);
-        b_parts[i] = ip_byte | !mask_byte;
+        *b = ip_byte | !mask_byte;
     }
 
     let mut pkt = hex_decode("c574400300003d7d");
@@ -200,33 +200,30 @@ fn scan_ip_udp(ip: &str, timeout: u64, silent: bool) -> Result<Vec<SchneiderDevi
     sock.send_to(&pkt, format!("{ip}:{DEST_PORT}"))?;
 
     let mut buf = [0u8; 1024];
-    match sock.recv_from(&mut buf) {
-        Ok((n, addr)) => {
-            let dev = parse_response(&buf[..n], &addr.ip().to_string());
-            if dev.name.is_some() || dev.firmware.is_some() {
-                if !silent {
-                    match (&dev.name, &dev.firmware) {
-                        (Some(name), Some(fw)) => println!("  {}: {name} (firmware {fw})", dev.ip),
-                        _ => println!("  {}: (short response)", dev.ip),
-                    }
-                }
-                return Ok(vec![dev]);
-            }
-
+    if let Ok((n, addr)) = sock.recv_from(&mut buf) {
+        let dev = parse_response(&buf[..n], &addr.ip().to_string());
+        if dev.name.is_some() || dev.firmware.is_some() {
             if !silent {
                 match (&dev.name, &dev.firmware) {
                     (Some(name), Some(fw)) => println!("  {}: {name} (firmware {fw})", dev.ip),
                     _ => println!("  {}: (short response)", dev.ip),
                 }
             }
-            Ok(vec![dev])
+            return Ok(vec![dev]);
         }
-        Err(_) => {
-            if !silent {
-                println!("No Schneider UDP discovery response from {ip}");
+
+        if !silent {
+            match (&dev.name, &dev.firmware) {
+                (Some(name), Some(fw)) => println!("  {}: {name} (firmware {fw})", dev.ip),
+                _ => println!("  {}: (short response)", dev.ip),
             }
-            Ok(vec![])
         }
+        Ok(vec![dev])
+    } else {
+        if !silent {
+            println!("No Schneider UDP discovery response from {ip}");
+        }
+        Ok(vec![])
     }
 }
 
@@ -321,7 +318,7 @@ fn modbus_device_id(ip: &str, timeout: u64, port: u16) -> Option<SchneiderDevice
         .with_port(port)
         .with_timeout_secs(timeout);
     let id = client.read_device_id().ok()?;
-    Some(device_from_modbus_id(ip, port, id))
+    Some(device_from_modbus_id(ip, port, &id))
 }
 
 fn modbus_tcp_probe(ip: &str, timeout: u64, port: u16) -> bool {
@@ -332,7 +329,7 @@ fn modbus_tcp_probe(ip: &str, timeout: u64, port: u16) -> bool {
         .is_ok()
 }
 
-fn device_from_modbus_id(ip: &str, port: u16, id: ModbusDeviceId) -> SchneiderDevice {
+fn device_from_modbus_id(ip: &str, port: u16, id: &ModbusDeviceId) -> SchneiderDevice {
     let manufacturer = id.manufacturer().unwrap_or_default();
     let product = id.product_name().unwrap_or_default();
     let version = id.version().unwrap_or_default();
@@ -385,7 +382,11 @@ fn hex_decode(s: &str) -> Vec<u8> {
 }
 
 fn hex_encode(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    use std::fmt::Write;
+    b.iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
 }
 
 #[cfg(test)]
@@ -408,7 +409,7 @@ mod tests {
         let dev = device_from_modbus_id(
             "192.0.2.10",
             1502,
-            device_id(&[
+            &device_id(&[
                 (0x00, "Schneider Electric"),
                 (0x01, "TM241CE24T_U"),
                 (0x02, "V05.01.09.14"),
@@ -430,7 +431,7 @@ mod tests {
         let dev = device_from_modbus_id(
             "192.0.2.20",
             502,
-            device_id(&[(0x00, "Generic Vendor"), (0x01, "Generic Modbus")]),
+            &device_id(&[(0x00, "Generic Vendor"), (0x01, "Generic Modbus")]),
         );
 
         assert!(!dev.identity_match);
@@ -445,7 +446,7 @@ mod tests {
         let dev = device_from_modbus_id(
             "192.0.2.30",
             502,
-            device_id(&[(0x00, "Vendor"), (0x01, "Modicon M580")]),
+            &device_id(&[(0x00, "Vendor"), (0x01, "Modicon M580")]),
         );
 
         assert!(dev.identity_match);

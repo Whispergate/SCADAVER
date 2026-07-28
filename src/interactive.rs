@@ -60,14 +60,9 @@ fn pause() {
 
 fn local_ip_for(target: &str) -> String {
     use std::net::UdpSocket;
-    let sock = match UdpSocket::bind("0.0.0.0:0") {
-        Ok(s) => s,
-        Err(_) => return "0.0.0.0".into(),
-    };
+    let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else { return "0.0.0.0".into() };
     let _ = sock.connect(format!("{target}:1"));
-    sock.local_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|_| "0.0.0.0".into())
+    sock.local_addr().map_or_else(|_| "0.0.0.0".into(), |a| a.ip().to_string())
 }
 
 // ===================================================================
@@ -99,6 +94,7 @@ pub fn run() -> Result<()> {
 // ===================================================================
 
 fn connect_to_device() {
+    use crate::core::autodetect::detect_device;
     let ip = ask_ip("Target IP");
     if ip.is_empty() {
         crate::display::print_error("No IP provided.");
@@ -106,7 +102,6 @@ fn connect_to_device() {
         return;
     }
 
-    use crate::core::autodetect::detect_device;
     let pb = crate::display::spinner_start(&format!("Detecting device at {ip}…"));
     let info = detect_device(&ip, 3);
     pb.finish_and_clear();
@@ -159,6 +154,7 @@ fn manual_vendor_select(ip: &str) {
 // Vendor device menu
 // ===================================================================
 
+#[allow(clippy::too_many_lines)]
 fn menu_device(ip: &str, vendor: &str) {
     loop {
         match vendor {
@@ -346,10 +342,7 @@ fn scan_enip() {
             Err(e) => crate::display::print_error(&format!("{e}")),
         }
     } else {
-        let iface = match ask_interface() {
-            Some(i) => i,
-            None => return,
-        };
+        let Some(iface) = ask_interface() else { return };
         let pb = crate::display::spinner_start("Broadcasting EtherNet/IP discovery…");
         let result = scan::scan(&iface, 5, false);
         pb.finish_and_clear();
@@ -376,10 +369,7 @@ fn scan_ewon() {
             Err(e) => crate::display::print_error(&format!("{e}")),
         }
     } else {
-        let iface = match ask_interface() {
-            Some(i) => i,
-            None => return,
-        };
+        let Some(iface) = ask_interface() else { return };
         let pb = crate::display::spinner_start("Broadcasting eWON IPCONF discovery…");
         let result = scan::scan(&iface, 3, false);
         pb.finish_and_clear();
@@ -425,10 +415,7 @@ fn scan_schneider() {
             Err(e) => crate::display::print_error(&format!("{e}")),
         }
     } else {
-        let iface = match ask_interface() {
-            Some(i) => i,
-            None => return,
-        };
+        let Some(iface) = ask_interface() else { return };
         let pb = crate::display::spinner_start("Broadcasting Schneider discovery (UDP 1740)…");
         let result = scan::scan(&iface, 2, false);
         pb.finish_and_clear();
@@ -474,10 +461,7 @@ fn scan_mitsubishi() {
             Err(e) => crate::display::print_error(&format!("{e}")),
         }
     } else {
-        let iface = match ask_interface() {
-            Some(i) => i,
-            None => return,
-        };
+        let Some(iface) = ask_interface() else { return };
         let pb = crate::display::spinner_start("Broadcasting Mitsubishi MELSEC discovery…");
         let result = scan::scan(&iface, 3, false);
         pb.finish_and_clear();
@@ -509,10 +493,7 @@ fn scan_beckhoff() {
             Err(e) => crate::display::print_error(&format!("{e}")),
         }
     } else {
-        let iface = match ask_interface() {
-            Some(i) => i,
-            None => return,
-        };
+        let Some(iface) = ask_interface() else { return };
         let pb = crate::display::spinner_start("Broadcasting Beckhoff ADS discovery (UDP 48899)…");
         let result = scan::discover(&iface, 2, false);
         pb.finish_and_clear();
@@ -529,37 +510,32 @@ fn scan_beckhoff() {
 }
 
 fn scan_siemens() {
+    use crate::vendors::siemens::scan;
     let ip = ask_ip("Target IP");
     if ip.is_empty() {
         return;
     }
-    use crate::vendors::siemens::scan;
     let pb = crate::display::spinner_start(&format!("Scanning {ip}…"));
-    let result = scan::scan_ip(&ip);
+    let dev = scan::scan_ip(&ip);
     pb.finish_and_clear();
-    match result {
-        Ok(dev) => {
-            println!("  IP:       {}", dev.ip);
-            if let Some(hw) = dev.hardware {
-                println!("  Hardware: {hw}");
-            }
-            if let Some(fw) = dev.firmware {
-                println!("  Firmware: {fw}");
-            }
-            if let Some(cs) = dev.cpu_state {
-                println!("  CPU:      {cs}");
-            }
-        }
-        Err(e) => crate::display::print_error(&format!("{e}")),
+    println!("  IP:       {}", dev.ip);
+    if let Some(hw) = dev.hardware {
+        println!("  Hardware: {hw}");
+    }
+    if let Some(fw) = dev.firmware {
+        println!("  Firmware: {fw}");
+    }
+    if let Some(cs) = dev.cpu_state {
+        println!("  CPU:      {cs}");
     }
 }
 
 fn scan_rockwell() {
+    use crate::vendors::rockwell::driver;
     let ip = ask_ip("Target IP");
     if ip.is_empty() {
         return;
     }
-    use crate::vendors::rockwell::driver;
     let pb = crate::display::spinner_start(&format!("Connecting to {ip}…"));
     let result = driver::get_device_info(&ip, 0);
     pb.finish_and_clear();
@@ -575,11 +551,11 @@ fn scan_rockwell() {
 }
 
 fn scan_auto() {
+    use crate::core::autodetect::detect_device;
     let ip = ask_ip("Target IP");
     if ip.is_empty() {
         return;
     }
-    use crate::core::autodetect::detect_device;
     let pb = crate::display::spinner_start(&format!("Detecting device at {ip}…"));
     let info = detect_device(&ip, 3);
     pb.finish_and_clear();
@@ -674,12 +650,9 @@ fn beckhoff_device_info(ip: &str) {
     let pb = crate::display::spinner_start(&format!("Discovering {ip}…"));
     let dev = beckhoff_discover(ip);
     pb.finish_and_clear();
-    let dev = match dev {
-        Some(d) => d,
-        None => {
-            crate::display::print_error("Device not found.");
-            return;
-        }
+    let Some(dev) = dev else {
+        crate::display::print_error("Device not found.");
+        return;
     };
     println!("  Name:     {}", dev.name);
     println!("  NetID:    {}", dev.netid_str);
@@ -708,12 +681,9 @@ fn beckhoff_get_state(ip: &str) {
     let pb = crate::display::spinner_start(&format!("Discovering {ip}…"));
     let dev = beckhoff_discover(ip);
     pb.finish_and_clear();
-    let dev = match dev {
-        Some(d) => d,
-        None => {
-            crate::display::print_error("Device not found.");
-            return;
-        }
+    let Some(dev) = dev else {
+        crate::display::print_error("Device not found.");
+        return;
     };
     let state = scan::get_state(&dev, &local_netid, 0);
     crate::display::print_info(&format!("TwinCAT state: {state}"));
@@ -725,12 +695,9 @@ fn beckhoff_set_state(ip: &str, _code: u16, name: &str) {
     let pb = crate::display::spinner_start(&format!("Discovering {ip}…"));
     let dev = beckhoff_discover(ip);
     pb.finish_and_clear();
-    let dev = match dev {
-        Some(d) => d,
-        None => {
-            crate::display::print_error("Device not found.");
-            return;
-        }
+    let Some(dev) = dev else {
+        crate::display::print_error("Device not found.");
+        return;
     };
     let pb2 = crate::display::spinner_start(&format!("Setting TwinCAT state to {name}…"));
     let result = scan::set_twincat_state(&dev, &local_netid, name, 0);
@@ -753,9 +720,9 @@ fn beckhoff_reboot(ip: &str) {
 }
 
 fn beckhoff_add_user(ip: &str) {
+    use crate::vendors::beckhoff::webcontrol;
     let user = ask_input("Username", "scadaver_admin");
     let pass = ask_input("Password", "Sc4d4v3r!");
-    use crate::vendors::beckhoff::webcontrol;
     let pb = crate::display::spinner_start(&format!("Adding user '{user}' to {ip}…"));
     let result = webcontrol::add_user(ip, 0, &user, &pass);
     pb.finish_and_clear();
@@ -772,22 +739,17 @@ fn beckhoff_add_user(ip: &str) {
 fn siemens_device_info(ip: &str) {
     use crate::vendors::siemens::scan;
     let pb = crate::display::spinner_start(&format!("Scanning {ip}…"));
-    let result = scan::scan_ip(ip);
+    let dev = scan::scan_ip(ip);
     pb.finish_and_clear();
-    match result {
-        Ok(dev) => {
-            println!("  IP:       {}", dev.ip);
-            if let Some(hw) = dev.hardware {
-                println!("  Hardware: {hw}");
-            }
-            if let Some(fw) = dev.firmware {
-                println!("  Firmware: {fw}");
-            }
-            if let Some(cs) = dev.cpu_state {
-                println!("  CPU:      {cs}");
-            }
-        }
-        Err(e) => crate::display::print_error(&format!("{e}")),
+    println!("  IP:       {}", dev.ip);
+    if let Some(hw) = dev.hardware {
+        println!("  Hardware: {hw}");
+    }
+    if let Some(fw) = dev.firmware {
+        println!("  Firmware: {fw}");
+    }
+    if let Some(cs) = dev.cpu_state {
+        println!("  CPU:      {cs}");
     }
 }
 
@@ -864,7 +826,6 @@ fn mitsubishi_set_state(ip: &str, state: &str) {
         name: "auto".into(),
         ip: local_ip_for(ip),
         netmask: "255.255.255.0".into(),
-        mac: None,
     };
     let pb = crate::display::spinner_start(&format!("Sending {state} to Mitsubishi PLC…"));
     let result = control::set_state_ip(&iface, ip, state);
@@ -886,7 +847,7 @@ fn schneider_flash(ip: &str) {
     let result = flash_led::flash_led_ip(ip);
     pb.finish_and_clear();
     match result {
-        Ok(_) => crate::display::print_success("Flash LED command sent."),
+        Ok(()) => crate::display::print_success("Flash LED command sent."),
         Err(e) => crate::display::print_error(&format!("{e}")),
     }
 }
@@ -896,12 +857,9 @@ fn schneider_hijack(ip: &str, action: &str) {
     let pb = crate::display::spinner_start(&format!("Fetching session from {ip}…"));
     let session = session_hijack::get_session_cookie(ip, 0);
     pb.finish_and_clear();
-    let session = match session {
-        Some(s) => s,
-        None => {
-            crate::display::print_error("Failed to get session cookie.");
-            return;
-        }
+    let Some(session) = session else {
+        crate::display::print_error("Failed to get session cookie.");
+        return;
     };
     crate::display::print_success(&format!(
         "Cookie: {} (booted {} times, last at {})",
@@ -1086,7 +1044,11 @@ fn rockwell_read_tag(ip: &str) {
     pb.finish_and_clear();
     match result {
         Ok(raw) => {
-            let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+            use std::fmt::Write;
+            let hex: String = raw.iter().fold(String::new(), |mut s, b| {
+                let _ = write!(s, "{b:02x}");
+                s
+            });
             println!("  {name} = 0x{hex}");
         }
         Err(e) => crate::display::print_error(&format!("{e}")),
@@ -1111,11 +1073,10 @@ fn rockwell_write_tag(ip: &str) {
         .collect();
     let type_code: u16 = match value_bytes.len() {
         1 => 0x00C1,
-        4 => 0x00C4,
         _ => 0x00C4,
     };
     match driver::write_tag(ip, 0, &name, type_code, &value_bytes) {
-        Ok(_) => crate::display::print_success(&format!("Wrote {name}.")),
+        Ok(()) => crate::display::print_success(&format!("Wrote {name}.")),
         Err(e) => crate::display::print_error(&format!("{e}")),
     }
 }
@@ -1145,11 +1106,10 @@ fn ewon_credentials(ip: &str) {
     let pb = crate::display::spinner_start(&format!("Extracting credentials from {ip}…"));
     // Drop the spinner before printing so output is clean
     pb.finish_and_clear();
-    match exploit::exploit(ip, 0, "adm", max) {
-        Ok(users) if users.is_empty() => crate::display::print_warn("No credentials extracted."),
-        Ok(users) => {
-            crate::display::print_success(&format!("{} credential(s) extracted.", users.len()))
-        }
-        Err(e) => crate::display::print_error(&format!("{e}")),
+    let users = exploit::exploit(ip, 0, "adm", max);
+    if users.is_empty() {
+        crate::display::print_warn("No credentials extracted.");
+    } else {
+        crate::display::print_success(&format!("{} credential(s) extracted.", users.len()));
     }
 }

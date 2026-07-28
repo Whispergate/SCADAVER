@@ -11,16 +11,6 @@ pub struct DeviceInfo {
     pub fields: HashMap<String, serde_json::Value>,
 }
 
-impl DeviceInfo {
-    pub fn get(&self, key: &str) -> Option<&serde_json::Value> {
-        self.fields.get(key)
-    }
-
-    pub fn get_str(&self, key: &str) -> Option<&str> {
-        self.fields.get(key)?.as_str()
-    }
-}
-
 /// Vendor detection priority — lower number = higher confidence.
 fn vendor_priority(vendor: &str) -> u8 {
     match vendor {
@@ -345,8 +335,7 @@ fn probe_modicon(ip: &str) -> Option<DeviceInfo> {
     let vendor = if fields
         .get("manufacturer")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_ascii_lowercase().contains("schneider"))
-        .unwrap_or(false)
+        .is_some_and(|s| s.to_ascii_lowercase().contains("schneider"))
     {
         "schneider"
     } else {
@@ -515,7 +504,7 @@ pub fn detect_device(ip: &str, timeout_secs: u64) -> Option<DeviceInfo> {
 #[allow(dead_code)]
 mod hex {
     pub fn decode(s: &str) -> Result<Vec<u8>, ()> {
-        if s.len() % 2 != 0 {
+        if !s.len().is_multiple_of(2) {
             return Err(());
         }
         (0..s.len())

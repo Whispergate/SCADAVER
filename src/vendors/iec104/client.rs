@@ -26,7 +26,6 @@ pub struct DataObject {
 
 /// An active IEC 104 session with sequence number tracking.
 pub struct Iec104Session {
-    pub ip: String,
     pub asdu_addr: u16,
     stream: TcpStream,
     tx_seq: u16, // send sequence number (increments by 1 per I-frame sent)
@@ -96,7 +95,6 @@ pub fn connect(ip: &str, port: u16) -> Result<Iec104Session> {
     stream.set_write_timeout(Some(TIMEOUT))?;
 
     let mut session = Iec104Session {
-        ip: ip.to_string(),
         asdu_addr: 1,
         stream,
         tx_seq: 0,
@@ -122,7 +120,6 @@ pub fn probe(ip: &str, port: u16) -> bool {
     let _ = stream.set_read_timeout(Some(TIMEOUT));
     let _ = stream.set_write_timeout(Some(TIMEOUT));
     let mut session = Iec104Session {
-        ip: ip.to_string(),
         asdu_addr: 0,
         stream,
         tx_seq: 0,
@@ -133,11 +130,10 @@ pub fn probe(ip: &str, port: u16) -> bool {
         return false;
     }
     session.recv()
-        .map(|r| r.len() >= 4 && r[0..4] == TESTFR_CON)
-        .unwrap_or(false)
+        .is_ok_and(|r| r.len() >= 4 && r[0..4] == TESTFR_CON)
 }
 
-/// Build an ASDU for General Interrogation (C_IC_NA_1, TypeID=100).
+/// Build an ASDU for General Interrogation (`C_IC_NA_1`, TypeID=100).
 fn gi_asdu(asdu_addr: u16) -> Vec<u8> {
     vec![
         100,                          // TypeID: C_IC_NA_1
@@ -150,7 +146,7 @@ fn gi_asdu(asdu_addr: u16) -> Vec<u8> {
     ]
 }
 
-/// Build an ASDU for Single Command (C_SC_NA_1, TypeID=45).
+/// Build an ASDU for Single Command (`C_SC_NA_1`, TypeID=45).
 fn single_cmd_asdu(asdu_addr: u16, ioa: u32, on: bool) -> Vec<u8> {
     let sco: u8 = u8::from(on); // 1=ON, 0=OFF (no qualifier bits)
     vec![
@@ -166,7 +162,7 @@ fn single_cmd_asdu(asdu_addr: u16, ioa: u32, on: bool) -> Vec<u8> {
     ]
 }
 
-/// Build an ASDU for Double Command (C_DC_NA_1, TypeID=46).
+/// Build an ASDU for Double Command (`C_DC_NA_1`, TypeID=46).
 fn double_cmd_asdu(asdu_addr: u16, ioa: u32, state: u8) -> Vec<u8> {
     vec![
         46,                           // TypeID: C_DC_NA_1
@@ -190,7 +186,7 @@ pub fn general_interrogation(session: &mut Iec104Session) -> Result<Vec<DataObje
     Ok(objects)
 }
 
-/// Send Single Command (C_SC_NA_1) to set output IOA on/off.
+/// Send Single Command (`C_SC_NA_1`) to set output IOA on/off.
 pub fn single_command(session: &mut Iec104Session, ioa: u32, on: bool) -> Result<bool> {
     let asdu = single_cmd_asdu(session.asdu_addr, ioa, on);
     let resp = session.send_iframe(&asdu)?;
@@ -200,7 +196,7 @@ pub fn single_command(session: &mut Iec104Session, ioa: u32, on: bool) -> Result
     Ok(resp.len() >= 7 && (resp[6] & 0x3F) == 0x07 && (resp[6] & 0x40) == 0)
 }
 
-/// Send Double Command (C_DC_NA_1). state: 1=off, 2=on, 3=indeterminate.
+/// Send Double Command (`C_DC_NA_1`). state: 1=off, 2=on, 3=indeterminate.
 pub fn double_command(session: &mut Iec104Session, ioa: u32, state: u8) -> Result<bool> {
     let asdu = double_cmd_asdu(session.asdu_addr, ioa, state);
     let resp = session.send_iframe(&asdu)?;
@@ -228,14 +224,12 @@ fn parse_response_objects(frame: &[u8], out: &mut Vec<DataObject>) {
             return;
         }
         let ioa_base = u32::from_le_bytes([data[0], data[1], data[2], 0]);
-        let mut offset = 3;
-        for i in 0..num {
-            let ioa = ioa_base + i as u32;
+        for (offset, i) in (3_usize..).zip(0_usize..num) {
+            let ioa = ioa_base + u32::try_from(i).unwrap_or(u32::MAX);
             if offset >= data.len() {
                 break;
             }
             out.push(DataObject { ioa, type_id, value: vec![data[offset]] });
-            offset += 1;
         }
     } else {
         // Non-sequence: each object has its own 3-byte IOA

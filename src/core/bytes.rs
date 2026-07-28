@@ -13,12 +13,12 @@ pub fn reverse_bytes(hex: &str) -> String {
 /// Convert an IPv4 string to a hex representation of its octets.
 /// e.g. "192.168.1.1" → "c0a80101"
 pub fn ip_to_hex(ip: &str) -> String {
-    ip.split('.')
-        .map(|part| {
-            let n: u8 = part.parse().unwrap_or(0);
-            format!("{n:02x}")
-        })
-        .collect()
+    use std::fmt::Write;
+    ip.split('.').fold(String::new(), |mut s, part| {
+        let n: u8 = part.parse().unwrap_or(0);
+        let _ = write!(s, "{n:02x}");
+        s
+    })
 }
 
 /// Format an AMS Net ID hex string as dotted-hex notation.
@@ -28,62 +28,20 @@ pub fn get_netid_as_string(hex: &str) -> String {
         .chunks(2)
         .map(|chunk| {
             let s = std::str::from_utf8(chunk).unwrap_or("00");
-            u8::from_str_radix(s, 16)
-                .map(|n| n.to_string())
-                .unwrap_or_else(|_| "0".to_string())
+            u8::from_str_radix(s, 16).map_or_else(|_| "0".to_string(), |n| n.to_string())
         })
         .collect::<Vec<_>>()
         .join(".")
-}
-
-/// Convert bytes to a little-endian integer. Pass `inverted = true`
-/// to read the bytes as big-endian (i.e. reverse first).
-pub fn convert_to_int(bytes: &[u8], inverted: bool) -> u32 {
-    if inverted {
-        let rev: Vec<u8> = bytes.iter().copied().rev().collect();
-        bytes_to_u32(&rev)
-    } else {
-        bytes_to_u32(bytes)
-    }
-}
-
-fn bytes_to_u32(bytes: &[u8]) -> u32 {
-    let mut result = 0u32;
-    for (i, &b) in bytes.iter().take(4).enumerate() {
-        result |= (b as u32) << (i * 8);
-    }
-    result
-}
-
-/// Reverse the pairs of a hex string (for EtherNet/IP little-endian fields).
-pub fn invert_hex_string(hex: &str) -> String {
-    reverse_bytes(hex)
 }
 
 /// Convert a binary string (e.g. "10110000") to a single-byte hex string.
 /// The bits are reversed first (LSB-first order).
 pub fn bits_to_hex_byte(bits: &str) -> String {
     let padded: String = bits.chars().take(8).collect();
-    let padded = format!("{:<8}", padded).replace(' ', "0");
+    let padded = format!("{padded:<8}").replace(' ', "0");
     let reversed: String = padded.chars().rev().collect();
     let val = u8::from_str_radix(&reversed, 2).unwrap_or(0);
     format!("{val:02x}")
-}
-
-/// Encode a u32 as a 4-byte little-endian hex string.
-pub fn u32_to_le_hex(n: u32) -> String {
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}",
-        n & 0xFF,
-        (n >> 8) & 0xFF,
-        (n >> 16) & 0xFF,
-        (n >> 24) & 0xFF
-    )
-}
-
-/// Encode a u16 as a 2-byte little-endian hex string.
-pub fn u16_to_le_hex(n: u16) -> String {
-    format!("{:02x}{:02x}", n & 0xFF, (n >> 8) & 0xFF)
 }
 
 #[cfg(test)]

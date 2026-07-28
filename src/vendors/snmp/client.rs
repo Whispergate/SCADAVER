@@ -46,7 +46,7 @@ impl SnmpValue {
             Self::ObjectId(a) => arcs_to_str(a),
             Self::IpAddress(a) => format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3]),
             Self::Counter32(n) | Self::Gauge32(n) => n.to_string(),
-            Self::TimeTicks(n) => format!("{n} ticks ({:.0}s)", *n as f64 / 100.0),
+            Self::TimeTicks(n) => format!("{n} ticks ({:.0}s)", f64::from(*n) / 100.0),
             Self::Counter64(n) => n.to_string(),
             Self::Null => "(null)".to_string(),
             Self::NoSuchObject => "(no such object)".to_string(),
@@ -58,8 +58,8 @@ impl SnmpValue {
     pub fn as_int(&self) -> Option<i64> {
         match self {
             Self::Integer(n) => Some(*n),
-            Self::Counter32(n) | Self::Gauge32(n) | Self::TimeTicks(n) => Some(*n as i64),
-            Self::Counter64(n) => Some(*n as i64),
+            Self::Counter32(n) | Self::Gauge32(n) | Self::TimeTicks(n) => Some(i64::from(*n)),
+            Self::Counter64(n) => Some(n.cast_signed()),
             _ => None,
         }
     }
@@ -70,7 +70,7 @@ impl SnmpValue {
 }
 
 pub fn arcs_to_str(arcs: &[u32]) -> String {
-    arcs.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(".")
+    arcs.iter().map(std::string::ToString::to_string).collect::<Vec<_>>().join(".")
 }
 
 fn str_to_arcs(s: &str) -> Result<Vec<u32>> {
@@ -84,11 +84,12 @@ fn str_to_arcs(s: &str) -> Result<Vec<u32>> {
 
 fn ber_len(len: usize) -> Vec<u8> {
     if len < 128 {
-        vec![len as u8]
+        vec![u8::try_from(len).unwrap_or(u8::MAX)]
     } else if len < 256 {
-        vec![0x81, len as u8]
+        vec![0x81, u8::try_from(len).unwrap_or(u8::MAX)]
     } else {
-        vec![0x82, (len >> 8) as u8, (len & 0xFF) as u8]
+        // 2-byte BER length form; handles lengths up to 65535
+        vec![0x82, u8::try_from(len >> 8).unwrap_or(u8::MAX), u8::try_from(len & 0xFF).unwrap_or(u8::MAX)]
     }
 }
 
@@ -100,35 +101,41 @@ fn tlv(tag: u8, val: &[u8]) -> Vec<u8> {
 }
 
 fn enc_int(n: i64) -> Vec<u8> {
-    let bytes = if n == 0 {
-        vec![0x00u8]
-    } else if n > 0 {
-        let mut b = Vec::new();
-        let mut v = n as u64;
-        while v > 0 {
-            b.push((v & 0xFF) as u8);
-            v >>= 8;
+    use std::cmp::Ordering;
+    let bytes = match n.cmp(&0) {
+        Ordering::Equal => {
+            vec![0x00u8]
         }
-        b.reverse();
-        if b[0] & 0x80 != 0 {
-            b.insert(0, 0x00);
-        }
-        b
-    } else {
-        let mut v = !(-n - 1) as u64;
-        let mut b = Vec::new();
-        loop {
-            b.push((v & 0xFF) as u8);
-            v >>= 8;
-            if v == 0 {
-                break;
+        Ordering::Greater => {
+            let mut b = Vec::new();
+            let mut v = n.cast_unsigned();
+            while v > 0 {
+                b.push((v & 0xFF) as u8);
+                v >>= 8;
             }
+            b.reverse();
+            if b[0] & 0x80 != 0 {
+                b.insert(0, 0x00);
+            }
+            b
         }
-        b.reverse();
-        if b[0] & 0x80 == 0 {
-            b.insert(0, 0xFF);
+        Ordering::Less => {
+            // n is negative: cast_unsigned gives the two's complement u64 bit pattern
+            let mut v = n.cast_unsigned();
+            let mut b = Vec::new();
+            loop {
+                b.push((v & 0xFF) as u8);
+                v >>= 8;
+                if v == 0 {
+                    break;
+                }
+            }
+            b.reverse();
+            if b[0] & 0x80 == 0 {
+                b.insert(0, 0xFF);
+            }
+            b
         }
-        b
     };
     tlv(0x02, &bytes)
 }
@@ -145,7 +152,8 @@ fn enc_oid(arcs: &[u32]) -> Vec<u8> {
     if arcs.len() < 2 {
         return tlv(0x06, &[0]);
     }
-    let mut enc = vec![40 * arcs[0] as u8 + arcs[1] as u8];
+    let first_byte = 40_u32.wrapping_mul(arcs[0]).wrapping_add(arcs[1]);
+    let mut enc = vec![u8::try_from(first_byte).unwrap_or(u8::MAX)];
     for &arc in &arcs[2..] {
         arc_bytes(arc, &mut enc);
     }
@@ -175,7 +183,7 @@ fn build_pdu(pdu_tag: u8, community: &str, req_id: u32, oids: &[Vec<u32>], f2: i
         vb.extend_from_slice(&enc_null());
         vbl.extend_from_slice(&tlv(0x30, &vb));
     }
-    let mut pdu = enc_int(req_id as i64);
+    let mut pdu = enc_int(i64::from(req_id));
     pdu.extend_from_slice(&enc_int(f2));
     pdu.extend_from_slice(&enc_int(f3));
     pdu.extend_from_slice(&tlv(0x30, &vbl));
@@ -198,7 +206,7 @@ fn build_set_pdu(community: &str, req_id: u32, oid: &[u32], value: &SnmpValue) -
     let mut vb = enc_oid(oid);
     vb.extend_from_slice(&val_enc);
     let vbl = tlv(0x30, &tlv(0x30, &vb));
-    let mut pdu = enc_int(req_id as i64);
+    let mut pdu = enc_int(i64::from(req_id));
     pdu.extend_from_slice(&enc_int(0));
     pdu.extend_from_slice(&enc_int(0));
     pdu.extend_from_slice(&vbl);
@@ -238,24 +246,24 @@ fn parse_tlv(buf: &[u8], pos: usize) -> Result<(u8, usize, usize)> {
 fn dec_int(buf: &[u8]) -> i64 {
     let mut n: i64 = if buf.first().is_some_and(|&b| b & 0x80 != 0) { -1 } else { 0 };
     for &b in buf {
-        n = (n << 8) | b as i64;
+        n = (n << 8) | i64::from(b);
     }
     n
 }
 
 fn dec_u32(buf: &[u8]) -> u32 {
-    buf.iter().fold(0u32, |a, &b| (a << 8) | b as u32)
+    buf.iter().fold(0u32, |a, &b| (a << 8) | u32::from(b))
 }
 
 fn dec_u64(buf: &[u8]) -> u64 {
-    buf.iter().fold(0u64, |a, &b| (a << 8) | b as u64)
+    buf.iter().fold(0u64, |a, &b| (a << 8) | u64::from(b))
 }
 
 fn dec_oid(buf: &[u8]) -> Vec<u32> {
     if buf.is_empty() {
         return vec![];
     }
-    let first = buf[0] as u32;
+    let first = u32::from(buf[0]);
     let mut arcs = vec![first / 40, first % 40];
     let mut i = 1;
     while i < buf.len() {
@@ -263,7 +271,7 @@ fn dec_oid(buf: &[u8]) -> Vec<u32> {
         loop {
             let b = buf[i];
             i += 1;
-            arc = (arc << 7) | (b & 0x7F) as u32;
+            arc = (arc << 7) | u32::from(b & 0x7F);
             if b & 0x80 == 0 || i >= buf.len() {
                 break;
             }
@@ -287,7 +295,6 @@ fn parse_varbind(buf: &[u8], pos: usize) -> Result<((Vec<u32>, SnmpValue), usize
     let vb = &buf[vs..ve];
     let value = match vt {
         0x02 => SnmpValue::Integer(dec_int(vb)),
-        0x04 => SnmpValue::OctetString(vb.to_vec()),
         0x05 => SnmpValue::Null,
         0x06 => SnmpValue::ObjectId(dec_oid(vb)),
         0x40 => {
@@ -303,6 +310,7 @@ fn parse_varbind(buf: &[u8], pos: usize) -> Result<((Vec<u32>, SnmpValue), usize
         0x80 => SnmpValue::NoSuchObject,
         0x81 => SnmpValue::NoSuchInstance,
         0x82 => SnmpValue::EndOfMibView,
+        // 0x04 (OCTET STRING) and all unknown types default to OctetString
         _ => SnmpValue::OctetString(vb.to_vec()),
     };
     Ok(((oid, value), end))
@@ -368,7 +376,7 @@ pub fn get(ip: &str, port: u16, community: &str, oid: &str) -> Result<SnmpValue>
         .ok_or_else(|| anyhow!("empty GET response"))
 }
 
-/// GET multiple OIDs in one request; returns (oid_string, value) pairs.
+/// GET multiple OIDs in one request; returns (`oid_string`, value) pairs.
 pub fn get_multi(ip: &str, port: u16, community: &str, oids: &[&str]) -> Result<Vec<(String, SnmpValue)>> {
     let arcs_list: Vec<Vec<u32>> = oids.iter().map(|o| str_to_arcs(o)).collect::<Result<_>>()?;
     let sock = open_sock(ip, port)?;
@@ -389,14 +397,8 @@ pub fn walk(ip: &str, port: u16, community: &str, root_oid: &str) -> Result<Vec<
 
     for _ in 0..MAX_WALK {
         let pkt = build_pdu(0xA1, community, next_id(), &[cur.clone()], 0, 0);
-        let resp = match exchange(&sock, &pkt) {
-            Ok(r) => r,
-            Err(_) => break,
-        };
-        let items = match parse_response(&resp) {
-            Ok(i) => i,
-            Err(_) => break,
-        };
+        let Ok(resp) = exchange(&sock, &pkt) else { break };
+        let Ok(items) = parse_response(&resp) else { break };
         let Some((oid, val)) = items.into_iter().next() else { break };
         if oid.len() < root.len() || oid[..root.len()] != root[..] {
             break;
@@ -404,28 +406,23 @@ pub fn walk(ip: &str, port: u16, community: &str, root_oid: &str) -> Result<Vec<
         if matches!(val, SnmpValue::EndOfMibView | SnmpValue::NoSuchObject | SnmpValue::NoSuchInstance) {
             break;
         }
-        cur = oid.clone();
+        cur.clone_from(&oid);
         results.push((arcs_to_str(&oid), val));
     }
     Ok(results)
 }
 
 /// SET a single OID value. Requires a write community string.
-pub fn set(ip: &str, port: u16, community: &str, oid: &str, value: SnmpValue) -> Result<SnmpValue> {
+pub fn set(ip: &str, port: u16, community: &str, oid: &str, value: &SnmpValue) -> Result<SnmpValue> {
     let arcs = str_to_arcs(oid)?;
     let sock = open_sock(ip, port)?;
-    let pkt = build_set_pdu(community, next_id(), &arcs, &value);
+    let pkt = build_set_pdu(community, next_id(), &arcs, value);
     let resp = exchange(&sock, &pkt)?;
     parse_response(&resp)?
         .into_iter()
         .next()
         .map(|(_, v)| v)
         .ok_or_else(|| anyhow!("empty SET response"))
-}
-
-/// Return true if any common community string returns a valid sysDescr.
-pub fn probe(ip: &str, port: u16) -> bool {
-    discover_community(ip, port).is_some()
 }
 
 /// Try common community strings, return the first that works.

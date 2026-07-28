@@ -14,10 +14,7 @@ pub struct EnipDevice {
     pub product_name: String,
     pub vendor_id: String,
     pub device_type: u32,
-    pub product_code: u32,
     pub revision: String,
-    pub serial: String,
-    pub state: String,
 }
 
 fn parse_list_identity(data: &[u8]) -> Option<EnipDevice> {
@@ -50,26 +47,16 @@ fn parse_list_identity(data: &[u8]) -> Option<EnipDevice> {
     }
 
     let vendor_raw = u16::from_le_bytes([item[18], item[19]]);
-    let device_type_id = u16::from_le_bytes([item[20], item[21]]) as u32;
-    let product_code = u16::from_le_bytes([item[22], item[23]]) as u32;
+    let device_type_id = u32::from(u16::from_le_bytes([item[20], item[21]]));
     let rev_major = item[24];
     let rev_minor = item[25];
     let revision = format!("{rev_major}.{rev_minor}");
-    let serial = format!(
-        "{:08x}",
-        u32::from_le_bytes([item[28], item[29], item[30], item[31]])
-    );
 
     let name_len = item[32] as usize;
     if item.len() < 33 + name_len {
         return None;
     }
     let product_name = String::from_utf8_lossy(&item[33..33 + name_len]).to_string();
-    let state = if item.len() > 33 + name_len {
-        format!("{:02x}", item[33 + name_len])
-    } else {
-        "00".to_string()
-    };
 
     let ip = if item.len() >= 10 {
         format!("{}.{}.{}.{}", item[6], item[7], item[8], item[9])
@@ -82,10 +69,7 @@ fn parse_list_identity(data: &[u8]) -> Option<EnipDevice> {
         product_name,
         vendor_id: format!("{vendor_raw:04x}"),
         device_type: device_type_id,
-        product_code,
         revision,
-        serial,
-        state,
     })
 }
 
@@ -144,19 +128,15 @@ pub fn scan_ip(ip: &str, timeout: u64, silent: bool) -> Result<Vec<EnipDevice>> 
     sock.send_to(&pkt, format!("{ip}:{DEST_PORT}"))?;
 
     let mut buf = [0u8; 1024];
-    let (n, addr) = match sock.recv_from(&mut buf) {
-        Ok(v) => v,
-        Err(_) => {
-            if !silent {
-                println!("No EtherNet/IP response from {ip}");
-            }
-            return Ok(vec![]);
+    let Ok((n, addr)) = sock.recv_from(&mut buf) else {
+        if !silent {
+            println!("No EtherNet/IP response from {ip}");
         }
+        return Ok(vec![]);
     };
 
-    let dev = match parse_list_identity(&buf[..n]) {
-        Some(d) => d,
-        None => return Ok(vec![]),
+    let Some(dev) = parse_list_identity(&buf[..n]) else {
+        return Ok(vec![]);
     };
 
     let dev = if dev.ip.is_empty() || dev.ip == "0.0.0.0" {

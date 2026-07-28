@@ -10,9 +10,7 @@ const INDEX_INACTIVE_USER: &str = "1340079872";
 pub const DEFAULT_WEB_PORT: u16 = 5120;
 
 fn get_uuid(target_ip: &str) -> Option<String> {
-    let msg = format!(
-        "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 3\r\nST: upnp:rootdevice\r\n\r\n"
-    );
+    let msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 3\r\nST: upnp:rootdevice\r\n\r\n".to_string();
     let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.set_read_timeout(Some(Duration::from_secs(10))).ok()?;
     sock.send_to(msg.as_bytes(), format!("{target_ip}:1900"))
@@ -68,10 +66,7 @@ pub fn reboot(target_ip: &str, port: u16) -> Result<bool> {
     validate_ipv4(target_ip)?;
     let effective_port = if port == 0 { DEFAULT_WEB_PORT } else { port };
 
-    let uuid = match get_uuid(target_ip) {
-        Some(u) => u,
-        None => bail!("Could not discover UPnP UUID for {target_ip}"),
-    };
+    let Some(uuid) = get_uuid(target_ip) else { bail!("Could not discover UPnP UUID for {target_ip}") };
     println!("UUID: {uuid}");
 
     if soap_write(
@@ -103,18 +98,16 @@ pub fn add_user(target_ip: &str, port: u16, username: &str, password: &str) -> R
         anyhow::bail!("Password must be 15 characters or fewer (CX9020 limit)");
     }
 
-    let uuid = match get_uuid(target_ip) {
-        Some(u) => u,
-        None => bail!("Could not discover UPnP UUID for {target_ip}"),
-    };
+    let Some(uuid) = get_uuid(target_ip) else { bail!("Could not discover UPnP UUID for {target_ip}") };
 
     let concat = format!("{username}{password}");
     let mut full: Vec<u8> = Vec::new();
-    full.push((16 + concat.len()) as u8);
+    // username and password are validated ≤15 chars above, so these casts are safe
+    full.push(u8::try_from(16 + concat.len()).unwrap_or(255));
     full.extend_from_slice(&[0, 0, 0]);
-    full.push(username.len() as u8);
+    full.push(u8::try_from(username.len()).unwrap_or(255));
     full.extend_from_slice(&[0u8; 7]);
-    full.push(password.len() as u8);
+    full.push(u8::try_from(password.len()).unwrap_or(255));
     full.extend_from_slice(&[0u8; 3]);
     full.extend_from_slice(concat.as_bytes());
 

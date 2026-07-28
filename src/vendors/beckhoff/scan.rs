@@ -7,7 +7,7 @@ use crate::core::bytes::{get_netid_as_string, ip_to_hex, reverse_bytes};
 use crate::core::network::NetworkInterface;
 use crate::vendors::beckhoff::ads::{
     build_local_netid, construct_ams_packet, decode_ads_value, parse_ads_response,
-    parse_ams_response, AdsParams,
+    parse_ams_response, AdsParams, AmsRoute,
 };
 
 const DISCOVERY_PORT: u16 = 48899;
@@ -21,7 +21,6 @@ pub struct BeckhoffDevice {
     pub netid_str: String,
     pub tc_version: String,
     pub kernel: String,
-    pub ssl_thumbprint: Option<String>,
 }
 
 fn derived_ads_device(ip: &str, port: u16) -> Option<BeckhoffDevice> {
@@ -34,7 +33,6 @@ fn derived_ads_device(ip: &str, port: u16) -> Option<BeckhoffDevice> {
         netid,
         tc_version: "Unknown".to_string(),
         kernel: "Unknown".to_string(),
-        ssl_thumbprint: None,
     })
 }
 
@@ -114,18 +112,6 @@ fn parse_discovery_frame(data: &[u8], src_ip: &str) -> Option<BeckhoffDevice> {
         "Unknown".to_string()
     };
 
-    // Look for SSL thumbprint
-    let ssl_thumbprint = data
-        .windows(4)
-        .position(|w| w == b"\x12\x00\x41\x00")
-        .and_then(|pos| {
-            let start = pos + 4;
-            data[start..]
-                .iter()
-                .position(|&b| b == 0)
-                .map(|end| String::from_utf8_lossy(&data[start..start + end]).to_uppercase())
-        });
-
     Some(BeckhoffDevice {
         ip: src_ip.to_string(),
         name,
@@ -133,11 +119,10 @@ fn parse_discovery_frame(data: &[u8], src_ip: &str) -> Option<BeckhoffDevice> {
         netid_str: get_netid_as_string(netid),
         tc_version,
         kernel,
-        ssl_thumbprint,
     })
 }
 
-/// Broadcast-discover Beckhoff TwinCAT devices.
+/// Broadcast-discover Beckhoff `TwinCAT` devices.
 pub fn discover(
     interface: &NetworkInterface,
     timeout: u64,
@@ -205,19 +190,15 @@ pub fn discover_ip(ip: &str, timeout: u64, silent: bool) -> Result<Vec<BeckhoffD
     sock.send_to(&pkt, format!("{ip}:{DISCOVERY_PORT}"))?;
 
     let mut buf = [0u8; 1024];
-    let (n, addr) = match sock.recv_from(&mut buf) {
-        Ok(v) => v,
-        Err(_) => {
-            if !silent {
-                println!("No Beckhoff response from {ip}");
-            }
-            return Ok(vec![]);
+    let Ok((n, addr)) = sock.recv_from(&mut buf) else {
+        if !silent {
+            println!("No Beckhoff response from {ip}");
         }
+        return Ok(vec![]);
     };
 
-    let dev = match parse_discovery_frame(&buf[..n], &addr.ip().to_string()) {
-        Some(d) => d,
-        None => return Ok(vec![]),
+    let Some(dev) = parse_discovery_frame(&buf[..n], &addr.ip().to_string()) else {
+        return Ok(vec![]);
     };
 
     if !silent {
@@ -278,41 +259,31 @@ pub fn discover_ip_with_port(
     Ok(vec![dev])
 }
 
-/// Query the TwinCAT state via ADS. Pass `port = 0` to use the default ADS port (48898).
+/// Query the `TwinCAT` state via ADS. Pass `port = 0` to use the default ADS port (48898).
 pub fn get_state(device: &BeckhoffDevice, local_netid: &str, port: u16) -> String {
     let effective_port = effective_ads_port(port);
-    let mut stream = match TcpStream::connect_timeout(
-        &format!("{}:{effective_port}", device.ip).parse().unwrap(),
-        Duration::from_secs(3),
-    ) {
-        Ok(s) => s,
-        Err(_) => return "ERROR".to_string(),
+    let Ok(addr) = format!("{}:{effective_port}", device.ip).parse() else {
+        return "ERROR".to_string();
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(3)) else {
+        return "ERROR".to_string();
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
 
     let packet = construct_ams_packet(
-        &device.netid,
-        local_netid,
+        &AmsRoute { remote_netid: &device.netid, remote_port: 10000, local_netid, local_port: 31337 },
         4,
         &AdsParams::ReadState,
         None,
         true,
-        10000,
-        31337,
     );
 
     let pkt = hex_decode(&packet);
-    let resp = match send_recv_ams(&mut stream, &pkt) {
-        Some(r) => r,
-        None => return "ERROR".to_string(),
-    };
+    let Some(resp) = send_recv_ams(&mut stream, &pkt) else { return "ERROR".to_string() };
 
     // AMS ReadState response: ads_data = result(4B) + ads_state(2B LE) + device_state(2B)
     // ads_state hex chars are at positions [8..12] in ads_data hex string
-    let ams = match parse_ams_response(&resp) {
-        Some(r) => r,
-        None => return "ERROR".to_string(),
-    };
+    let Some(ams) = parse_ams_response(&resp) else { return "ERROR".to_string() };
     if ams.ads_data.len() < 12 {
         return "ERROR".to_string();
     }
@@ -336,14 +307,9 @@ pub fn add_route(
     password: &str,
     route_name: Option<&str>,
 ) -> bool {
-    let route_name = route_name
-        .map(str::to_string)
-        .unwrap_or_else(|| hostname_or_default());
+    let route_name = route_name.map_or_else(hostname_or_default, str::to_string);
 
-    let sock = match UdpSocket::bind(format!("{local_ip}:0")) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
+    let Ok(sock) = UdpSocket::bind(format!("{local_ip}:0")) else { return false };
     let _ = sock.set_read_timeout(Some(Duration::from_secs(3)));
 
     let name_len = format!("{:02x}", route_name.len() + 1);
@@ -377,7 +343,7 @@ pub fn add_route(
     }
 }
 
-/// Change the TwinCAT service state. Pass `port = 0` to use the default ADS port (48898).
+/// Change the `TwinCAT` service state. Pass `port = 0` to use the default ADS port (48898).
 pub fn set_twincat_state(
     device: &BeckhoffDevice,
     local_netid: &str,
@@ -399,14 +365,11 @@ pub fn set_twincat_state(
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
 
     let packet = construct_ams_packet(
-        &device.netid,
-        local_netid,
+        &AmsRoute { remote_netid: &device.netid, remote_port: 10000, local_netid, local_port: 31337 },
         5,
         &AdsParams::WriteControl(ads_state, 0, vec![]),
         None,
         true,
-        10000,
-        31337,
     );
 
     let pkt = hex_decode(&packet);
@@ -444,13 +407,10 @@ pub fn get_device_info_full(
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
 
     let mut info = BeckhoffDeviceInfo {
-        ip: device.ip.clone(),
         name: device.name.clone(),
         netid: device.netid_str.clone(),
         tc_version: device.tc_version.clone(),
-        kernel: device.kernel.clone(),
         target_type: None,
-        target_version: None,
         hardware_model: None,
         serial: None,
         os_name: None,
@@ -460,29 +420,23 @@ pub fn get_device_info_full(
     if device.tc_version.starts_with('3') {
         // ADS Read to get XML info
         let pkt1 = construct_ams_packet(
-            &device.netid,
-            local_netid,
+            &AmsRoute { remote_netid: &device.netid, remote_port: 10000, local_netid, local_port: 31337 },
             2,
             &AdsParams::Read(700, 1, 4),
             None,
             true,
-            10000,
-            31337,
         );
         let _ = send_recv_ams(&mut stream, &hex_decode(&pkt1)).and_then(|resp| {
             let ams = parse_ams_response(&resp)?;
             let (_, ads_data) = parse_ads_response(&ams.ads_data)?;
-            let resp_len = u32::from_str_radix(&reverse_bytes(&ads_data), 16).ok()? as u32;
+            let resp_len = u32::from_str_radix(&reverse_bytes(&ads_data), 16).ok()?;
 
             let pkt2 = construct_ams_packet(
-                &device.netid,
-                local_netid,
+                &AmsRoute { remote_netid: &device.netid, remote_port: 10000, local_netid, local_port: 31337 },
                 2,
                 &AdsParams::Read(700, 1, resp_len),
                 None,
                 true,
-                10000,
-                31337,
             );
             let resp2 = send_recv_ams(&mut stream, &hex_decode(&pkt2))?;
             let ams2 = parse_ams_response(&resp2)?;
@@ -519,7 +473,7 @@ fn parse_tc3_xml(xml: &str, info: &mut BeckhoffDeviceInfo) {
                 match path.as_str() {
                     p if p.contains("TargetType") => info.target_type = Some(text),
                     p if p.contains("HardwareModel") || p.contains("strType") => {
-                        info.hardware_model = Some(text)
+                        info.hardware_model = Some(text);
                     }
                     p if p.contains("SerialNo") => info.serial = Some(text),
                     p if p.contains("ImageOsName") => info.os_name = Some(text),
@@ -539,13 +493,10 @@ fn parse_tc3_xml(xml: &str, info: &mut BeckhoffDeviceInfo) {
 
 #[derive(Debug, Clone)]
 pub struct BeckhoffDeviceInfo {
-    pub ip: String,
     pub name: String,
     pub netid: String,
     pub tc_version: String,
-    pub kernel: String,
     pub target_type: Option<String>,
-    pub target_version: Option<String>,
     pub hardware_model: Option<String>,
     pub serial: Option<String>,
     pub os_name: Option<String>,
@@ -573,13 +524,9 @@ pub struct AdsSymbol {
 /// Pass `port = 0` to use the default ADS port (48898).
 pub fn enumerate_symbols(device: &BeckhoffDevice, local_netid: &str, port: u16) -> Vec<AdsSymbol> {
     let effective_port = effective_ads_port(port);
-    let addr = match format!("{}:{effective_port}", device.ip).parse() {
-        Ok(a) => a,
-        Err(_) => return Vec::new(),
-    };
-    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
+    let Ok(addr) = format!("{}:{effective_port}", device.ip).parse() else { return Vec::new() };
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(5)) else {
+        return Vec::new();
     };
     if stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -588,14 +535,14 @@ pub fn enumerate_symbols(device: &BeckhoffDevice, local_netid: &str, port: u16) 
         return Vec::new();
     }
 
-    let upload_size = match read_upload_info(&mut stream, device, local_netid) {
-        Some(size) if size > 0 => size,
-        _ => return Vec::new(),
+    let Some(upload_size) = read_upload_info(&mut stream, device, local_netid)
+        .filter(|&s| s > 0)
+    else {
+        return Vec::new();
     };
 
-    let blob = match read_symbol_blob(&mut stream, device, local_netid, upload_size) {
-        Some(b) => b,
-        None => return Vec::new(),
+    let Some(blob) = read_symbol_blob(&mut stream, device, local_netid, upload_size) else {
+        return Vec::new();
     };
 
     let mut symbols = parse_symbol_entries(&blob);
@@ -609,14 +556,11 @@ fn read_upload_info(
     local_netid: &str,
 ) -> Option<u32> {
     let pkt = construct_ams_packet(
-        &device.netid,
-        local_netid,
+        &AmsRoute { remote_netid: &device.netid, remote_port: 10000, local_netid, local_port: 31337 },
         2,
         &AdsParams::Read(ADSIGRP_SYM_UPLOADINFO, 0, 8),
         None,
         true,
-        10000,
-        31337,
     );
     let resp = send_recv_ams(stream, &hex_decode(&pkt))?;
     let ams = parse_ams_response(&resp)?;
@@ -639,14 +583,11 @@ fn read_symbol_blob(
     upload_size: u32,
 ) -> Option<Vec<u8>> {
     let pkt = construct_ams_packet(
-        &device.netid,
-        local_netid,
+        &AmsRoute { remote_netid: &device.netid, remote_port: 10000, local_netid, local_port: 31337 },
         2,
         &AdsParams::Read(ADSIGRP_SYM_UPLOAD, 0, upload_size),
         None,
         true,
-        10000,
-        31337,
     );
     let resp = send_recv_ams(stream, &hex_decode(&pkt))?;
     let ams = parse_ams_response(&resp)?;
@@ -718,14 +659,11 @@ fn read_symbol_values(
         reads += 1;
 
         let pkt = construct_ams_packet(
-            &device.netid,
-            local_netid,
+            &AmsRoute { remote_netid: &device.netid, remote_port: 10000, local_netid, local_port: 31337 },
             2,
             &AdsParams::Read(sym.index_group, sym.index_offset, sym.size),
             None,
             true,
-            10000,
-            31337,
         );
         let Some(resp) = send_recv_ams(stream, &hex_decode(&pkt)) else {
             continue;
@@ -806,7 +744,11 @@ fn u16_le(bytes: &[u8], offset: usize) -> u16 {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
 fn hex_decode(s: &str) -> Vec<u8> {
@@ -818,7 +760,11 @@ fn hex_decode(s: &str) -> Vec<u8> {
 }
 
 fn hex_str(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
 /// Write raw bytes to a symbol looked up by name from the device's symbol table.
@@ -856,29 +802,7 @@ pub fn write_symbol_value(
     )
 }
 
-/// Write raw bytes to a symbol identified by its ADS index group and offset.
-/// Pass `port = 0` to use the default ADS port (48898).
-pub fn write_symbol_by_index(
-    device: &BeckhoffDevice,
-    local_netid: &str,
-    index_group: u32,
-    index_offset: u32,
-    data: Vec<u8>,
-    port: u16,
-) -> Result<bool> {
-    let effective_port = effective_ads_port(port);
-    let addr = format!("{}:{effective_port}", device.ip).parse()?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    write_to_stream(
-        &mut stream,
-        device,
-        local_netid,
-        index_group,
-        index_offset,
-        data,
-    )
-}
+
 
 fn write_to_stream(
     stream: &mut TcpStream,
@@ -889,14 +813,11 @@ fn write_to_stream(
     data: Vec<u8>,
 ) -> Result<bool> {
     let pkt = construct_ams_packet(
-        &device.netid,
-        local_netid,
+        &AmsRoute { remote_netid: &device.netid, remote_port: 10000, local_netid, local_port: 31337 },
         3,
         &AdsParams::Write(index_group, index_offset, data),
         None,
         true,
-        10000,
-        31337,
     );
     let resp = send_recv_ams(stream, &hex_decode(&pkt))
         .ok_or_else(|| anyhow::anyhow!("ADS write: no response from device"))?;
@@ -922,7 +843,7 @@ mod tests {
         let name_len = name.len() + 1;
         let mut frame = vec![0u8; 340];
         frame[12..18].copy_from_slice(&[127, 0, 0, 1, 1, 1]);
-        frame[26..28].copy_from_slice(&(name_len as u16).to_le_bytes());
+        frame[26..28].copy_from_slice(&u16::try_from(name_len).unwrap_or(u16::MAX).to_le_bytes());
         frame[28..28 + name.len()].copy_from_slice(name);
 
         let kernel_offset = 27 + name_len + 9;
@@ -948,12 +869,12 @@ mod tests {
         let type_b = type_name.as_bytes();
         let entry_len = 30 + name_b.len() + 1 + type_b.len() + 1;
         let mut entry = vec![0u8; entry_len];
-        entry[0..4].copy_from_slice(&(entry_len as u32).to_le_bytes());
+        entry[0..4].copy_from_slice(&u32::try_from(entry_len).unwrap_or(u32::MAX).to_le_bytes());
         entry[4..8].copy_from_slice(&index_group.to_le_bytes());
         entry[8..12].copy_from_slice(&index_offset.to_le_bytes());
         entry[12..16].copy_from_slice(&size.to_le_bytes());
-        entry[24..26].copy_from_slice(&(name_b.len() as u16).to_le_bytes());
-        entry[26..28].copy_from_slice(&(type_b.len() as u16).to_le_bytes());
+        entry[24..26].copy_from_slice(&u16::try_from(name_b.len()).unwrap_or(u16::MAX).to_le_bytes());
+        entry[26..28].copy_from_slice(&u16::try_from(type_b.len()).unwrap_or(u16::MAX).to_le_bytes());
         let type_start = 30 + name_b.len() + 1;
         entry[30..30 + name_b.len()].copy_from_slice(name_b);
         entry[type_start..type_start + type_b.len()].copy_from_slice(type_b);

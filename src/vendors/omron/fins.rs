@@ -13,12 +13,9 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Memory area codes used in FINS Memory Area Read/Write commands.
 pub const AREA_DM_WORD: u8 = 0x82;
-pub const AREA_CIO_WORD: u8 = 0xB0;
-
 /// Information retrieved from an Omron PLC via FINS.
 #[derive(Debug, Clone)]
 pub struct FinsDevice {
-    pub ip: String,
     pub node_addr: u8,
     pub model: String,
     pub version: String,
@@ -84,13 +81,13 @@ fn fins_header(da1: u8, sid: u8) -> [u8; 10] {
 
 fn send_fins_tcp(stream: &mut TcpStream, server_node: u8, cmd: &[u8]) -> Result<Vec<u8>> {
     let header = fins_header(server_node, 0x01);
-    let body_len = (header.len() + cmd.len()) as u32;
+    let body_len = u32::try_from(header.len() + cmd.len()).unwrap_or(u32::MAX);
     // FINS/TCP wrapper: "FINS" + length(4) + command(2=execute) + error(4)
     let mut frame = Vec::with_capacity(16 + header.len() + cmd.len());
     frame.extend_from_slice(b"FINS");
     frame.extend_from_slice(&(body_len + 8).to_be_bytes()); // length field = content after "FINS"+len
-    frame.extend_from_slice(&0x00000002u32.to_be_bytes()); // command: 2 = send FINS command
-    frame.extend_from_slice(&0x00000000u32.to_be_bytes()); // error code
+    frame.extend_from_slice(&0x0000_0002_u32.to_be_bytes()); // command: 2 = send FINS command
+    frame.extend_from_slice(&0x0000_0000_u32.to_be_bytes()); // error code
     frame.extend_from_slice(&header);
     frame.extend_from_slice(cmd);
 
@@ -105,6 +102,9 @@ fn send_fins_tcp(stream: &mut TcpStream, server_node: u8, cmd: &[u8]) -> Result<
         anyhow::bail!("FINS/TCP: response length field too small");
     }
     let body_len = resp_len - 8; // subtract the "FINS", length, command, error fields
+    if body_len > 65536 {
+        anyhow::bail!("FINS/TCP: response length field too large: {body_len}");
+    }
     let mut body = vec![0u8; body_len];
     stream.read_exact(&mut body).context("FINS/TCP: short response body")?;
     Ok(body)
@@ -145,7 +145,7 @@ pub fn get_device_info_tcp(ip: &str, port: u16) -> Result<FinsDevice> {
     } else {
         "Unknown".to_string()
     };
-    Ok(FinsDevice { ip: ip.to_string(), node_addr: server_node, model, version })
+    Ok(FinsDevice { node_addr: server_node, model, version })
 }
 
 /// Probe via UDP for a FINS device. Returns None if no valid response.
@@ -175,7 +175,7 @@ pub fn scan_udp(ip: &str) -> Option<FinsDevice> {
     } else {
         String::new()
     };
-    Some(FinsDevice { ip: ip.to_string(), node_addr: server_node, model, version })
+    Some(FinsDevice { node_addr: server_node, model, version })
 }
 
 /// Read DM word area via TCP FINS (command 01 02, area 0x82).
@@ -216,7 +216,7 @@ pub fn write_dm_words(ip: &str, port: u16, node: u8, start: u16, values: &[u16])
     let mut stream = tcp_connect(ip, port)?;
     let server_node = negotiate_address(&mut stream)?;
     let actual_node = if node == 0 { server_node } else { node };
-    let count = values.len() as u16;
+    let count = u16::try_from(values.len()).unwrap_or(u16::MAX);
     let mut cmd = vec![
         0x01, 0x02, // Memory Area Write
         AREA_DM_WORD,
@@ -281,12 +281,12 @@ pub fn set_cpu_mode(ip: &str, port: u16, node: u8, run: bool) -> Result<bool> {
 
 fn send_fins_tcp_node(stream: &mut TcpStream, server_node: u8, cmd: &[u8]) -> Result<Vec<u8>> {
     let header = fins_header(server_node, 0x01);
-    let body_len = (header.len() + cmd.len()) as u32;
+    let body_len = u32::try_from(header.len() + cmd.len()).unwrap_or(u32::MAX);
     let mut frame = Vec::with_capacity(16 + header.len() + cmd.len());
     frame.extend_from_slice(b"FINS");
     frame.extend_from_slice(&(body_len + 8).to_be_bytes());
-    frame.extend_from_slice(&0x00000002u32.to_be_bytes());
-    frame.extend_from_slice(&0x00000000u32.to_be_bytes());
+    frame.extend_from_slice(&0x0000_0002_u32.to_be_bytes());
+    frame.extend_from_slice(&0x0000_0000_u32.to_be_bytes());
     frame.extend_from_slice(&header);
     frame.extend_from_slice(cmd);
 
@@ -301,6 +301,9 @@ fn send_fins_tcp_node(stream: &mut TcpStream, server_node: u8, cmd: &[u8]) -> Re
         anyhow::bail!("FINS/TCP: response length field too small");
     }
     let body_len = resp_len - 8;
+    if body_len > 65536 {
+        anyhow::bail!("FINS/TCP: response length field too large: {body_len}");
+    }
     let mut body = vec![0u8; body_len];
     stream.read_exact(&mut body).context("FINS/TCP: short response body")?;
     Ok(body)

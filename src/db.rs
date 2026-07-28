@@ -15,10 +15,6 @@ pub struct DeviceRecord {
 }
 
 impl DeviceRecord {
-    pub fn field_str(&self, key: &str) -> Option<&str> {
-        self.fields.get(key)?.as_str()
-    }
-
     pub fn last_seen_str(&self) -> String {
         use chrono::{Local, TimeZone};
         if self.last_seen == 0 {
@@ -30,18 +26,6 @@ impl DeviceRecord {
         }
     }
 
-    pub fn vendor_color(&self) -> &'static str {
-        match self.vendor.to_lowercase().as_str() {
-            "beckhoff" => "cyan",
-            "siemens" => "blue",
-            "rockwell" | "enip" => "yellow",
-            "schneider" | "modicon" => "green",
-            "mitsubishi" => "magenta",
-            "phoenix" => "red",
-            "ewon" => "white",
-            _ => "gray",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -49,8 +33,6 @@ pub struct TagRecord {
     pub instance_id: i64,
     pub name: String,
     pub tag_type: i64,
-    pub first_seen: i64,
-    pub last_seen: i64,
 }
 
 pub struct TypeChange {
@@ -74,10 +56,7 @@ impl TagDiff {
 #[derive(Debug, Clone)]
 pub struct DataPoint {
     pub address: String,
-    pub data_type: Option<String>,
     pub last_value: Option<String>,
-    pub first_seen: i64,
-    pub last_seen: i64,
 }
 
 pub struct ValueChange {
@@ -106,9 +85,9 @@ impl Database {
     pub fn open(path: &PathBuf) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
-                .with_context(|| format!("create DB dir {:?}", parent))?;
+                .with_context(|| format!("create DB dir {}", parent.display()))?;
         }
-        let conn = Connection::open(path).with_context(|| format!("open database {:?}", path))?;
+        let conn = Connection::open(path).with_context(|| format!("open database {}", path.display()))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              CREATE TABLE IF NOT EXISTS devices (
@@ -190,7 +169,7 @@ impl Database {
         for row in rows {
             let (id, ip, vendor, last_seen, fields_str) = row?;
             let fields: Value =
-                serde_json::from_str(&fields_str).unwrap_or(Value::Object(Default::default()));
+                serde_json::from_str(&fields_str).unwrap_or(Value::Object(serde_json::Map::default()));
             devices.push(DeviceRecord {
                 id,
                 ip,
@@ -208,34 +187,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn search_devices(&self, query: &str) -> Result<Vec<DeviceRecord>> {
-        let pattern = format!("%{query}%");
-        let mut stmt = self.conn.prepare(
-            "SELECT id, ip, vendor, last_seen, fields FROM devices
-             WHERE ip LIKE ?1 OR vendor LIKE ?1 OR fields LIKE ?1
-             ORDER BY last_seen DESC",
-        )?;
-        let rows = stmt.query_map(params![pattern], |r| {
-            let fields_str: String = r.get(4)?;
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, fields_str))
-        })?;
-
-        let mut devices = Vec::new();
-        for row in rows {
-            let (id, ip, vendor, last_seen, fields_str) = row?;
-            let fields: Value =
-                serde_json::from_str(&fields_str).unwrap_or(Value::Object(Default::default()));
-            devices.push(DeviceRecord {
-                id,
-                ip,
-                vendor,
-                last_seen,
-                fields,
-            });
-        }
-        Ok(devices)
-    }
-
     /// Upsert a batch of tags for a device. Returns the diff vs the previous snapshot.
     pub fn upsert_tags(&self, ip: &str, tags: &[(i64, &str, i64)]) -> Result<TagDiff> {
         let now = now_unix();
@@ -247,35 +198,30 @@ impl Database {
         let mut type_changed = Vec::new();
 
         for &(instance_id, name, tag_type) in tags {
-            match existing_map.remove(&instance_id) {
-                Some(old) => {
-                    if old.tag_type != tag_type {
-                        type_changed.push(TypeChange {
-                            name: name.to_string(),
-                            old_type: old.tag_type,
-                            new_type: tag_type,
-                        });
-                    }
-                    self.conn.execute(
-                        "UPDATE device_tags SET name=?1, tag_type=?2, last_seen=?3
-                         WHERE ip=?4 AND instance_id=?5",
-                        params![name, tag_type, now, ip, instance_id],
-                    )?;
-                }
-                None => {
-                    added.push(TagRecord {
-                        instance_id,
+            if let Some(old) = existing_map.remove(&instance_id) {
+                if old.tag_type != tag_type {
+                    type_changed.push(TypeChange {
                         name: name.to_string(),
-                        tag_type,
-                        first_seen: now,
-                        last_seen: now,
+                        old_type: old.tag_type,
+                        new_type: tag_type,
                     });
-                    self.conn.execute(
-                        "INSERT INTO device_tags (ip, instance_id, name, tag_type, first_seen, last_seen)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-                        params![ip, instance_id, name, tag_type, now],
-                    )?;
                 }
+                self.conn.execute(
+                    "UPDATE device_tags SET name=?1, tag_type=?2, last_seen=?3
+                     WHERE ip=?4 AND instance_id=?5",
+                    params![name, tag_type, now, ip, instance_id],
+                )?;
+            } else {
+                added.push(TagRecord {
+                    instance_id,
+                    name: name.to_string(),
+                    tag_type,
+                });
+                self.conn.execute(
+                    "INSERT INTO device_tags (ip, instance_id, name, tag_type, first_seen, last_seen)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                    params![ip, instance_id, name, tag_type, now],
+                )?;
             }
         }
 
@@ -297,7 +243,7 @@ impl Database {
 
     pub fn load_tags(&self, ip: &str) -> Result<Vec<TagRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT instance_id, name, tag_type, first_seen, last_seen
+            "SELECT instance_id, name, tag_type
              FROM device_tags WHERE ip=?1 ORDER BY instance_id",
         )?;
         let rows = stmt.query_map(params![ip], |r| {
@@ -305,8 +251,6 @@ impl Database {
                 instance_id: r.get(0)?,
                 name: r.get(1)?,
                 tag_type: r.get(2)?,
-                first_seen: r.get(3)?,
-                last_seen: r.get(4)?,
             })
         })?;
         let mut out = Vec::new();
@@ -336,39 +280,33 @@ impl Database {
 
         for &(address, data_type, value) in points {
             let stored_value = normalize_data_value(protocol, value);
-            match existing_map.remove(address) {
-                Some(old) => {
-                    let old_value = old
-                        .last_value
-                        .as_deref()
-                        .map(|v| normalize_data_value(protocol, v));
-                    if old_value.as_deref() != Some(stored_value.as_str()) {
-                        value_changed.push(ValueChange {
-                            address: address.to_string(),
-                            old_value: old.last_value.clone(),
-                            new_value: stored_value.clone(),
-                        });
-                    }
-                    self.conn.execute(
-                        "UPDATE device_data SET data_type=?1, last_value=?2, last_seen=?3
-                         WHERE ip=?4 AND protocol=?5 AND address=?6",
-                        params![data_type, stored_value, now, ip, protocol, address],
-                    )?;
-                }
-                None => {
-                    added.push(DataPoint {
+            if let Some(old) = existing_map.remove(address) {
+                let old_value = old
+                    .last_value
+                    .as_deref()
+                    .map(|v| normalize_data_value(protocol, v));
+                if old_value.as_deref() != Some(stored_value.as_str()) {
+                    value_changed.push(ValueChange {
                         address: address.to_string(),
-                        data_type: data_type.map(|s| s.to_string()),
-                        last_value: Some(stored_value.clone()),
-                        first_seen: now,
-                        last_seen: now,
+                        old_value: old.last_value.clone(),
+                        new_value: stored_value.clone(),
                     });
-                    self.conn.execute(
-                        "INSERT INTO device_data (ip, protocol, address, data_type, last_value, first_seen, last_seen)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-                        params![ip, protocol, address, data_type, stored_value, now],
-                    )?;
                 }
+                self.conn.execute(
+                    "UPDATE device_data SET data_type=?1, last_value=?2, last_seen=?3
+                     WHERE ip=?4 AND protocol=?5 AND address=?6",
+                    params![data_type, stored_value, now, ip, protocol, address],
+                )?;
+            } else {
+                added.push(DataPoint {
+                    address: address.to_string(),
+                    last_value: Some(stored_value.clone()),
+                });
+                self.conn.execute(
+                    "INSERT INTO device_data (ip, protocol, address, data_type, last_value, first_seen, last_seen)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                    params![ip, protocol, address, data_type, stored_value, now],
+                )?;
             }
         }
 
@@ -389,16 +327,13 @@ impl Database {
 
     pub fn load_data_points(&self, ip: &str, protocol: &str) -> Result<Vec<DataPoint>> {
         let mut stmt = self.conn.prepare(
-            "SELECT address, data_type, last_value, first_seen, last_seen
+            "SELECT address, last_value
              FROM device_data WHERE ip=?1 AND protocol=?2 ORDER BY address",
         )?;
         let rows = stmt.query_map(params![ip, protocol], |r| {
             Ok(DataPoint {
                 address: r.get(0)?,
-                data_type: r.get(1)?,
-                last_value: r.get(2)?,
-                first_seen: r.get(3)?,
-                last_seen: r.get(4)?,
+                last_value: r.get(1)?,
             })
         })?;
         let mut out = Vec::new();
@@ -421,8 +356,7 @@ impl Database {
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs().cast_signed())
 }
 
 fn normalize_data_value(protocol: &str, value: &str) -> String {

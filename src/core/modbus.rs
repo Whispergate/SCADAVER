@@ -12,21 +12,12 @@ const MAX_REGISTERS: u16 = 125;
 const MAX_BITS: u16 = 2000;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RegisterType {
-    Coil,
-    DiscreteInput,
-    HoldingRegister,
-    InputRegister,
-}
-
 #[derive(Debug, Clone)]
 pub struct ModbusRegister {
     /// 0-based protocol address.
     pub address: u16,
     /// User-facing address (Modbus data-model offset applied).
     pub display_addr: u32,
-    pub register_type: RegisterType,
     /// 0/1 for bits, register value for words.
     pub raw: u16,
     /// "ON"/"OFF" for bits, "12345 (0x3039)" for words.
@@ -36,9 +27,7 @@ pub struct ModbusRegister {
 #[derive(Debug, Clone)]
 pub struct ModbusReply {
     pub unit_id: u8,
-    pub function: u8,
     pub data: Vec<u8>,
-    pub exception: Option<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,23 +78,6 @@ impl ModbusTcpClient {
         self
     }
 
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    pub fn with_unit_ids(mut self, unit_ids: impl Into<Vec<u8>>) -> Self {
-        let unit_ids = unit_ids.into();
-        if !unit_ids.is_empty() {
-            self.unit_ids = unit_ids;
-        }
-        self
-    }
-
-    pub fn port(&self) -> u16 {
-        self.port
-    }
-
     pub fn transact(&self, pdu: &[u8], expected_fc: u8) -> Result<ModbusReply> {
         self.transact_inner(pdu, expected_fc, false)
     }
@@ -115,45 +87,52 @@ impl ModbusTcpClient {
     }
 
     pub fn read_device_id(&self) -> Result<ModbusDeviceId> {
-        let reply = self.transact(&[0x2B, 0x0E, 0x01, 0x00], 0x2B)?;
-        if reply.data.first().copied() != Some(0x0E) {
-            bail!("Modbus Device ID response missing MEI type");
-        }
-
-        let obj_count = usize::from(
-            *reply
-                .data
-                .get(5)
-                .context("Modbus Device ID response missing object count")?,
-        );
-        let mut pos = 6usize;
         let mut objects = BTreeMap::new();
-        for _ in 0..obj_count.min(32) {
-            let obj_id = *reply
-                .data
-                .get(pos)
-                .context("Modbus Device ID object truncated")?;
-            let obj_len = usize::from(
+        let mut next_obj_id: u8 = 0;
+        let mut unit_id: u8 = 0;
+
+        for _ in 0..5u8 {
+            let reply = self.transact(&[0x2B, 0x0E, 0x01, next_obj_id], 0x2B)?;
+            unit_id = reply.unit_id;
+            if reply.data.first().copied() != Some(0x0E) {
+                bail!("Modbus Device ID response missing MEI type");
+            }
+            let obj_count = usize::from(
                 *reply
                     .data
-                    .get(pos + 1)
-                    .context("Modbus Device ID object length truncated")?,
+                    .get(5)
+                    .context("Modbus Device ID response missing object count")?,
             );
-            let value = reply
-                .data
-                .get(pos + 2..pos + 2 + obj_len)
-                .context("Modbus Device ID object value truncated")?;
-            objects.insert(
-                obj_id,
-                String::from_utf8_lossy(value).trim().to_string(),
-            );
-            pos += 2 + obj_len;
+            let mut pos = 6usize;
+            for _ in 0..obj_count.min(32) {
+                let obj_id = *reply
+                    .data
+                    .get(pos)
+                    .context("Modbus Device ID object truncated")?;
+                let obj_len = usize::from(
+                    *reply
+                        .data
+                        .get(pos + 1)
+                        .context("Modbus Device ID object length truncated")?,
+                );
+                let value = reply
+                    .data
+                    .get(pos + 2..pos + 2 + obj_len)
+                    .context("Modbus Device ID object value truncated")?;
+                objects.insert(
+                    obj_id,
+                    String::from_utf8_lossy(value).trim().to_string(),
+                );
+                pos += 2 + obj_len;
+            }
+            // data[3] = More Following (0xFF = more pages); data[4] = next object id
+            if reply.data.get(3).copied() != Some(0xFF) {
+                break;
+            }
+            next_obj_id = reply.data.get(4).copied().unwrap_or(0);
         }
 
-        Ok(ModbusDeviceId {
-            unit_id: reply.unit_id,
-            objects,
-        })
+        Ok(ModbusDeviceId { unit_id, objects })
     }
 
     pub fn probe_holding_register(&self) -> Result<ModbusReply> {
@@ -230,9 +209,7 @@ impl ModbusTcpClient {
             if allow_exception {
                 return Ok(ModbusReply {
                     unit_id,
-                    function: expected_fc,
                     data: body.get(1..).unwrap_or_default().to_vec(),
-                    exception: Some(exception),
                 });
             }
             bail!(
@@ -246,9 +223,7 @@ impl ModbusTcpClient {
 
         Ok(ModbusReply {
             unit_id,
-            function: fc,
             data: body[1..].to_vec(),
-            exception: None,
         })
     }
 }
@@ -267,6 +242,7 @@ fn retry_with_next_unit_id(err: &anyhow::Error) -> bool {
         || msg.contains("reading Modbus PDU")
         || msg.contains("empty Modbus PDU")
         || msg.contains("unexpected Modbus unit id")
+        || msg.contains("not a Modbus TCP response")
 }
 
 fn exception_name(code: u8) -> &'static str {
@@ -285,13 +261,9 @@ fn exception_name(code: u8) -> &'static str {
 }
 
 fn read_request_pdu(fc: u8, start: u16, count: u16) -> [u8; 5] {
-    [
-        fc,
-        (start >> 8) as u8,
-        start as u8,
-        (count >> 8) as u8,
-        count as u8,
-    ]
+    let [sh, sl] = start.to_be_bytes();
+    let [ch, cl] = count.to_be_bytes();
+    [fc, sh, sl, ch, cl]
 }
 
 fn read_words(
@@ -301,7 +273,6 @@ fn read_words(
     count: u16,
     fc: u8,
     offset: u32,
-    register_type: RegisterType,
 ) -> Result<Vec<ModbusRegister>> {
     let count = count.clamp(1, MAX_REGISTERS);
     let client = ModbusTcpClient::new(ip).with_port(port);
@@ -321,11 +292,10 @@ fn read_words(
     let mut registers = Vec::with_capacity(byte_count / 2);
     for (i, word) in words.chunks_exact(2).enumerate() {
         let raw = u16::from_be_bytes([word[0], word[1]]);
-        let address = start.wrapping_add(i as u16);
+        let address = start.wrapping_add(u16::try_from(i).unwrap_or(u16::MAX));
         registers.push(ModbusRegister {
             address,
             display_addr: u32::from(address) + offset,
-            register_type,
             raw,
             value_str: format!("{raw} ({raw:#06x})"),
         });
@@ -340,7 +310,6 @@ fn read_bits(
     count: u16,
     fc: u8,
     offset: u32,
-    register_type: RegisterType,
 ) -> Result<Vec<ModbusRegister>> {
     let count = count.clamp(1, MAX_BITS);
     let client = ModbusTcpClient::new(ip).with_port(port);
@@ -363,11 +332,10 @@ fn read_bits(
             .get(i / 8)
             .context("bit response shorter than requested count")?;
         let bit = (byte >> (i % 8)) & 1;
-        let address = start.wrapping_add(i as u16);
+        let address = start.wrapping_add(u16::try_from(i).unwrap_or(u16::MAX));
         registers.push(ModbusRegister {
             address,
             display_addr: u32::from(address) + offset,
-            register_type,
             raw: u16::from(bit),
             value_str: if bit == 1 { "ON" } else { "OFF" }.to_string(),
         });
@@ -381,15 +349,7 @@ pub fn read_holding_registers(
     start: u16,
     count: u16,
 ) -> Result<Vec<ModbusRegister>> {
-    read_words(
-        ip,
-        port,
-        start,
-        count,
-        0x03,
-        40001,
-        RegisterType::HoldingRegister,
-    )
+    read_words(ip, port, start, count, 0x03, 40001)
 }
 
 pub fn read_input_registers(
@@ -398,15 +358,7 @@ pub fn read_input_registers(
     start: u16,
     count: u16,
 ) -> Result<Vec<ModbusRegister>> {
-    read_words(
-        ip,
-        port,
-        start,
-        count,
-        0x04,
-        30001,
-        RegisterType::InputRegister,
-    )
+    read_words(ip, port, start, count, 0x04, 30001)
 }
 
 pub fn read_coils(
@@ -415,7 +367,7 @@ pub fn read_coils(
     start: u16,
     count: u16,
 ) -> Result<Vec<ModbusRegister>> {
-    read_bits(ip, port, start, count, 0x01, 1, RegisterType::Coil)
+    read_bits(ip, port, start, count, 0x01, 1)
 }
 
 pub fn read_discrete_inputs(
@@ -424,15 +376,7 @@ pub fn read_discrete_inputs(
     start: u16,
     count: u16,
 ) -> Result<Vec<ModbusRegister>> {
-    read_bits(
-        ip,
-        port,
-        start,
-        count,
-        0x02,
-        10001,
-        RegisterType::DiscreteInput,
-    )
+    read_bits(ip, port, start, count, 0x02, 10001)
 }
 
 pub fn write_single_coil(ip: &str, port: u16, address: u16, on: bool) -> Result<()> {
@@ -460,42 +404,15 @@ pub fn write_single_register(ip: &str, port: u16, address: u16, value: u16) -> R
     Ok(())
 }
 
-pub fn write_multiple_coils(ip: &str, port: u16, start: u16, values: &[bool]) -> Result<u16> {
-    if values.is_empty() {
-        bail!("write_multiple_coils: empty values slice");
-    }
-    let count = values.len().min(usize::from(MAX_BITS));
-    let values = &values[..count];
-    let count16 = count as u16;
-    let byte_count = count.div_ceil(8);
-    let mut packed = vec![0u8; byte_count];
-    for (i, &on) in values.iter().enumerate() {
-        if on {
-            packed[i / 8] |= 1 << (i % 8);
-        }
-    }
-    let mut pdu = vec![
-        0x0F,
-        (start >> 8) as u8,
-        (start & 0xFF) as u8,
-        (count16 >> 8) as u8,
-        (count16 & 0xFF) as u8,
-        byte_count as u8,
-    ];
-    pdu.extend_from_slice(&packed);
-    let reply = ModbusTcpClient::new(ip).with_port(port).transact(&pdu, 0x0F)?;
-    let written = reply.data.get(2..4).context("FC15 response truncated")?;
-    Ok(u16::from_be_bytes([written[0], written[1]]))
-}
-
 pub fn write_multiple_registers(ip: &str, port: u16, start: u16, values: &[u16]) -> Result<u16> {
     if values.is_empty() {
         bail!("write_multiple_registers: empty values slice");
     }
     let count = values.len().min(usize::from(MAX_REGISTERS));
     let values = &values[..count];
-    let count16 = count as u16;
-    let byte_count = (count * 2) as u8;
+    // count is bounded by MAX_REGISTERS (125), so these casts are safe
+    let count16 = u16::try_from(count).unwrap_or(u16::MAX);
+    let byte_count = u8::try_from(count * 2).unwrap_or(u8::MAX);
     let mut pdu = vec![
         0x10,
         (start >> 8) as u8,
@@ -623,6 +540,6 @@ mod tests {
             .unwrap();
         handle.join().unwrap();
         assert_eq!(reply.unit_id, 0x01);
-        assert_eq!(reply.exception, Some(0x02));
+        assert_eq!(reply.data, vec![0x02]);
     }
 }

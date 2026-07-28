@@ -144,6 +144,24 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
             ("exploit", "ewon-creds", "--target", target, "--port", str(ports.ewon), "--max-users", "2"),
             ("admin", "credential"),
         ),
+        SmokeCase(
+            "snmp-enum",
+            "snmp",
+            ("snmp", "enum", "--target", target, "--port", str(ports.snmp)),
+            ("sysDescr", "SCALANCE", "community"),
+        ),
+        SmokeCase(
+            "snmp-walk",
+            "snmp",
+            ("snmp", "walk", "--target", target, "--oid", "1.3.6.1.2.1.1", "--port", str(ports.snmp)),
+            ("1.3.6.1.2.1.1.1.0",),
+        ),
+        SmokeCase(
+            "snmp-scan",
+            "snmp",
+            ("snmp", "scan", "--target", target, "--port", str(ports.snmp)),
+            ("public",),
+        ),
     ]
 
 
@@ -154,6 +172,38 @@ def wait_for_tcp(host: str, port: int, timeout: float) -> bool:
             sock.settimeout(0.2)
             if sock.connect_ex((host, port)) == 0:
                 return True
+        time.sleep(0.1)
+    return False
+
+
+# Minimal SNMPv2c GET for sysDescr.0 with community "public"
+_SNMP_PROBE = bytes([
+    0x30, 0x26,
+    0x02, 0x01, 0x01,                                # version = 1 (v2c)
+    0x04, 0x06, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, # community = "public"
+    0xa0, 0x19,
+    0x02, 0x01, 0x01,                                # request-id = 1
+    0x02, 0x01, 0x00,                                # error-status = 0
+    0x02, 0x01, 0x00,                                # error-index = 0
+    0x30, 0x0e,
+    0x30, 0x0c,
+    0x06, 0x08, 0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00,  # sysDescr.0
+    0x05, 0x00,                                      # NULL
+])
+
+
+def wait_for_udp(host: str, port: int, timeout: float) -> bool:
+    """Wait until a UDP SNMP agent responds to a sysDescr probe."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(0.5)
+                sock.sendto(_SNMP_PROBE, (host, port))
+                sock.recv(1024)
+                return True
+        except OSError:
+            pass
         time.sleep(0.1)
     return False
 
@@ -233,7 +283,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--only",
         nargs="+",
-        choices=["modbus", "slmp", "beckhoff", "siemens", "ewon"],
+        choices=["modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp"],
         help="run only cases for selected simulator families",
     )
     parser.add_argument("--no-start", action="store_true", help="use already-running simulators")
@@ -279,6 +329,10 @@ def main() -> int:
                 for port in spec.tcp_ports:
                     if not wait_for_tcp(args.target, port, args.startup_timeout):
                         print(f"[!] {spec.name} did not open TCP {port}", file=sys.stderr)
+                        return 1
+                for port in spec.udp_ports:
+                    if not wait_for_udp(args.target, port, args.startup_timeout):
+                        print(f"[!] {spec.name} did not respond on UDP {port}", file=sys.stderr)
                         return 1
 
         failed = 0

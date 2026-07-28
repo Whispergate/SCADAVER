@@ -62,7 +62,7 @@ fn parse_device_info(data: &[u8]) -> EwonDevice {
     let serial = if data.len() >= 20 {
         let serialp1 = data[19];
         let raw16 = if data.len() >= 19 {
-            ((data[18] as u16) << 8) | (data[17] as u16)
+            (u16::from(data[18]) << 8) | u16::from(data[17])
         } else {
             0
         };
@@ -77,7 +77,7 @@ fn parse_device_info(data: &[u8]) -> EwonDevice {
         None
     };
 
-    let product_code = data.get(16).map(|b| b.to_string());
+    let product_code = data.get(16).map(std::string::ToString::to_string);
     let identifier = if data.len() >= 4 {
         Some(String::from_utf8_lossy(&data[..4]).to_string())
     } else {

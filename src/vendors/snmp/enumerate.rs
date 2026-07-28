@@ -25,7 +25,6 @@ pub struct Interface {
     pub descr: String,
     pub mac: String,
     pub speed_mbps: u64,
-    pub admin_up: bool,
     pub oper_up: bool,
     pub in_errors: u64,
     pub out_errors: u64,
@@ -55,8 +54,7 @@ pub fn get_system_info(ip: &str, port: u16, community: &str) -> Result<SystemInf
     let uptime_ticks: u64 = results
         .get(2)
         .and_then(|(_, v)| v.as_int())
-        .map(|n| n as u64)
-        .unwrap_or(0);
+        .map_or(0, i64::cast_unsigned);
     let object_id = at(1);
     let ics_vendor = oids::vendor_from_sys_oid(&object_id);
     let is_apc_ups = object_id.starts_with(oids::APC_ROOT);
@@ -97,7 +95,7 @@ pub fn get_interfaces(ip: &str, port: u16, community: &str) -> Result<Vec<Interf
         .collect();
     let get = |col: u32, inst: u32| -> Option<&SnmpValue> { cols.get(&col)?.get(&inst) };
     let int_val = |col: u32, inst: u32| -> u64 {
-        get(col, inst).and_then(|v| v.as_int()).map(|n| n as u64).unwrap_or(0)
+        get(col, inst).and_then(super::client::SnmpValue::as_int).map_or(0, i64::cast_unsigned)
     };
 
     let mut result = Vec::new();
@@ -110,11 +108,10 @@ pub fn get_interfaces(ip: &str, port: u16, community: &str) -> Result<Vec<Interf
         result.push(Interface {
             index: inst,
             descr: get(oids::IF_COL_DESCR, inst)
-                .map(|v| v.display())
+                .map(super::client::SnmpValue::display)
                 .unwrap_or_default(),
             mac,
             speed_mbps: speed_bps / 1_000_000,
-            admin_up: int_val(oids::IF_COL_ADMIN_STATUS, inst) == 1,
             oper_up: int_val(oids::IF_COL_OPER_STATUS, inst) == 1,
             in_errors: int_val(oids::IF_COL_IN_ERRORS, inst),
             out_errors: int_val(oids::IF_COL_OUT_ERRORS, inst),
@@ -145,7 +142,7 @@ pub fn get_topology(ip: &str, port: u16, community: &str) -> Result<Vec<String>>
         .iter()
         .filter(|(o, _)| o.contains(".22.1.2."))
         .map(|(o, v)| {
-            let ip_suffix: String = o.splitn(2, ".22.1.2.").nth(1).unwrap_or("").to_string();
+            let ip_suffix: String = o.split_once(".22.1.2.").map_or("", |x| x.1).to_string();
             format!("    {} → {}", ip_suffix, v.display())
         })
         .collect();

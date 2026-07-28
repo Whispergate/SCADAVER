@@ -14,8 +14,6 @@ const SUBCMD_WORD: u16 = 0x0000;
 const SUBCMD_BIT: u16 = 0x0001;
 
 pub struct SlmpValue {
-    pub device: String,
-    pub address: u32,
     pub display: String,
     pub raw: u16,
     pub value_str: String,
@@ -46,10 +44,8 @@ pub fn read_word_devices(
     let mut values = Vec::with_capacity(count as usize);
     for i in 0..count as usize {
         let raw = u16::from_le_bytes([data[i * 2], data[i * 2 + 1]]);
-        let address = start + i as u32;
+        let address = start + u32::try_from(i).unwrap_or(u32::MAX);
         values.push(SlmpValue {
-            device: device.to_string(),
-            address,
             display: format!("{device}{address}"),
             raw,
             value_str: raw.to_string(),
@@ -85,10 +81,8 @@ pub fn read_bit_devices(
         let byte = data[i / 2];
         let nibble = if i % 2 == 0 { byte & 0x0F } else { byte >> 4 };
         let on = nibble != 0;
-        let address = start + i as u32;
+        let address = start + u32::try_from(i).unwrap_or(u32::MAX);
         values.push(SlmpValue {
-            device: device.to_string(),
-            address,
             display: format!("{device}{address}"),
             raw: u16::from(on),
             value_str: if on {
@@ -143,7 +137,7 @@ pub fn write_bit_devices(
     let count = u16::try_from(values.len().min(usize::from(MAX_BIT_COUNT)))
         .context("bit count overflow")?;
     let values = &values[..count as usize];
-    let packed_len = (count as usize + 1) / 2;
+    let packed_len = (count as usize).div_ceil(2);
     let mut payload = vec![0u8; packed_len];
     for (i, &on) in values.iter().enumerate() {
         let nibble: u8 = u8::from(on);

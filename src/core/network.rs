@@ -10,7 +10,6 @@ pub struct NetworkInterface {
     pub name: String,
     pub ip: String,
     pub netmask: String,
-    pub mac: Option<String>,
 }
 
 impl std::fmt::Display for NetworkInterface {
@@ -21,10 +20,7 @@ impl std::fmt::Display for NetworkInterface {
 
 /// List all IPv4-capable network interfaces on the system.
 pub fn get_interfaces() -> Vec<NetworkInterface> {
-    let raw = match network_interface::NetworkInterface::show() {
-        Ok(v) => v,
-        Err(_) => return vec![],
-    };
+    let Ok(raw) = network_interface::NetworkInterface::show() else { return vec![] };
 
     raw.into_iter()
         .flat_map(|iface| {
@@ -38,13 +34,10 @@ pub fn get_interfaces() -> Vec<NetworkInterface> {
                         name: iface.name.clone(),
                         ip,
                         netmask: v4
-                            .netmask
-                            .map(|m| m.to_string())
-                            .unwrap_or_else(|| "255.255.255.0".to_string()),
-                        mac: iface.mac_addr.clone(),
+                            .netmask.map_or_else(|| "255.255.255.0".to_string(), |m| m.to_string()),
                     })
                 }
-                _ => None,
+                Addr::V6(_) => None,
             })
             .collect::<Vec<_>>()
         })
@@ -99,23 +92,6 @@ pub fn calculate_broadcast(ip: &str, netmask: &str) -> String {
     bc.join(".")
 }
 
-/// Create a UDP socket configured for broadcasting.
-pub fn create_broadcast_socket(
-    bind_ip: &str,
-    bind_port: u16,
-    timeout_secs: u64,
-) -> Result<UdpSocket> {
-    let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-    sock.set_reuse_address(true)?;
-    sock.set_broadcast(true)?;
-    sock.set_read_timeout(Some(Duration::from_secs(timeout_secs)))?;
-
-    let bind_addr: SocketAddr = format!("{bind_ip}:{bind_port}").parse()?;
-    sock.bind(&bind_addr.into())?;
-
-    Ok(UdpSocket::from(sock))
-}
-
 /// Create a broadcast UDP socket bound to the unspecified address.
 pub fn create_udp_broadcast_socket(bind_ip: &str, timeout_secs: u64) -> Result<UdpSocket> {
     let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
@@ -129,38 +105,11 @@ pub fn create_udp_broadcast_socket(bind_ip: &str, timeout_secs: u64) -> Result<U
     Ok(UdpSocket::from(sock))
 }
 
-/// Collect all UDP responses until timeout, returning (data, from_ip) pairs.
-pub fn collect_responses(sock: &UdpSocket) -> Vec<(Vec<u8>, String)> {
-    let mut results = Vec::new();
-    let mut buf = [0u8; 4096];
-
-    loop {
-        match sock.recv_from(&mut buf) {
-            Ok((n, addr)) => {
-                results.push((buf[..n].to_vec(), addr.ip().to_string()));
-            }
-            Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                break;
-            }
-            Err(_) => break,
-        }
-    }
-    results
-}
-
 /// Detect the local IP used to route to a given destination.
 pub fn local_ip_for(destination: &str) -> String {
-    let sock = match UdpSocket::bind("0.0.0.0:0") {
-        Ok(s) => s,
-        Err(_) => return "0.0.0.0".to_string(),
-    };
+    let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else { return "0.0.0.0".to_string() };
     if sock.connect(format!("{destination}:80")).is_ok() {
-        sock.local_addr()
-            .map(|a| a.ip().to_string())
-            .unwrap_or_else(|_| "0.0.0.0".to_string())
+        sock.local_addr().map_or_else(|_| "0.0.0.0".to_string(), |a| a.ip().to_string())
     } else {
         "0.0.0.0".to_string()
     }

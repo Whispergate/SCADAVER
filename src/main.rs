@@ -1,5 +1,4 @@
-﻿mod auth;
-mod cli;
+﻿mod cli;
 mod core;
 mod creds;
 mod db;
@@ -17,11 +16,11 @@ fn main() {
         let db = match db::Database::open(&db_path) {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("Failed to open database at {db_path:?}: {e:#}");
+                eprintln!("Failed to open database at {}: {e:#}", db_path.display());
                 std::process::exit(1);
             }
         };
-        if let Err(e) = tui::run(db) {
+        if let Err(e) = tui::run(&db) {
             eprintln!("Fatal: {e:#}");
             std::process::exit(1);
         }

@@ -21,11 +21,6 @@ const CMD_STOP: &str = "57010000001111070000ffff030000fe030000200 01c0a161400000
 const CMD_PAUSE: &str = "5701000000111107 0000ffff030000fe030000200 01c0a161400000000000000000000000000000000000000000010030900000001 00";
 const CMD_RUN: &str = "57010000001111070000ffff030000fe030000220 01c0a161400000000000000000000000000000000000000000100101090000000100 0000";
 
-/// Send a RUN, STOP, or PAUSE command to a Mitsubishi PLC.
-pub fn set_state(interface: &NetworkInterface, action: &str) -> Result<bool> {
-    set_state_to(interface, "255.255.255.255", action)
-}
-
 /// Send a RUN, STOP, or PAUSE command to a specific Mitsubishi PLC IP.
 pub fn set_state_ip(interface: &NetworkInterface, target_ip: &str, action: &str) -> Result<bool> {
     set_state_to(interface, target_ip, action)
@@ -49,21 +44,18 @@ fn set_state_to(interface: &NetworkInterface, target_ip: &str, action: &str) -> 
     sock.send_to(&pkt, format!("{target_ip}:{CONTROL_PORT}"))?;
 
     let mut buf = [0u8; 1024];
-    match sock.recv_from(&mut buf) {
-        Ok((n, _)) => {
-            let hex = hex_encode(&buf[..n]);
-            if hex.len() >= 8 && &hex[hex.len() - 8..] == "09000000" {
-                println!("Command acknowledged by PLC.");
-                Ok(true)
-            } else {
-                println!("Unexpected response from PLC.");
-                Ok(false)
-            }
-        }
-        Err(_) => {
-            println!("No response from PLC.");
+    if let Ok((n, _)) = sock.recv_from(&mut buf) {
+        let hex = hex_encode(&buf[..n]);
+        if hex.len() >= 8 && &hex[hex.len() - 8..] == "09000000" {
+            println!("Command acknowledged by PLC.");
+            Ok(true)
+        } else {
+            println!("Unexpected response from PLC.");
             Ok(false)
         }
+    } else {
+        println!("No response from PLC.");
+        Ok(false)
     }
 }
 
@@ -98,5 +90,9 @@ fn hex_decode(s: &str) -> Vec<u8> {
 }
 
 fn hex_encode(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    use std::fmt::Write;
+    b.iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
 }

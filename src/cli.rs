@@ -35,12 +35,12 @@ pub enum Command {
         #[command(subcommand)]
         sub: RockwellCmd,
     },
-    /// Interact with Siemens S7 PLCs over S7Comm (port 102)
+    /// Interact with Siemens S7 PLCs over `S7Comm` (port 102)
     Siemens {
         #[command(subcommand)]
         sub: SiemensCmd,
     },
-    /// Interact with Phoenix Contact WebVisit HMI tag values (CVE-2016-8380)
+    /// Interact with Phoenix Contact `WebVisit` HMI tag values (CVE-2016-8380)
     Phoenix {
         #[command(subcommand)]
         sub: PhoenixCmd,
@@ -127,7 +127,7 @@ pub enum ScanCmd {
         #[arg(long, default_value = "5007")]
         port: u16,
     },
-    /// Scan for Beckhoff TwinCAT devices (UDP 48899, ADS TCP fallback)
+    /// Scan for Beckhoff `TwinCAT` devices (UDP 48899, ADS TCP fallback)
     Beckhoff {
         #[arg(short, long, default_value = "2")]
         timeout: u64,
@@ -137,7 +137,7 @@ pub enum ScanCmd {
         #[arg(long, default_value = "0")]
         port: u16,
     },
-    /// Scan a Siemens device by IP (S7Comm TCP 102)
+    /// Scan a Siemens device by IP (`S7Comm` TCP 102)
     Siemens {
         #[arg(short, long)]
         ip: String,
@@ -203,7 +203,7 @@ pub enum ControlCmd {
         #[arg(long)]
         flip: bool,
     },
-    /// Control Beckhoff TwinCAT state
+    /// Control Beckhoff `TwinCAT` state
     BeckhoffTc {
         #[arg(short, long)]
         target: String,
@@ -245,7 +245,7 @@ pub enum ExploitCmd {
         #[arg(short, long, default_value = "info")]
         action: String,
     },
-    /// CVE-2016-8366: Retrieve passwords from Phoenix WebVisit HMI
+    /// CVE-2016-8366: Retrieve passwords from Phoenix `WebVisit` HMI
     PhoenixPasswords {
         #[arg(short, long)]
         target: String,
@@ -286,7 +286,7 @@ pub enum ExploitCmd {
         #[arg(short, long, default_value = "Sc4d4v3r!")]
         password: String,
     },
-    /// Write raw bytes to a Beckhoff TwinCAT ADS symbol by name
+    /// Write raw bytes to a Beckhoff `TwinCAT` ADS symbol by name
     BeckhoffWriteSymbol {
         #[arg(short, long)]
         target: String,
@@ -689,7 +689,7 @@ pub enum Iec104Cmd {
 
 #[derive(Subcommand)]
 pub enum PhoenixCmd {
-    /// List tags from Phoenix WebVisit HMI
+    /// List tags from Phoenix `WebVisit` HMI
     Tags {
         #[arg(short, long)]
         target: String,
@@ -697,7 +697,7 @@ pub enum PhoenixCmd {
         #[arg(short, long, default_value = "0")]
         port: u16,
     },
-    /// Read current tag values from Phoenix WebVisit HMI
+    /// Read current tag values from Phoenix `WebVisit` HMI
     ReadTags {
         #[arg(short, long)]
         target: String,
@@ -705,7 +705,7 @@ pub enum PhoenixCmd {
         #[arg(short, long, default_value = "0")]
         port: u16,
     },
-    /// Write a tag value to Phoenix WebVisit HMI
+    /// Write a tag value to Phoenix `WebVisit` HMI
     WriteTag {
         #[arg(short, long)]
         target: String,
@@ -725,11 +725,11 @@ pub enum PhoenixCmd {
         #[arg(short, long, default_value = "0")]
         port: u16,
     },
-    /// Get Phoenix ProConOS device info (port 1962)
+    /// Get Phoenix `ProConOS` device info (port 1962)
     Info {
         #[arg(short, long)]
         target: String,
-        /// Override ProConOS info port (default: 1962)
+        /// Override `ProConOS` info port (default: 1962)
         #[arg(short, long, default_value = "0")]
         port: u16,
     },
@@ -745,12 +745,12 @@ pub fn run(args: Args) -> Result<()> {
     match args.command {
         None => crate::interactive::run(),
         Some(Command::Scan { sub }) => run_scan(sub),
-        Some(Command::Control { sub }) => run_control(sub),
+        Some(Command::Control { sub }) => { run_control(sub); Ok(()) }
         Some(Command::Exploit { sub }) => run_exploit(sub),
-        Some(Command::Rockwell { sub }) => run_rockwell(sub),
-        Some(Command::Siemens { sub }) => run_siemens(sub),
+        Some(Command::Rockwell { sub }) => { run_rockwell(sub); Ok(()) }
+        Some(Command::Siemens { sub }) => { run_siemens(sub); Ok(()) }
         Some(Command::Phoenix { sub }) => run_phoenix(sub),
-        Some(Command::Omron { sub }) => run_omron(sub),
+        Some(Command::Omron { sub }) => { run_omron(sub); Ok(()) }
         Some(Command::Iec104 { sub }) => run_iec104(sub),
         Some(Command::Db { sub }) => run_db(sub),
         Some(Command::Snmp { sub }) => run_snmp(sub),
@@ -761,6 +761,7 @@ pub fn run(args: Args) -> Result<()> {
 // Scan handlers
 // ===================================================================
 
+#[allow(clippy::too_many_lines)]
 fn run_scan(cmd: ScanCmd) -> Result<()> {
     use crate::core::network::{get_interfaces, select_interface};
 
@@ -881,7 +882,7 @@ fn run_scan(cmd: ScanCmd) -> Result<()> {
         ScanCmd::Siemens { ip, port } => {
             use crate::vendors::siemens::scan;
             crate::display::print_info(&format!("Scanning {ip} for Siemens S7…"));
-            let dev = scan::scan_ip_with_port(&ip, port)?;
+            let dev = scan::scan_ip_with_port(&ip, port);
             println!("  IP:       {}", dev.ip);
             if let Some(hw) = &dev.hardware {
                 println!("  Hardware: {hw}");
@@ -893,7 +894,7 @@ fn run_scan(cmd: ScanCmd) -> Result<()> {
                 println!("  CPU:      {cs}");
             }
             if !dev.open_ports.is_empty() {
-                let ports: Vec<String> = dev.open_ports.iter().map(|p| p.to_string()).collect();
+                let ports: Vec<String> = dev.open_ports.iter().map(ToString::to_string).collect();
                 println!("  Ports:    {}", ports.join(", "));
             }
         }
@@ -925,7 +926,8 @@ fn run_scan(cmd: ScanCmd) -> Result<()> {
 // Control handlers
 // ===================================================================
 
-fn run_control(cmd: ControlCmd) -> Result<()> {
+#[allow(clippy::too_many_lines)]
+fn run_control(cmd: ControlCmd) {
     match cmd {
         ControlCmd::Mitsubishi { target, state } => {
             use crate::core::network::NetworkInterface;
@@ -934,7 +936,6 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
                 name: "auto".into(),
                 ip: local_ip_for(&target),
                 netmask: "255.255.255.0".into(),
-                mac: None,
             };
             crate::display::print_info(&format!("Setting Mitsubishi PLC to {state}…"));
             match control::set_state_ip(&iface, &target, &state.to_lowercase()) {
@@ -1064,12 +1065,9 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
             let devs = scan::discover_ip_with_port(&target, 2, true, port).unwrap_or_default();
             pb.finish_and_clear();
 
-            let dev = match devs.into_iter().next() {
-                Some(d) => d,
-                None => {
-                    crate::display::print_error("Beckhoff device not found via ADS discovery.");
-                    return Ok(());
-                }
+            let Some(dev) = devs.into_iter().next() else {
+                crate::display::print_error("Beckhoff device not found via ADS discovery.");
+                return;
             };
 
             if let Some(s) = state {
@@ -1096,13 +1094,13 @@ fn run_control(cmd: ControlCmd) -> Result<()> {
             }
         }
     }
-    Ok(())
 }
 
 // ===================================================================
 // Exploit handlers
 // ===================================================================
 
+#[allow(clippy::too_many_lines)]
 fn run_exploit(cmd: ExploitCmd) -> Result<()> {
     match cmd {
         ExploitCmd::EwonCreds {
@@ -1112,17 +1110,11 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
         } => {
             use crate::vendors::ewon::exploit;
             crate::display::print_info(&format!("Extracting credentials from {target}…"));
-            match exploit::exploit(&target, port, "adm", max_users) {
-                Ok(users) if users.is_empty() => {
-                    crate::display::print_warn("No credentials extracted.");
-                }
-                Ok(users) => {
-                    crate::display::print_success(&format!(
-                        "Extracted {} credential(s).",
-                        users.len()
-                    ));
-                }
-                Err(e) => crate::display::print_error(&format!("{e}")),
+            let users = exploit::exploit(&target, port, "adm", max_users);
+            if users.is_empty() {
+                crate::display::print_warn("No credentials extracted.");
+            } else {
+                crate::display::print_success(&format!("Extracted {} credential(s).", users.len()));
             }
         }
 
@@ -1130,7 +1122,7 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             use crate::vendors::schneider::flash_led;
             crate::display::print_info(&format!("Sending Flash LED to {target}…"));
             match flash_led::flash_led_ip(&target) {
-                Ok(_) => crate::display::print_success("Flash LED command sent."),
+                Ok(()) => crate::display::print_success("Flash LED command sent."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
@@ -1140,12 +1132,9 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             let pb = crate::display::spinner_start(&format!("Fetching session from {target}…"));
             let session = session_hijack::get_session_cookie(&target, 0);
             pb.finish_and_clear();
-            let session = match session {
-                Some(s) => s,
-                None => {
-                    crate::display::print_error("Failed to get session cookie.");
-                    return Ok(());
-                }
+            let Some(session) = session else {
+                crate::display::print_error("Failed to get session cookie.");
+                return Ok(());
             };
             crate::display::print_success(&format!(
                 "Cookie: {} (booted {} times)",
@@ -1270,12 +1259,9 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
             let pb = crate::display::spinner_start(&format!("Discovering {target}…"));
             let devs = scan::discover_ip_with_port(&target, 3, true, port).unwrap_or_default();
             pb.finish_and_clear();
-            let dev = match devs.into_iter().next() {
-                Some(d) => d,
-                None => {
-                    crate::display::print_error("No Beckhoff device responded.");
-                    return Ok(());
-                }
+            let Some(dev) = devs.into_iter().next() else {
+                crate::display::print_error("No Beckhoff device responded.");
+                return Ok(());
             };
             match scan::write_symbol_value(&dev, &local_netid, sym_name, value_bytes, port) {
                 Ok(true) => crate::display::print_success(&format!("Symbol '{sym_name}' written.")),
@@ -1577,7 +1563,7 @@ fn run_exploit(cmd: ExploitCmd) -> Result<()> {
 // Rockwell handlers
 // ===================================================================
 
-fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
+fn run_rockwell(cmd: RockwellCmd) {
     match cmd {
         RockwellCmd::Info { target, port } => {
             use crate::vendors::rockwell::driver;
@@ -1651,12 +1637,9 @@ fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
         } => {
             use crate::vendors::rockwell::driver;
             for pair in &assignments {
-                let (name, hex_val) = match pair.split_once('=') {
-                    Some(p) => p,
-                    None => {
-                        crate::display::print_warn(&format!("Skipping invalid pair: {pair}"));
-                        continue;
-                    }
+                let Some((name, hex_val)) = pair.split_once('=') else {
+                    crate::display::print_warn(&format!("Skipping invalid pair: {pair}"));
+                    continue;
                 };
                 let value_bytes: Vec<u8> = hex_val
                     .as_bytes()
@@ -1670,24 +1653,22 @@ fn run_rockwell(cmd: RockwellCmd) -> Result<()> {
                 // Type 0x00C1 = BOOL, 0x00C4 = DINT, 0x00CA = REAL — default DINT
                 let type_code: u16 = match value_bytes.len() {
                     1 => 0x00C1,
-                    4 => 0x00C4,
                     _ => 0x00C4,
                 };
                 match driver::write_tag(&target, port, name, type_code, &value_bytes) {
-                    Ok(_) => crate::display::print_success(&format!("{name}: written")),
+                    Ok(()) => crate::display::print_success(&format!("{name}: written")),
                     Err(e) => crate::display::print_error(&format!("{name}: {e}")),
                 }
             }
         }
     }
-    Ok(())
 }
 
 // ===================================================================
 // Siemens handlers
 // ===================================================================
 
-fn run_siemens(cmd: SiemensCmd) -> Result<()> {
+fn run_siemens(cmd: SiemensCmd) {
     match cmd {
         SiemensCmd::Cpu {
             target,
@@ -1749,7 +1730,7 @@ fn run_siemens(cmd: SiemensCmd) -> Result<()> {
                 .collect();
             if bytes.is_empty() {
                 crate::display::print_error("Invalid hex data.");
-                return Ok(());
+                return;
             }
             crate::display::print_info(&format!(
                 "Writing {} byte(s) to DB{db}:{offset} on {target}…",
@@ -1770,14 +1751,13 @@ fn run_siemens(cmd: SiemensCmd) -> Result<()> {
             }
         }
     }
-    Ok(())
 }
 
 // ===================================================================
 // Omron handlers
 // ===================================================================
 
-fn run_omron(cmd: OmronCmd) -> Result<()> {
+fn run_omron(cmd: OmronCmd) {
     match cmd {
         OmronCmd::Info { target, port } => {
             use crate::vendors::omron::fins;
@@ -1810,9 +1790,9 @@ fn run_omron(cmd: OmronCmd) -> Result<()> {
             pb.finish_and_clear();
             match result {
                 Ok(vals) => {
-                    println!("  {:<8}  {:<8}  {}", "Address", "Dec", "Hex");
+                    println!("  {:<8}  {:<8}  Hex", "Address", "Dec");
                     for (i, &v) in vals.iter().enumerate() {
-                        println!("  DM{:<6}  {:<8}  {v:#06x}", start + i as u16, v);
+                        println!("  DM{:<6}  {:<8}  {v:#06x}", start + u16::try_from(i).unwrap_or(u16::MAX), v);
                     }
                     crate::display::print_success(&format!("{} word(s).", vals.len()));
                 }
@@ -1833,7 +1813,7 @@ fn run_omron(cmd: OmronCmd) -> Result<()> {
                 .collect();
             if parsed.is_empty() {
                 crate::display::print_error("No valid values.");
-                return Ok(());
+                return;
             }
             match fins::write_dm_words(&target, port, 0, start, &parsed) {
                 Ok(()) => crate::display::print_success(&format!(
@@ -1872,7 +1852,6 @@ fn run_omron(cmd: OmronCmd) -> Result<()> {
             }
         }
     }
-    Ok(())
 }
 
 // ===================================================================
@@ -2047,7 +2026,7 @@ fn run_db(cmd: DbCmd) -> Result<()> {
         DbCmd::Add { ip, vendor } => {
             let vendor = vendor.as_deref().unwrap_or("unknown");
             let id =
-                db.upsert_device(&ip, vendor, &serde_json::Value::Object(Default::default()))?;
+                db.upsert_device(&ip, vendor, &serde_json::Value::Object(serde_json::Map::default()))?;
             crate::display::print_success(&format!("Added {ip} (vendor={vendor}, id={id})"));
         }
         DbCmd::Remove { id } => {
@@ -2208,7 +2187,7 @@ fn run_snmp(cmd: SnmpCmd) -> Result<()> {
                 "int" => client::SnmpValue::Integer(value.parse::<i64>()?),
                 _ => client::SnmpValue::OctetString(value.into_bytes()),
             };
-            let result = client::set(&target, port, &community, &oid, snmp_val)?;
+            let result = client::set(&target, port, &community, &oid, &snmp_val)?;
             println!("  {oid} → {}", result.display());
             crate::display::print_success("SET accepted.");
         }
@@ -2222,16 +2201,15 @@ fn run_snmp(cmd: SnmpCmd) -> Result<()> {
 
 fn local_ip_for(target: &str) -> String {
     use std::net::UdpSocket;
-    let sock = match UdpSocket::bind("0.0.0.0:0") {
-        Ok(s) => s,
-        Err(_) => return "0.0.0.0".into(),
-    };
+    let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else { return "0.0.0.0".into() };
     let _ = sock.connect(format!("{target}:1"));
-    sock.local_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|_| "0.0.0.0".into())
+    sock.local_addr().map_or_else(|_| "0.0.0.0".into(), |a| a.ip().to_string())
 }
 
 fn hex_encode(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    use std::fmt::Write;
+    b.iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
 }

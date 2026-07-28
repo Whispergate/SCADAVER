@@ -85,13 +85,10 @@ pub fn get_device_info(target_ip: &str, port: u16, silent: bool) -> Result<Phoen
     )?;
     stream.set_read_timeout(Some(Duration::from_secs(DEFAULT_TIMEOUT)))?;
 
-    let resp = match send_recv(
+    let Some(resp) = send_recv(
         &mut stream,
         "0101001a005e000000000003000c494245544830314e305f4d00",
-    ) {
-        Some(r) => r,
-        None => anyhow::bail!("No response from Phoenix device"),
-    };
+    ) else { anyhow::bail!("No response from Phoenix device") };
 
     if resp.len() < 18 {
         anyhow::bail!("Short response from Phoenix device");
@@ -103,13 +100,10 @@ pub fn get_device_info(target_ip: &str, port: u16, silent: bool) -> Result<Phoen
         &mut stream,
         &format!("01050016005f000008ef00{code}00000022000402950000"),
     );
-    let ret = match send_recv(
+    let Some(ret) = send_recv(
         &mut stream,
         &format!("0106000e00610000881100{code}0400"),
-    ) {
-        Some(r) => r,
-        None => anyhow::bail!("No info response"),
-    };
+    ) else { anyhow::bail!("No info response") };
 
     let plc_type = if ret.len() >= 50 {
         String::from_utf8_lossy(&ret[30..50])
@@ -204,10 +198,7 @@ pub fn control_ilc150(target_ip: &str, port: u16, action: &str, start_type: &str
     let _ = send_recv(&mut stream, KEEPALIVE_PACKET);
     std::thread::sleep(Duration::from_millis(500));
 
-    let ret = match send_recv(&mut stream, QUERY_PACKET) {
-        Some(r) => r,
-        None => return Ok("Unknown".to_string()),
-    };
+    let Some(ret) = send_recv(&mut stream, QUERY_PACKET) else { return Ok("Unknown".to_string()) };
 
     let hex = hex_encode(&ret);
     let state = if hex.len() > 50 {
@@ -266,5 +257,9 @@ fn hex_decode(s: &str) -> Vec<u8> {
 }
 
 fn hex_encode(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    use std::fmt::Write;
+    b.iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
 }

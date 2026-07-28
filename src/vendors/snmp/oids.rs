@@ -12,7 +12,6 @@ pub const IF_TABLE: &str = "1.3.6.1.2.1.2.2";
 pub const IF_COL_DESCR: u32 = 2;
 pub const IF_COL_SPEED: u32 = 5;
 pub const IF_COL_PHYS_ADDR: u32 = 6;
-pub const IF_COL_ADMIN_STATUS: u32 = 7;
 pub const IF_COL_OPER_STATUS: u32 = 8;
 pub const IF_COL_IN_ERRORS: u32 = 14;
 pub const IF_COL_OUT_ERRORS: u32 = 20;

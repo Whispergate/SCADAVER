@@ -1,22 +1,24 @@
 use crate::core::bytes::reverse_bytes;
 use rand::Rng;
 
-pub const DEFAULT_REMOTE_PORT: u16 = 10000;
-pub const DEFAULT_LOCAL_PORT: u16 = 31337;
+/// AMS routing addresses for an ADS packet.
+pub struct AmsRoute<'a> {
+    pub remote_netid: &'a str,
+    pub remote_port: u16,
+    pub local_netid: &'a str,
+    pub local_port: u16,
+}
 
 /// Construct a Beckhoff AMS/ADS packet as a hex string.
 pub fn construct_ams_packet(
-    remote_netid: &str,
-    local_netid: &str,
+    route: &AmsRoute<'_>,
     cmd_id: u16,
     ads_data_list: &AdsParams,
     invoke_id: Option<&str>,
     is_request: bool,
-    remote_port: u16,
-    local_port: u16,
 ) -> String {
-    let r_port = reverse_bytes(&format!("{remote_port:04x}"));
-    let l_port = reverse_bytes(&format!("{local_port:04x}"));
+    let r_port = reverse_bytes(&format!("{:04x}", route.remote_port));
+    let l_port = reverse_bytes(&format!("{:04x}", route.local_port));
     let s_cmd = reverse_bytes(&format!("{cmd_id:04x}"));
     let state_flag: u16 = if is_request { 4 } else { 5 };
     let s_state = reverse_bytes(&format!("{state_flag:04x}"));
@@ -35,8 +37,8 @@ pub fn construct_ams_packet(
     };
 
     let ams_data = format!(
-        "{remote_netid}{r_port}{local_netid}{l_port}{s_cmd}{s_state}{data_len}{:016}{invoke}{ads_data}",
-        0u64
+        "{}{}{}{}{}{}{}{:016}{}{ads_data}",
+        route.remote_netid, r_port, route.local_netid, l_port, s_cmd, s_state, data_len, 0u64, invoke
     );
 
     let ams_len = reverse_bytes(&format!("{:08x}", ams_data.len() / 2));
@@ -44,15 +46,14 @@ pub fn construct_ams_packet(
 }
 
 pub enum AdsParams {
-    None,
     Read(u32, u32, u32),
     Write(u32, u32, Vec<u8>),
     ReadState,
     WriteControl(u16, u16, Vec<u8>),
-    ReadWrite(u32, u32, u32, Vec<u8>),
 }
 
 fn build_ads_data(cmd_id: u16, params: &AdsParams) -> String {
+    use std::fmt::Write;
     match (cmd_id, params) {
         (2, AdsParams::Read(ig, io, len)) => {
             format!(
@@ -63,7 +64,10 @@ fn build_ads_data(cmd_id: u16, params: &AdsParams) -> String {
             )
         }
         (3, AdsParams::Write(ig, io, data)) => {
-            let hex_data: String = data.iter().map(|b| format!("{b:02x}")).collect();
+            let hex_data: String = data.iter().fold(String::new(), |mut s, b| {
+                let _ = write!(s, "{b:02x}");
+                s
+            });
             format!(
                 "{}{}{}{}",
                 reverse_bytes(&format!("{ig:08x}")),
@@ -72,9 +76,11 @@ fn build_ads_data(cmd_id: u16, params: &AdsParams) -> String {
                 hex_data
             )
         }
-        (4, AdsParams::ReadState) | (4, AdsParams::None) => String::new(),
         (5, AdsParams::WriteControl(ads_state, dev_state, data)) => {
-            let hex_data: String = data.iter().map(|b| format!("{b:02x}")).collect();
+            let hex_data: String = data.iter().fold(String::new(), |mut s, b| {
+                let _ = write!(s, "{b:02x}");
+                s
+            });
             format!(
                 "{}{}{}{}",
                 reverse_bytes(&format!("{ads_state:04x}")),
@@ -83,21 +89,12 @@ fn build_ads_data(cmd_id: u16, params: &AdsParams) -> String {
                 hex_data
             )
         }
-        (9, AdsParams::ReadWrite(ig, io, read_len, data)) => {
-            let hex_data: String = data.iter().map(|b| format!("{b:02x}")).collect();
-            format!(
-                "{}{}{}{}{}",
-                reverse_bytes(&format!("{ig:08x}")),
-                reverse_bytes(&format!("{io:08x}")),
-                reverse_bytes(&format!("{read_len:08x}")),
-                reverse_bytes(&format!("{:08x}", data.len())),
-                hex_data
-            )
-        }
         _ => String::new(),
     }
 }
 
+// Fields are exercised by unit tests; compiler doesn't count cfg(test) as "read".
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AmsResponse {
     pub packet_length: u32,
@@ -176,7 +173,7 @@ pub fn build_local_netid(local_ip: &str) -> String {
 }
 
 /// Decode raw ADS read response bytes into a human-readable string.
-/// type_name is the ADS type string (e.g. "BOOL", "INT", "REAL", "STRING(80)").
+/// `type_name` is the ADS type string (e.g. "BOOL", "INT", "REAL", "STRING(80)").
 pub fn decode_ads_value(type_name: &str, bytes: &[u8]) -> String {
     let t = type_name.trim().to_uppercase();
 
@@ -197,7 +194,7 @@ pub fn decode_ads_value(type_name: &str, bytes: &[u8]) -> String {
             None => hex_dump(bytes),
         },
         "SINT" => match bytes.first() {
-            Some(&b) => (b as i8).to_string(),
+            Some(&b) => i8::from_ne_bytes([b]).to_string(),
             None => hex_dump(bytes),
         },
         "WORD" | "UINT" => decode_uint_le(bytes, 2),
@@ -236,10 +233,9 @@ fn decode_uint_le(bytes: &[u8], n: usize) -> String {
     if bytes.len() < n {
         return hex_dump(bytes);
     }
-    let mut v: u64 = 0;
-    for i in 0..n {
-        v |= (bytes[i] as u64) << (8 * i);
-    }
+    let v: u64 = bytes[..n].iter().enumerate().fold(0u64, |acc, (i, &b)| {
+        acc | u64::from(b) << (8 * i)
+    });
     v.to_string()
 }
 
@@ -247,16 +243,23 @@ fn decode_int_le(bytes: &[u8], n: usize) -> String {
     if bytes.len() < n {
         return hex_dump(bytes);
     }
-    let mut v: u64 = 0;
-    for i in 0..n {
-        v |= (bytes[i] as u64) << (8 * i);
-    }
     let signed: i64 = match n {
-        2 => (v as u16 as i16) as i64,
-        4 => (v as u32 as i32) as i64,
-        _ => v as i64,
+        2 => i64::from(i16::from_le_bytes([bytes[0], bytes[1]])),
+        4 => i64::from(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+        _ => i64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+        ]),
     };
     signed.to_string()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
 #[cfg(test)]
@@ -271,14 +274,14 @@ mod tests {
         body.extend_from_slice(&31337u16.to_le_bytes());
         body.extend_from_slice(&2u16.to_le_bytes());
         body.extend_from_slice(&5u16.to_le_bytes());
-        body.extend_from_slice(&(ads_data.len() as u32).to_le_bytes());
+        body.extend_from_slice(&u32::try_from(ads_data.len()).unwrap_or(u32::MAX).to_le_bytes());
         body.extend_from_slice(&0u32.to_le_bytes());
-        body.extend_from_slice(&0xAABBCCDDu32.to_le_bytes());
+        body.extend_from_slice(&0xAABB_CCDD_u32.to_le_bytes());
         body.extend_from_slice(ads_data);
 
         let mut response = Vec::new();
         response.extend_from_slice(&[0, 0]);
-        response.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        response.extend_from_slice(&u32::try_from(body.len()).unwrap_or(u32::MAX).to_le_bytes());
         response.extend_from_slice(&body);
         response
     }
@@ -315,8 +318,4 @@ mod tests {
             "\"hello\""
         );
     }
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

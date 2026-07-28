@@ -23,31 +23,29 @@ fn hex_decode(s: &str) -> Vec<u8> {
 }
 
 fn hex_encode(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    use std::fmt::Write;
+    b.iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
 }
 
-/// Establish a COTP + S7Comm session.
+/// Establish a COTP + `S7Comm` session.
 pub fn setup_connection(ip: &str, port: u16, timeout_secs: u64) -> Option<TcpStream> {
     for tsap in COTP_TSAPS {
         let addr = format!("{ip}:{port}");
-        let mut stream = match TcpStream::connect_timeout(
+        let Ok(mut stream) = TcpStream::connect_timeout(
             &addr.parse().ok()?,
             Duration::from_secs(timeout_secs),
-        ) {
-            Ok(s) => s,
-            Err(_) => return None,
-        };
+        ) else { return None };
         let _ = stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)));
 
         // COTP Connection Request
         let cotp_pkt = format!(
             "03000016 11e00000000100c0010ac1020100{tsap}"
         );
-        let cotp_resp = match send_recv(&mut stream, &hex_decode(&cotp_pkt)) {
-            Some(r) => r,
-            None => {
-                continue;
-            }
+        let Some(cotp_resp) = send_recv(&mut stream, &hex_decode(&cotp_pkt)) else {
+            continue;
         };
         let cotp_hex = hex_encode(&cotp_resp);
         if cotp_hex.len() < 12 || &cotp_hex[10..12] != "d0" {
@@ -56,10 +54,7 @@ pub fn setup_connection(ip: &str, port: u16, timeout_secs: u64) -> Option<TcpStr
 
         // S7Comm Setup
         let s7_pkt = "0300001902f08032010000722f00080000f0000001000101e0";
-        let s7_resp = match send_recv(&mut stream, &hex_decode(s7_pkt)) {
-            Some(r) => r,
-            None => continue,
-        };
+        let Some(s7_resp) = send_recv(&mut stream, &hex_decode(s7_pkt)) else { continue };
         let s7_hex = hex_encode(&s7_resp);
         if s7_hex.len() < 20 || &s7_hex[18..20] != "00" {
             continue;
@@ -87,7 +82,7 @@ fn send_recv(stream: &mut TcpStream, data: &[u8]) -> Option<Vec<u8>> {
     Some(full)
 }
 
-/// Send an S7Comm UserData SZL read request and return the raw TPKT response.
+/// Send an `S7Comm` `UserData` SZL read request and return the raw TPKT response.
 fn read_szl(stream: &mut TcpStream, szl_id: u16, szl_index: u16) -> Option<Vec<u8>> {
     let [id_hi, id_lo] = szl_id.to_be_bytes();
     let [idx_hi, idx_lo] = szl_index.to_be_bytes();
@@ -139,9 +134,8 @@ pub fn read_all_data(
     result.insert("outputs".into(), None);
     result.insert("merkers".into(), None);
 
-    let mut stream = match connect_authenticated(ip, port, timeout_secs, password) {
-        Some(s) => s,
-        None => return result,
+    let Some(mut stream) = connect_authenticated(ip, port, timeout_secs, password) else {
+        return result;
     };
 
     let base = "0300001f02f08032010000732f000e00000401120a1006000100008{area}000000";
@@ -149,10 +143,7 @@ pub fn read_all_data(
     for (label, area) in &[("inputs", "1"), ("outputs", "2"), ("merkers", "3")] {
         let pkt_str = base.replace("{area}", area);
         let pkt = hex_decode(&pkt_str);
-        let resp = match send_recv(&mut stream, &pkt) {
-            Some(r) => r,
-            None => continue,
-        };
+        let Some(resp) = send_recv(&mut stream, &pkt) else { continue };
         result.insert(label.to_string(), parse_coil_data(&hex_encode(&resp), label));
     }
 
@@ -184,11 +175,11 @@ fn parse_coil_data(s7_hex: &str, label: &str) -> Option<HashMap<String, u8>> {
     }
 
     let mut result = HashMap::new();
-    for (i, chunk) in items[8..].as_bytes().chunks(2).enumerate() {
+    for (i, chunk) in items.as_bytes()[8..].chunks(2).enumerate() {
         let hex = std::str::from_utf8(chunk).ok()?;
         let byte_val = u8::from_str_radix(hex, 16).unwrap_or(0);
         for bit in 0..8u8 {
-            let val = if byte_val & (1 << bit) != 0 { 1 } else { 0 };
+            let val = u8::from(byte_val & (1 << bit) != 0);
             result.insert(format!("{i}.{bit}"), val);
         }
     }
@@ -198,18 +189,14 @@ fn parse_coil_data(s7_hex: &str, label: &str) -> Option<HashMap<String, u8>> {
 /// Write output bits to an S7 PLC.
 pub fn set_outputs(ip: &str, binary_str: &str, port: u16, timeout_secs: u64, password: Option<&str>) -> bool {
     let hex_val = bits_to_hex_byte(binary_str);
-    let mut stream = match connect_authenticated(ip, port, timeout_secs, password) {
-        Some(s) => s,
-        None => return false,
+    let Some(mut stream) = connect_authenticated(ip, port, timeout_secs, password) else {
+        return false;
     };
 
     let pkt_str = format!(
         "03000024 02f08032010000732f000e00050501120a10020001000082000000000400 08{hex_val}"
     );
-    let resp = match send_recv(&mut stream, &hex_decode(&pkt_str)) {
-        Some(r) => r,
-        None => return false,
-    };
+    let Some(resp) = send_recv(&mut stream, &hex_decode(&pkt_str)) else { return false };
     let hex = hex_encode(&resp);
     hex.len() >= 2 && &hex[hex.len() - 2..] == "ff"
 }
@@ -224,21 +211,17 @@ pub fn set_merkers(
     password: Option<&str>,
 ) -> bool {
     let hex_val = bits_to_hex_byte(binary_str);
-    let bit_addr = (offset as u64 * 8) as usize;
+    let bit_addr = usize::try_from(u64::from(offset) * 8).unwrap_or(usize::MAX);
     let merker_offset = format!("{bit_addr:06x}");
 
-    let mut stream = match connect_authenticated(ip, port, timeout_secs, password) {
-        Some(s) => s,
-        None => return false,
+    let Some(mut stream) = connect_authenticated(ip, port, timeout_secs, password) else {
+        return false;
     };
 
     let pkt_str = format!(
         "03000025 02f080320100001500000e00060501120a10040001000083{merker_offset}00040010{hex_val}00"
     );
-    let resp = match send_recv(&mut stream, &hex_decode(&pkt_str)) {
-        Some(r) => r,
-        None => return false,
-    };
+    let Some(resp) = send_recv(&mut stream, &hex_decode(&pkt_str)) else { return false };
     let hex = hex_encode(&resp);
     hex.len() >= 2 && &hex[hex.len() - 2..] == "ff"
 }
@@ -343,7 +326,7 @@ pub fn list_data_blocks(ip: &str, port: u16, timeout_secs: u64, password: Option
     for db_num in 1..=200u16 {
         if let Ok(data) = read_data_block(ip, db_num, 0, 2, port, timeout_secs, password) {
             if !data.is_empty() {
-                blocks.push((db_num, data.len() as u16));
+                blocks.push((db_num, u16::try_from(data.len()).unwrap_or(u16::MAX)));
             }
         }
     }
@@ -431,23 +414,28 @@ pub fn change_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> bool {
     }
 
     let addr = format!("{ip}:{port}");
-    let mut stream = match TcpStream::connect_timeout(
+    let Ok(mut stream) = TcpStream::connect_timeout(
         &addr.parse().unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap()),
         Duration::from_secs(timeout_secs),
-    ) {
-        Ok(s) => s,
-        Err(_) => return false,
+    ) else {
+        return false;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)));
 
-    // COTP CR for state change
-    let _ = send_recv(
+    // COTP CR for state change — validate Connection Confirm
+    let Some(cotp_resp) = send_recv(
         &mut stream,
         &hex_decode("03000016 11e00000002500c1020600c2020600c0010a"),
-    );
+    ) else {
+        return false;
+    };
+    let cotp_hex = hex_encode(&cotp_resp);
+    if cotp_hex.len() < 12 || &cotp_hex[10..12] != "d0" {
+        return false;
+    }
 
     // SubscriptionContainer
-    let sub_resp = match send_recv(
+    let Some(sub_resp) = send_recv(
         &mut stream,
         &hex_decode(
             "030000c002f080720100b131000004ca0000000200000120360000011d 00040000000000a1000000d3821f0000a3816900\
@@ -456,15 +444,14 @@ pub fn change_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> bool {
              a3822d001500a1000000d3817f0000a3816900 1515537562736372697074696f6e436f6e7461696e 6572a2a2000000\
              0072010000",
         ),
-    ) {
-        Some(r) => r,
-        None => return false,
+    ) else {
+        return false;
     };
 
     if sub_resp.len() < 25 {
         return false;
     }
-    let sid_byte = ((sub_resp[24] as u32 + 0x80) & 0xFF) as u8;
+    let sid_byte = ((u32::from(sub_resp[24]) + 0x80) & 0xFF) as u8;
     let sid = format!("{sid_byte:02x}");
 
     let cmd_byte = if cur_state == "Stopped" { "ce" } else { "88" };
@@ -485,7 +472,7 @@ pub fn change_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> bool {
     let _ = send_recv(&mut stream, &hex_decode(&pkt3));
 
     // Drain
-    let mut drain_buf = [0u8; BUFFER_SIZE];
+    let mut drain_buf = vec![0u8; BUFFER_SIZE];
     for _ in 0..10 {
         match stream.read(&mut drain_buf) {
             Ok(0) | Err(_) => break,
@@ -498,23 +485,10 @@ pub fn change_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> bool {
     let final_pkt = format!(
         "0300004302f0807202003431000004f200000008000003{sid}36000000340190770008{action_byte}000004e889690012 00000000896a001300896b000400000000000000 72020000"
     );
-    let _ = send_recv(&mut stream, &hex_decode(&final_pkt));
-
-    true
+    send_recv(&mut stream, &hex_decode(&final_pkt)).is_some()
 }
 
-/// Read SZL 0x0011 (module identification) and return (order_number, firmware_version).
-///
-/// The order number (MLFB) is the CPU model string, e.g. "6ES7 315-2EH14-0AB0".
-/// Firmware version is formatted as "V{major}.{minor}".
-pub fn get_module_info(ip: &str, port: u16, timeout_secs: u64) -> (Option<String>, Option<String>) {
-    let Some(mut stream) = setup_connection(ip, port, timeout_secs) else {
-        return (None, None);
-    };
-    module_info_from_stream(&mut stream)
-}
-
-/// XOR-encode a password for S7Comm SetPassword (padded to 8 bytes with spaces).
+/// XOR-encode a password for `S7Comm` `SetPassword` (padded to 8 bytes with spaces).
 fn encode_password(pw: &str) -> [u8; 8] {
     let mut enc = [0x20u8; 8];
     for (i, &b) in pw.as_bytes().iter().take(8).enumerate() {
@@ -523,7 +497,7 @@ fn encode_password(pw: &str) -> [u8; 8] {
     enc
 }
 
-/// Send SetPassword (S7Comm UserData subfunction 0x45) on an existing session.
+/// Send `SetPassword` (`S7Comm` `UserData` subfunction 0x45) on an existing session.
 ///
 /// Returns `true` if the PLC accepted the password (error code in response = 0x0000).
 pub fn set_password(stream: &mut TcpStream, password: &str) -> bool {

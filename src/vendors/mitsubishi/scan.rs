@@ -75,22 +75,19 @@ fn split_on<'a>(data: &'a [u8], sep: &[u8]) -> Vec<&'a [u8]> {
     let mut result = Vec::new();
     let mut start = 0;
     while start <= data.len() {
-        match data[start..].windows(sep.len()).position(|w| w == sep) {
-            Some(pos) => {
-                result.push(&data[start..start + pos]);
-                start += pos + sep.len();
-            }
-            None => {
-                result.push(&data[start..]);
-                break;
-            }
+        if let Some(pos) = data[start..].windows(sep.len()).position(|w| w == sep) {
+            result.push(&data[start..start + pos]);
+            start += pos + sep.len();
+        } else {
+            result.push(&data[start..]);
+            break;
         }
     }
     result
 }
 
 fn decode_utf16(bytes: &[u8]) -> Option<String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
     let words: Vec<u16> = bytes

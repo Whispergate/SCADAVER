@@ -4,29 +4,13 @@ use std::path::PathBuf;
 /// Top-level structure of `~/.config/scadaver/creds.toml`.
 #[derive(Deserialize, Default)]
 pub struct CredConfig {
-    #[serde(default)] pub siemens:   SiemensCreds,
-    #[serde(default)] pub beckhoff:  PairCreds,
-    #[serde(default)] pub schneider: PairCreds,
-    #[serde(default)] pub phoenix:   PairCreds,
+    #[serde(default)] pub siemens: SiemensCreds,
 }
 
-/// S7Comm only uses a password (no username).
+/// `S7Comm` only uses a password (no username).
 #[derive(Deserialize, Default)]
 pub struct SiemensCreds {
     pub passwords: Vec<String>,
-}
-
-/// Username + password pair for vendors that use HTTP or ADS auth.
-#[derive(Deserialize, Clone)]
-pub struct CredPair {
-    pub username: String,
-    pub password: String,
-}
-
-/// Generic list of credential pairs.
-#[derive(Deserialize, Default)]
-pub struct PairCreds {
-    pub creds: Vec<CredPair>,
 }
 
 pub fn creds_path() -> PathBuf {
@@ -51,24 +35,6 @@ const SAMPLE_TOML: &str = r#"# SCADAver credential lists — loaded at runtime, 
 [siemens]
 # S7Comm password-only (no username). Add known/leaked passwords first.
 passwords = []
-
-[beckhoff]
-# Windows local account pairs (username, password).
-creds = [
-    # { username = "Administrator", password = "MyPass" },
-]
-
-[schneider]
-# Modicon web interface credentials.
-creds = [
-    # { username = "USER", password = "USER" },
-]
-
-[phoenix]
-# Phoenix Contact web/ProConOS credentials.
-creds = [
-    # { username = "admin", password = "admin" },
-]
 "#;
 
 /// Write a commented sample `creds.toml` if none exists yet.
@@ -78,6 +44,6 @@ pub fn ensure_sample_exists() {
         return;
     }
     if let Err(e) = std::fs::write(&path, SAMPLE_TOML) {
-        eprintln!("[!] Could not write sample creds.toml to {path:?}: {e}");
+        eprintln!("[!] Could not write sample creds.toml to {}: {e}", path.display());
     }
 }

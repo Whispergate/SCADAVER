@@ -25,6 +25,7 @@ class PortProfile:
     beckhoff_discovery: int
     siemens: int
     ewon: int
+    snmp: int
 
 
 PROFILES = {
@@ -35,6 +36,7 @@ PROFILES = {
         beckhoff_discovery=48899,
         siemens=102,
         ewon=80,
+        snmp=161,
     ),
     "high": PortProfile(
         modbus=1502,
@@ -43,6 +45,7 @@ PROFILES = {
         beckhoff_discovery=48899,
         siemens=1102,
         ewon=8080,
+        snmp=1161,
     ),
 }
 
@@ -80,6 +83,7 @@ def selected_ports(args: argparse.Namespace) -> PortProfile:
         ),
         siemens=valid_port(args.siemens_port or profile.siemens, "siemens port"),
         ewon=valid_port(args.ewon_port or profile.ewon, "ewon port"),
+        snmp=valid_port(args.snmp_port or profile.snmp, "snmp port"),
     )
 
 
@@ -122,6 +126,12 @@ def build_specs(host: str, ports: PortProfile) -> list[SimSpec]:
             "ewon_sim.py",
             ("--host", host, "--port", str(ports.ewon)),
             tcp_ports=(ports.ewon,),
+        ),
+        SimSpec(
+            "snmp",
+            "snmp_sim.py",
+            ("--host", host, "--port", str(ports.snmp)),
+            udp_ports=(ports.snmp,),
         ),
     ]
 
@@ -191,6 +201,7 @@ def print_scadaver_hints(host: str, ports: PortProfile) -> None:
     print(f"  scadaver scan beckhoff -i {target} --port {ports.beckhoff_ads}")
     print(f"  scadaver scan siemens -i {target} --port {ports.siemens}")
     print(f"  scadaver scan ewon -i {target} --port {ports.ewon}")
+    print(f"  scadaver snmp enum -t {target} --port {ports.snmp}")
 
 
 def install_dependencies() -> None:
@@ -272,10 +283,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beckhoff-discovery-port", type=int)
     parser.add_argument("--siemens-port", type=int)
     parser.add_argument("--ewon-port", type=int)
+    parser.add_argument("--snmp-port", type=int)
     parser.add_argument(
         "--only",
         nargs="+",
-        choices=["modbus", "slmp", "beckhoff", "siemens", "ewon"],
+        choices=["modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp"],
         help="start only selected simulators",
     )
     parser.add_argument(

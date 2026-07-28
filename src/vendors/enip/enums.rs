@@ -42,9 +42,7 @@ pub fn device_type_name(id: u32) -> String {
     .into_iter()
     .collect();
 
-    map.get(&id)
-        .map(|s| (*s).to_string())
-        .unwrap_or_else(|| format!("Unknown ({id})"))
+    map.get(&id).map_or_else(|| format!("Unknown ({id})"), |s| (*s).to_string())
 }
 
 pub fn vendor_name(id: u32) -> String {
@@ -78,7 +76,5 @@ pub fn vendor_name(id: u32) -> String {
     .into_iter()
     .collect();
 
-    map.get(&id)
-        .map(|s| (*s).to_string())
-        .unwrap_or_else(|| format!("Unknown ({id})"))
+    map.get(&id).map_or_else(|| format!("Unknown ({id})"), |s| (*s).to_string())
 }

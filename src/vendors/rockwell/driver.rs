@@ -34,7 +34,6 @@ pub struct LogixDevice {
     pub revision: String,
     pub serial: String,
     pub product_name: String,
-    pub ip: String,
 }
 
 struct EipSession {
@@ -77,21 +76,22 @@ impl EipSession {
     /// The returned slice starts with the 2-byte type word echo, followed by
     /// the element data — pass it directly to `decode_value`.
     fn read_tag_cip(&mut self, tag_name: &str) -> Result<Vec<u8>> {
+        const CIP_OFF: usize = 40;
         let name_bytes = tag_name.as_bytes();
         if name_bytes.len() > 255 {
             anyhow::bail!("Tag name too long (max 255 bytes for CIP ANSI Symbolic Segment)");
         }
-        let path_size = (1 + (name_bytes.len() + 1) / 2) as u8;
+        // name_bytes.len() ≤ 255, so these casts are safe
+        let path_size = u8::try_from(1 + name_bytes.len().div_ceil(2)).unwrap_or(u8::MAX);
 
-        let mut cip = vec![0x4c, path_size, 0x91, name_bytes.len() as u8];
+        let mut cip = vec![0x4c, path_size, 0x91, u8::try_from(name_bytes.len()).unwrap_or(u8::MAX)];
         cip.extend_from_slice(name_bytes);
-        if name_bytes.len() % 2 != 0 {
+        if !name_bytes.len().is_multiple_of(2) {
             cip.push(0); // pad to even
         }
         cip.extend_from_slice(&[0x01, 0x00]); // element count = 1
 
         let resp = self.send_rr_data(&cip)?;
-        const CIP_OFF: usize = 40;
         if resp.len() < CIP_OFF + 4 {
             anyhow::bail!("Short read response ({} bytes)", resp.len());
         }
@@ -127,7 +127,7 @@ impl EipSession {
         packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
         // Item 2: Unconnected Data
         packet.extend_from_slice(&[0xb2, 0x00]);
-        packet.extend_from_slice(&(cip_data.len() as u16).to_le_bytes());
+        packet.extend_from_slice(&u16::try_from(cip_data.len()).unwrap_or(u16::MAX).to_le_bytes());
         packet.extend_from_slice(cip_data);
 
         self.stream.write_all(&packet)?;
@@ -186,7 +186,7 @@ fn list_identity_tcp(ip: &str, port: u16) -> Result<LogixDevice> {
     parse_list_identity_response(&buf, ip)
 }
 
-fn parse_list_identity_response(data: &[u8], ip: &str) -> Result<LogixDevice> {
+fn parse_list_identity_response(data: &[u8], _ip: &str) -> Result<LogixDevice> {
     if data.len() < 4 || data[0] != 0x63 || data[1] != 0x00 {
         anyhow::bail!("Not a List Identity response");
     }
@@ -226,20 +226,18 @@ fn parse_list_identity_response(data: &[u8], ip: &str) -> Result<LogixDevice> {
         revision,
         serial,
         product_name,
-        ip: ip.to_string(),
     })
 }
 
 fn get_device_info_cip(ip: &str, port: u16) -> Result<LogixDevice> {
+    // CIP starts at offset 40 (24-byte EIP header + 16-byte CPF overhead).
+    // d[0]=service_echo, d[1]=reserved, d[2]=status, d[3]=ext_status_size, d[4..]=data.
+    const CIP_OFF: usize = 40;
     let mut session = EipSession::connect(ip, port).context("EIP session failed")?;
 
     // CIP Get Attribute All on Identity Object (class 0x01, instance 1) — Logix only
     let cip = &[0x01, 0x02, 0x20, 0x01, 0x24, 0x01];
     let resp = session.send_rr_data(cip)?;
-
-    // CIP starts at offset 40 (24-byte EIP header + 16-byte CPF overhead).
-    // d[0]=service_echo, d[1]=reserved, d[2]=status, d[3]=ext_status_size, d[4..]=data.
-    const CIP_OFF: usize = 40;
     if resp.len() < CIP_OFF + 18 {
         anyhow::bail!(
             "Device returned {} bytes — not a Logix controller, or CIP Get Attribute All \
@@ -277,12 +275,12 @@ fn get_device_info_cip(ip: &str, port: u16) -> Result<LogixDevice> {
         revision,
         serial,
         product_name,
-        ip: ip.to_string(),
     })
 }
 
 /// Enumerate tags from Logix controller's symbol list. Pass `port = 0` for the default (44818).
 pub fn enumerate_tags(ip: &str, port: u16) -> Result<Vec<LogixTag>> {
+    const CIP_OFF: usize = 40;
     let mut session = EipSession::connect(ip, port).context("EIP session failed")?;
     let mut tags = Vec::new();
     let mut last_instance = 0u32;
@@ -314,7 +312,6 @@ pub fn enumerate_tags(ip: &str, port: u16) -> Result<Vec<LogixTag>> {
         let resp = session.send_rr_data(&cip)?;
 
         // CIP starts at offset 40; need at least status byte at +2.
-        const CIP_OFF: usize = 40;
         if resp.len() < CIP_OFF + 4 {
             break;
         }
@@ -371,7 +368,7 @@ pub fn enumerate_tags(ip: &str, port: u16) -> Result<Vec<LogixTag>> {
             let name = String::from_utf8_lossy(&attr_data[pos..pos + name_len]).to_string();
             pos += name_len;
             // SSTRING is padded to an even byte boundary
-            if name_len % 2 != 0 {
+            if !name_len.is_multiple_of(2) {
                 pos += 1;
             }
 
@@ -419,10 +416,7 @@ pub fn read_tags_bulk(ip: &str, port: u16, tag_names: &[&str]) -> Vec<Option<Vec
     if tag_names.is_empty() {
         return Vec::new();
     }
-    let mut session = match EipSession::connect(ip, port) {
-        Ok(s) => s,
-        Err(_) => return vec![None; tag_names.len()],
-    };
+    let Ok(mut session) = EipSession::connect(ip, port) else { return vec![None; tag_names.len()] };
     tag_names
         .iter()
         .map(|name| session.read_tag_cip(name).ok())
@@ -449,7 +443,7 @@ pub fn decode_value(tag_type: u16, cip_data: &[u8]) -> String {
         // SINT — 1-byte signed
         0xC2 => {
             if val.is_empty() { return "?".to_string(); }
-            (val[0] as i8).to_string()
+            i8::from_ne_bytes([val[0]]).to_string()
         }
         // INT — 2-byte signed
         0xC3 => {
@@ -510,8 +504,13 @@ pub fn decode_value(tag_type: u16, cip_data: &[u8]) -> String {
         }
         // Everything else — show raw hex
         _ => {
+            use std::fmt::Write;
             if val.is_empty() { return "-".to_string(); }
-            format!("0x{}", val.iter().map(|b| format!("{b:02x}")).collect::<String>())
+            let hex = val.iter().fold(String::new(), |mut s, b| {
+                let _ = write!(s, "{b:02x}");
+                s
+            });
+            format!("0x{hex}")
         }
     }
 }
@@ -519,6 +518,7 @@ pub fn decode_value(tag_type: u16, cip_data: &[u8]) -> String {
 /// Write raw bytes to a named tag.
 /// Pass `port = 0` for the default EtherNet/IP port (44818).
 pub fn write_tag(ip: &str, port: u16, tag_name: &str, type_code: u16, value_bytes: &[u8]) -> Result<()> {
+    const CIP_OFF: usize = 40;
     let mut session = EipSession::connect(ip, port)?;
 
     let name_bytes = tag_name.as_bytes();
@@ -526,16 +526,17 @@ pub fn write_tag(ip: &str, port: u16, tag_name: &str, type_code: u16, value_byte
     if name_bytes.len() > 255 {
         anyhow::bail!("Tag name too long (max 255 bytes for CIP ANSI Symbolic Segment)");
     }
-    let path_size = (1 + (name_bytes.len() + 1) / 2) as u8;
+    // name_bytes.len() ≤ 255, so these casts are safe
+    let path_size = u8::try_from(1 + name_bytes.len().div_ceil(2)).unwrap_or(u8::MAX);
 
     let mut cip = vec![
         0x4d, // Write Tag service
         path_size,
         0x91,
-        name_bytes.len() as u8, // safe: checked ≤255 above
+        u8::try_from(name_bytes.len()).unwrap_or(u8::MAX),
     ];
     cip.extend_from_slice(name_bytes);
-    if name_bytes.len() % 2 != 0 {
+    if !name_bytes.len().is_multiple_of(2) {
         cip.push(0);
     }
     cip.extend_from_slice(&type_code.to_le_bytes());
@@ -543,7 +544,6 @@ pub fn write_tag(ip: &str, port: u16, tag_name: &str, type_code: u16, value_byte
     cip.extend_from_slice(value_bytes);
 
     let resp = session.send_rr_data(&cip)?;
-    const CIP_OFF: usize = 40;
     if resp.len() < CIP_OFF + 4 {
         anyhow::bail!("Short write response ({} bytes)", resp.len());
     }
