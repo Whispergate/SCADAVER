@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_lines)]
-use crate::core::autodetect::{detect_device, DeviceInfo};
+use crate::core::autodetect::{probe_all, DeviceInfo};
 use crate::core::network::{get_interfaces, local_ip_for, NetworkInterface};
 use crate::db::{Database, DeviceRecord};
 use anyhow::Result;
@@ -1397,34 +1397,65 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
             }
         }
 
-        if let Some(info) = detect_device(&target.ip, 8) {
-            let _ = tx.send(ScanEvent::Output(format!(
-                "[+] {} \u{2192} {}",
-                target.ip, info.vendor
-            )));
-            let _ = tx.send(ScanEvent::DeviceFound(info));
-            let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
-        } else {
-            if let Some(port) = target.port {
-                let mut fields = HashMap::new();
-                fields.insert("port".into(), Value::Number(i64::from(port).into()));
+        let all = probe_all(&target.ip, 8);
+        match all.len() {
+            0 => {
+                if let Some(port) = target.port {
+                    let mut fields = HashMap::new();
+                    fields.insert("port".into(), Value::Number(i64::from(port).into()));
+                    let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
+                        vendor: "unknown".into(),
+                        ip: target.ip.clone(),
+                        fields,
+                    }));
+                    let _ = tx.send(ScanEvent::Output(format!(
+                        "[!] {label} - no device identified; stored with custom port"
+                    )));
+                } else {
+                    let _ = tx.send(ScanEvent::Output(format!(
+                        "[-] {} \u{2014} no device identified",
+                        target.ip
+                    )));
+                }
+                let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete (no result)")));
+            }
+            1 => {
+                let info = all.into_iter().next().unwrap();
+                let _ = tx.send(ScanEvent::Output(format!(
+                    "[+] {} \u{2192} {}",
+                    target.ip, info.vendor
+                )));
+                let _ = tx.send(ScanEvent::DeviceFound(info));
+                let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
+            }
+            _ => {
+                let protocols: Vec<String> = all.iter().map(|d| d.vendor.clone()).collect();
+                let proto_str = protocols.join(", ");
+                let _ = tx.send(ScanEvent::Output(format!(
+                    "[+] {} \u{2192} MULTI ({proto_str})",
+                    target.ip
+                )));
+                let mut fields: HashMap<String, Value> = HashMap::new();
+                fields.insert(
+                    "protocols".into(),
+                    Value::Array(
+                        protocols
+                            .iter()
+                            .map(|p| Value::String(p.clone()))
+                            .collect(),
+                    ),
+                );
+                for d in all {
+                    let vf = serde_json::to_value(&d.fields).unwrap_or_default();
+                    fields.insert(d.vendor, vf);
+                }
                 let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
-                    vendor: "unknown".into(),
+                    vendor: "multi".into(),
                     ip: target.ip.clone(),
                     fields,
                 }));
-                let _ = tx.send(ScanEvent::Output(format!(
-                    "[!] {label} - no device identified; stored with custom port"
-                )));
-            } else {
-                let _ = tx.send(ScanEvent::Output(format!(
-                    "[-] {} \u{2014} no device identified",
-                    target.ip
-                )));
+                let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
             }
-            let _ = tx.send(ScanEvent::Done(format!(
-                "Scan of {label} complete (no result)"
-            )));
         }
     });
 }
@@ -1750,13 +1781,37 @@ fn dispatch_exploit(
         ("snmp", 7) => exploit_snmp_apc_status(ip, port, &out),
         ("snmp", 8) => exploit_snmp_apc_shutdown(ip, port, input, &out),
         _ => {
-            // Auto-detect rescan: emit a DeviceFound event
+            // Auto-detect rescan: probe all protocols, emit DeviceFound
             out(&format!("[*] Auto-detecting {ip}..."));
-            if let Some(info) = detect_device(ip, 8) {
-                out(&format!("[+] {} \u{2192} {}", ip, info.vendor));
-                let _ = tx.send(ScanEvent::DeviceFound(info));
-            } else {
-                out(&format!("[-] {ip} — no device identified"));
+            let all = probe_all(ip, 8);
+            match all.len() {
+                0 => out(&format!("[-] {ip} — no device identified")),
+                1 => {
+                    let info = all.into_iter().next().unwrap();
+                    out(&format!("[+] {} \u{2192} {}", ip, info.vendor));
+                    let _ = tx.send(ScanEvent::DeviceFound(info));
+                }
+                _ => {
+                    let protocols: Vec<String> =
+                        all.iter().map(|d| d.vendor.clone()).collect();
+                    out(&format!("[+] {} \u{2192} MULTI ({})", ip, protocols.join(", ")));
+                    let mut fields: HashMap<String, Value> = HashMap::new();
+                    fields.insert(
+                        "protocols".into(),
+                        Value::Array(
+                            protocols.iter().map(|p| Value::String(p.clone())).collect(),
+                        ),
+                    );
+                    for d in all {
+                        let vf = serde_json::to_value(&d.fields).unwrap_or_default();
+                        fields.insert(d.vendor, vf);
+                    }
+                    let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
+                        vendor: "multi".into(),
+                        ip: ip.to_string(),
+                        fields,
+                    }));
+                }
             }
         }
     }
@@ -4148,6 +4203,7 @@ fn vendor_color(vendor: &str) -> Color {
         "ewon" => Color::White,
         "omron" => Color::LightYellow,
         "iec104" => Color::LightCyan,
+        "multi" => Color::Rgb(255, 140, 0),
         _ => Color::Gray,
     }
 }
@@ -4166,10 +4222,22 @@ fn draw_device_list(frame: &mut Frame, area: Rect, app: &mut App) {
         .map(|&idx| {
             let dev = &app.devices[idx];
             let c = vendor_color(&dev.vendor);
-            let mut name = dev.vendor.clone();
-            if let Some(s) = name.get_mut(0..1) {
-                s.make_ascii_uppercase();
-            }
+            let name = if dev.vendor == "multi" {
+                if let Some(arr) = dev.fields.get("protocols").and_then(|v| v.as_array()) {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" + ")
+                } else {
+                    "multi-protocol".into()
+                }
+            } else {
+                let mut n = dev.vendor.clone();
+                if let Some(s) = n.get_mut(0..1) {
+                    s.make_ascii_uppercase();
+                }
+                n
+            };
             ListItem::new(vec![
                 Line::from(Span::styled(
                     format!(" {} ", dev.ip),
@@ -4906,6 +4974,55 @@ fn draw_help(frame: &mut Frame, area: Rect) {
             "  Gray     Action unavailable for detected capabilities",
             s.fg(Color::DarkGray),
         )),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Device List Colors",
+            s.fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::Cyan)),
+            Span::styled("Cyan        Beckhoff TwinCAT", s.fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::Blue)),
+            Span::styled("Blue        Siemens S7", s.fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::Yellow)),
+            Span::styled("Yellow      Rockwell / EtherNet\u{b7}IP", s.fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::Green)),
+            Span::styled("Green       Schneider / Modicon", s.fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::Magenta)),
+            Span::styled("Magenta     Mitsubishi MELSEC", s.fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::Red)),
+            Span::styled("Red         Phoenix Contact", s.fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::LightYellow)),
+            Span::styled("Lt.Yellow   Omron FINS", s.fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::LightCyan)),
+            Span::styled("Lt.Cyan     IEC 60870-5-104", s.fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::White)),
+            Span::styled("White       eWON Flexy", s.fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::Rgb(255, 140, 0))),
+            Span::styled("Orange      Multi-service host (multiple protocols)", s.fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  \u{25cf} ", s.fg(Color::Gray)),
+            Span::styled("Gray        Unknown / SNMP-only", s.fg(Color::White)),
+        ]),
         Line::from(""),
         Line::from(Span::styled(
             " Output",
