@@ -1,6 +1,6 @@
 param(
     [ValidateSet("canonical", "high")]
-    [string]$Profile = "canonical",
+    [string]$Profile = "high",
     [string]$HostAddress = "0.0.0.0",
     [int]$ModbusPort = 0,
     [int]$SlmpPort = 0,

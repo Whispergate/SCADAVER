@@ -235,6 +235,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=1161, help="UDP port (default 1161)")
     args = parser.parse_args()
 
+    socketserver.UDPServer.allow_reuse_address = True
     with socketserver.UDPServer((args.host, args.port), SnmpHandler) as srv:
         print(f"[snmp_sim] listening on UDP {args.host}:{args.port}", flush=True)
         srv.serve_forever()

@@ -560,6 +560,14 @@ pub fn detect_device(ip: &str, timeout_secs: u64) -> Option<DeviceInfo> {
         .min_by_key(|r| vendor_priority(&r.vendor))
 }
 
+/// Probe all vendors in parallel. Returns every protocol that responded (one entry per service).
+pub fn probe_all(ip: &str, timeout_secs: u64) -> Vec<DeviceInfo> {
+    sweep(ip, timeout_secs)
+        .into_iter()
+        .filter_map(|outcome| outcome.device)
+        .collect()
+}
+
 // Keep hex module available for decode
 #[allow(dead_code)]
 mod hex {

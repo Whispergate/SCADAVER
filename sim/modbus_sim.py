@@ -10,6 +10,7 @@ Expected output with 'Read Holding Registers 0:10':
 """
 import argparse
 import asyncio
+import logging
 import os
 
 from pymodbus.datastore import (
@@ -53,6 +54,7 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main() -> None:
+    logging.getLogger("pymodbus").setLevel(logging.CRITICAL)
     args = parse_args()
     if not 1 <= args.port <= 65535:
         raise ValueError("--port must be between 1 and 65535")

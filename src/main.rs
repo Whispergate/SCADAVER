@@ -1,4 +1,4 @@
-﻿mod cli;
+mod cli;
 mod creds;
 mod db;
 mod display;
@@ -10,7 +10,11 @@ pub use scadaver_rs::vendors;
 fn main() {
     use clap::Parser;
     let args = cli::Args::parse();
-    if args.command.is_none() {
+
+    let launch_tui =
+        args.command.is_none() || matches!(args.command, Some(cli::Verb::Tui));
+
+    if launch_tui {
         creds::ensure_sample_exists();
         let db_path = db::Database::default_path();
         let db = match db::Database::open(&db_path) {
@@ -29,4 +33,3 @@ fn main() {
         std::process::exit(1);
     }
 }
-

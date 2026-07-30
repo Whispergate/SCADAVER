@@ -545,6 +545,7 @@ struct App {
     scan_menu_sel: usize,
     exploit_defs: Vec<ExploitDef>,
     exploit_sel: usize,
+    exploit_list_state: ListState,
     pending_exploit: Option<PendingExploit>,
     vendor_override: Option<String>,
     vendor_pick_sel: usize,
@@ -579,6 +580,7 @@ impl App {
             scan_menu_sel: 0,
             exploit_defs: Vec::new(),
             exploit_sel: 0,
+            exploit_list_state: ListState::default(),
             pending_exploit: None,
             vendor_override: None,
             vendor_pick_sel: 0,
@@ -753,6 +755,8 @@ impl App {
             self.vendor_override = None;
             self.exploit_defs = exploits_for(&vendor);
             self.exploit_sel = 0;
+            self.exploit_list_state = ListState::default();
+            self.exploit_list_state.select(Some(0));
             self.mode = Mode::ExploitMenu;
         }
     }
@@ -4200,7 +4204,7 @@ fn draw_device_list(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
 
-fn draw_right_panel(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_right_panel(frame: &mut Frame, area: Rect, app: &mut App) {
     match app.mode {
         Mode::ExploitMenu | Mode::ExploitInput | Mode::ExploitConfirm => {
             draw_exploit_menu(frame, area, app);
@@ -4397,7 +4401,7 @@ fn capability_line<'a>(label: &'static str, yes: bool) -> Line<'a> {
     ])
 }
 
-fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
@@ -4461,9 +4465,6 @@ fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    let mut state = ListState::default();
-    state.select(Some(app.exploit_sel));
-
     let list = List::new(items)
         .block(
             Block::default()
@@ -4478,7 +4479,7 @@ fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &App) {
         )
         .highlight_symbol("\u{25b6} ");
 
-    frame.render_stateful_widget(list, chunks[0], &mut state);
+    frame.render_stateful_widget(list, chunks[0], &mut app.exploit_list_state);
     frame.render_widget(
         output_widget(&app.output_lines, chunks[1].height, app.output_scroll),
         chunks[1],
@@ -4894,7 +4895,11 @@ fn draw_help(frame: &mut Frame, area: Rect) {
             s.fg(Color::Yellow),
         )),
         Line::from(Span::styled(
-            "  Red      Action requires YES confirmation",
+            "  Magenta  Sensitive read (credentials / session data)",
+            s.fg(Color::Magenta),
+        )),
+        Line::from(Span::styled(
+            "  Red      Destructive — writes / controls PLC state",
             s.fg(Color::Red),
         )),
         Line::from(Span::styled(
@@ -5184,7 +5189,7 @@ fn handle_ip_input(app: &mut App, code: KeyCode) {
                     app.output_scroll = 0;
                 }
                 let label = target.label();
-                app.output_lines.push(format!("== Probe @ {label} =="));
+                app.output_lines.push(format!("══ Probe @ {label} ══"));
                 app.active_jobs += 1;
                 app.log(format!("[*] Probing {label}..."));
                 let tx = app.scan_tx.clone();
@@ -5254,9 +5259,11 @@ fn handle_exploit_menu(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('j') | KeyCode::Down => {
             app.exploit_sel = (app.exploit_sel + 1).min(app.exploit_defs.len().saturating_sub(1));
+            app.exploit_list_state.select(Some(app.exploit_sel));
         }
         KeyCode::Char('k') | KeyCode::Up => {
             app.exploit_sel = app.exploit_sel.saturating_sub(1);
+            app.exploit_list_state.select(Some(app.exploit_sel));
         }
         KeyCode::Enter => {
             let is_back = app
@@ -5384,6 +5391,8 @@ fn handle_vendor_picker(app: &mut App, code: KeyCode) {
             app.vendor_override = Some(vendor.clone());
             app.exploit_defs = exploits_for(&vendor);
             app.exploit_sel = 0;
+            app.exploit_list_state = ListState::default();
+            app.exploit_list_state.select(Some(0));
             app.mode = Mode::ExploitMenu;
         }
         _ => {}
@@ -5536,7 +5545,7 @@ fn execute_pending_exploit(app: &mut App, pending: &PendingExploit) {
         app.output_scroll = 0;
     }
     app.output_lines
-        .push(format!("== {} @ {} ==", pending.label, pending.ip));
+        .push(format!("══ {} @ {} ══", pending.label, pending.ip));
     app.log(format!("[*] Running: {} on {}", pending.label, pending.ip));
     app.active_jobs += 1;
 
@@ -6055,6 +6064,7 @@ mod tests {
             filter: String::new(),
             filtered_indices: vec![0],
             active_jobs: 0,
+            exploit_list_state: ratatui::widgets::ListState::default(),
         }
     }
 
