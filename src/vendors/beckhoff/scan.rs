@@ -838,7 +838,7 @@ fn write_to_stream(
 fn hostname_or_default() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "scadaver-rs".to_string())
+        .unwrap_or_else(|_| "WINSTATION".to_string())
 }
 
 #[cfg(test)]

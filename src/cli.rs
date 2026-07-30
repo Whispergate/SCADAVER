@@ -29,6 +29,10 @@ pub struct Args {
     #[arg(long, global = true, value_enum)]
     pub protocol: Option<Protocol>,
 
+    /// Randomise probe order and add inter-probe jitter to reduce scan fingerprint
+    #[arg(short = 'z', long, global = true)]
+    pub stealth: bool,
+
     #[command(subcommand)]
     pub command: Option<Verb>,
 }
@@ -343,6 +347,9 @@ pub enum DbCmd {
 
 pub fn run(args: Args) -> Result<()> {
     crate::display::print_banner();
+    if args.stealth {
+        crate::core::autodetect::set_stealth(true);
+    }
     let Some(command) = args.command else { return Ok(()); };
     match command {
         Verb::Tui => Ok(()),

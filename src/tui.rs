@@ -554,6 +554,7 @@ struct App {
     filtered_indices: Vec<usize>,
     active_jobs: u32,
     references_scroll: usize,
+    stealth: bool,
 }
 
 impl App {
@@ -590,6 +591,7 @@ impl App {
             filtered_indices,
             active_jobs: 0,
             references_scroll: 0,
+            stealth: false,
         }
     }
 
@@ -4157,10 +4159,11 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         String::new()
     };
-    let title = format!(" SCADAver ICS Red Team Tool v1.0{scan_tag} ");
+    let stealth_tag = if app.stealth { " [STEALTH]" } else { "" };
+    let title = format!(" SCADAver ICS Red Team Tool v1.0{scan_tag}{stealth_tag} ");
     let keys = match app.mode {
         Mode::Normal =>
-            " [A] Add IP  [S] Scan  [E] Exploit  [W] References  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear  [?] Help  [Q] Quit",
+            " [A] Add IP  [S] Scan  [E] Exploit  [W] References  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear  [Z] Stealth  [?] Help  [Q] Quit",
         Mode::IpInput => " Enter IP address \u{2014} [ESC] cancel",
         Mode::ExploitMenu => " [J/K] Navigate  [ENTER] Run  [V] View as protocol  [O] Zoom  [PgUp/PgDn] Scroll  [ESC] back",
         Mode::Search => " Type to filter \u{2014} [ESC] clear  [ENTER] confirm",
@@ -4593,7 +4596,7 @@ fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &mut App) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Rgb(50, 50, 70))
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("\u{25b6} ");
@@ -4833,7 +4836,7 @@ fn draw_scan_menu(frame: &mut Frame, area: Rect, app: &App) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Rgb(50, 50, 70))
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("\u{25b6} ");
@@ -5481,6 +5484,14 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
             app.references_scroll = 0;
             app.mode = Mode::References;
         }
+        KeyCode::Char('z' | 'Z') => {
+            app.stealth = !app.stealth;
+            crate::core::autodetect::set_stealth(app.stealth);
+            let state = if app.stealth { "ON" } else { "OFF" };
+            app.log(format!("[!] Stealth mode {state} — probes will {}",
+                if app.stealth { "shuffle order and add jitter" } else { "run at full speed" }
+            ));
+        }
         KeyCode::Char('?') => app.mode = Mode::Help,
         KeyCode::Esc => {
             if app.quit_confirm {
@@ -5742,7 +5753,8 @@ fn draw_vendor_picker(frame: &mut Frame, area: Rect, app: &App) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Rgb(50, 50, 70))
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("\u{25b6} ");
@@ -6386,6 +6398,7 @@ mod tests {
             active_jobs: 0,
             exploit_list_state: ratatui::widgets::ListState::default(),
             references_scroll: 0,
+            stealth: false,
         }
     }
 

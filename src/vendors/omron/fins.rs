@@ -68,6 +68,8 @@ fn negotiate_address(stream: &mut TcpStream) -> Result<u8> {
 }
 
 fn fins_header(da1: u8, sid: u8) -> [u8; 10] {
+    // SA1: random non-zero node — avoids the fixed-0x63 scanner fingerprint
+    let sa1 = rand::random::<u8>() | 1;
     [
         0x80, // ICF: command, not split, response required
         0x00, // RSV
@@ -76,7 +78,7 @@ fn fins_header(da1: u8, sid: u8) -> [u8; 10] {
         da1,  // DA1 (destination node = server)
         0x00, // DA2 (destination unit)
         0x00, // SNA (source network)
-        0x63, // SA1 (source node = 0x63 = 99, arbitrary client node)
+        sa1,  // SA1 (source node, randomized per request)
         0x00, // SA2 (source unit)
         sid,  // SID (service ID, used to match requests)
     ]

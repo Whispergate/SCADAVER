@@ -1,7 +1,21 @@
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
+
+static STEALTH_MODE: AtomicBool = AtomicBool::new(false);
+
+/// Enable or disable stealth scanning: randomised probe order + inter-probe jitter.
+pub fn set_stealth(enabled: bool) {
+    STEALTH_MODE.store(enabled, Ordering::Relaxed);
+}
+
+/// Returns true when stealth mode is active.
+pub fn stealth_enabled() -> bool {
+    STEALTH_MODE.load(Ordering::Relaxed)
+}
 
 /// The result of vendor autodetection: the identified vendor slug, target IP, and a flattened
 /// map of vendor-specific fields (ports, identity strings, capability flags).
@@ -512,13 +526,25 @@ fn probe_snmp(ip: &str) -> Option<DeviceInfo> {
 /// `timeout_secs` bounds the overall collection window; probes still running when
 /// it elapses are reported as non-responding.
 pub fn sweep(ip: &str, timeout_secs: u64) -> Vec<SweepOutcome> {
+    use rand::Rng;
     use std::sync::mpsc;
-    let probes = make_probes();
+
+    let mut probes = make_probes();
+    let stealth = stealth_enabled();
+    if stealth {
+        probes.shuffle(&mut rand::thread_rng());
+    }
     let count = probes.len();
     let metas: Vec<ProbeInfo> = probes.iter().map(|(meta, _)| *meta).collect();
     let (tx, rx) = mpsc::channel::<(usize, Option<DeviceInfo>)>();
 
     for (idx, (_, probe)) in probes.into_iter().enumerate() {
+        // In stealth mode add random jitter between each probe spawn to break up the burst.
+        if stealth && idx > 0 {
+            thread::sleep(Duration::from_millis(
+                rand::thread_rng().gen_range(100..=400),
+            ));
+        }
         let ip = ip.to_string();
         let tx = tx.clone();
         thread::spawn(move || {

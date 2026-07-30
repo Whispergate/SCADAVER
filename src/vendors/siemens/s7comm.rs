@@ -54,9 +54,10 @@ pub fn setup_connection(ip: &str, port: u16, timeout_secs: u64) -> Option<TcpStr
             continue; // Wrong TSAP
         }
 
-        // S7Comm Setup
-        let s7_pkt = "0300001902f08032010000722f00080000f0000001000101e0";
-        let Some(s7_resp) = send_recv(&mut stream, &hex_decode(s7_pkt)) else { continue };
+        // S7Comm Setup — randomize PDU reference to avoid fixed-invoke-ID fingerprint
+        let invoke = rand::random::<u16>();
+        let s7_pkt = format!("0300001902f08032010000{invoke:04x}00080000f0000001000101e0");
+        let Some(s7_resp) = send_recv(&mut stream, &hex_decode(&s7_pkt)) else { continue };
         let s7_hex = hex_encode(&s7_resp);
         if s7_hex.len() < 20 || &s7_hex[18..20] != "00" {
             continue;
@@ -88,9 +89,10 @@ fn send_recv(stream: &mut TcpStream, data: &[u8]) -> Option<Vec<u8>> {
 fn read_szl(stream: &mut TcpStream, szl_id: u16, szl_index: u16) -> Option<Vec<u8>> {
     let [id_hi, id_lo] = szl_id.to_be_bytes();
     let [idx_hi, idx_lo] = szl_index.to_be_bytes();
+    let invoke = rand::random::<u16>();
     // S7 UserData payload = 26 bytes → TPKT total = 33 = 0x21
     let pkt = hex_decode(&format!(
-        "0300002102f0803207000001000008000800011204114401\
+        "0300002102f08032070000{invoke:04x}0008000800011204114401\
          00ff090004{id_hi:02x}{id_lo:02x}{idx_hi:02x}{idx_lo:02x}"
     ));
     send_recv(stream, &pkt)

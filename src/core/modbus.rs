@@ -7,7 +7,6 @@ use std::time::Duration;
 pub const DEFAULT_PORT: u16 = 502;
 pub const DEFAULT_UNIT_IDS: &[u8] = &[0x01, 0xFF];
 
-const TRANSACTION_ID: u16 = 0x0001;
 const MAX_REGISTERS: u16 = 125;
 const MAX_BITS: u16 = 2000;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -193,7 +192,7 @@ impl ModbusTcpClient {
 
         let length = u16::try_from(pdu.len() + 1).context("PDU too large for MBAP length")?;
         let mut request = Vec::with_capacity(7 + pdu.len());
-        request.extend_from_slice(&TRANSACTION_ID.to_be_bytes());
+        request.extend_from_slice(&rand::random::<u16>().to_be_bytes());
         request.extend_from_slice(&0x0000u16.to_be_bytes());
         request.extend_from_slice(&length.to_be_bytes());
         request.push(unit_id);

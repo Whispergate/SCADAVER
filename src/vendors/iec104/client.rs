@@ -84,6 +84,10 @@ impl Iec104Session {
         self.tx_seq = self.tx_seq.wrapping_add(1);
         self.recv()
     }
+
+    fn shutdown(&mut self) {
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
 }
 
 /// Connect to an IEC 104 outstation, send STARTDT, and confirm the data transfer phase.
@@ -130,8 +134,10 @@ pub fn probe(ip: &str, port: u16) -> bool {
     if session.send(&testfr).is_err() {
         return false;
     }
-    session.recv()
-        .is_ok_and(|r| r.len() >= 4 && r[0..4] == TESTFR_CON)
+    let confirmed = session.recv()
+        .is_ok_and(|r| r.len() >= 4 && r[0..4] == TESTFR_CON);
+    session.shutdown();
+    confirmed
 }
 
 /// Build an ASDU for General Interrogation (`C_IC_NA_1`, TypeID=100).
