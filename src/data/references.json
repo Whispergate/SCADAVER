@@ -1,0 +1,1796 @@
+[
+  {
+    "vendor": "schneider",
+    "title": "Remote Code Execution On Ecostruxure Plc Simulator",
+    "url": "https://airbus-cyber-security.com/remote-code-execution-on-ecostruxure-plc-simulator",
+    "source": "Airbus"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Abusing A Shared Memory For Getting A Local Privilege Escalation On The Schneider Electric Modbus Serial Driver Cve 2020 7523",
+    "url": "https://airbus-cyber-security.com/abusing-a-shared-memory-for-getting-a-local-privilege-escalation-on-the-schneider-electric-modbus-serial-driver-cve-2020-7523",
+    "source": "Airbus"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Applying A Stuxnet Type Attack To A Modicon Plc",
+    "url": "https://airbus-cyber-security.com/applying-a-stuxnet-type-attack-to-a-modicon-plc",
+    "source": "Airbus"
+  },
+  {
+    "vendor": "general",
+    "title": "Multiple Vulnerabilities In Moxa Iologik E1200 Series",
+    "url": "https://applied-risk.com/resources/multiple-vulnerabilities-in-moxa-iologik-e1200-series",
+    "source": "Applied Risk"
+  },
+  {
+    "vendor": "modbus",
+    "title": "Exploiting A Kunbus Gateway Module For Modbus Tcp 2",
+    "url": "https://applied-risk.com/resources/exploiting-a-kunbus-gateway-module-for-modbus-tcp-2",
+    "source": "Applied Risk"
+  },
+  {
+    "vendor": "general",
+    "title": "Ge Ifix Advisory",
+    "url": "https://applied-risk.com/resources/ge_ifix_advisory",
+    "source": "Applied Risk"
+  },
+  {
+    "vendor": "general",
+    "title": "Urgent11%20Technical%20White%20Paper",
+    "url": "https://info.armis.com/rs/645-PDC-047/images/Urgent11%20Technical%20White%20Paper.pdf",
+    "source": "Armis"
+  },
+  {
+    "vendor": "general",
+    "title": "Modipwn",
+    "url": "https://www.armis.com/research/modipwn",
+    "source": "Armis"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwnedpiper",
+    "url": "https://www.armis.com/research/pwnedpiper",
+    "source": "Armis"
+  },
+  {
+    "vendor": "general",
+    "title": "Awe 2022 059",
+    "url": "https://awesec.com/advisories/AWE-2022-059.html",
+    "source": "AWESEC"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Security Flaws In Software Based Plc Enable Remote Code Execution On Windows Box",
+    "url": "https://www.claroty.com/2020/05/14/security-flaws-in-software-based-plc-enable-remote-code-execution-on-windows-box",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Blog Research Schneider M221 Plcs",
+    "url": "https://www.claroty.com/2020/11/10/blog-research-schneider-m221-plcs",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Blog Research Rce Vulnerability In Wago Firmware",
+    "url": "https://www.claroty.com/2020/12/17/blog-research-rce-vulnerability-in-wago-firmware",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Cve 2020 14511",
+    "url": "https://www.claroty.com/2020/07/15/cve-2020-14511",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Eds Subsystem Vulnerabilities Expose Ot Assets To Malicious File Delivery",
+    "url": "https://www.claroty.com/2020/05/28/eds-subsystem-vulnerabilities-expose-ot-assets-to-malicious-file-delivery",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Blog Research Race To Native Code Execution In Plcs",
+    "url": "https://www.claroty.com/2021/05/28/blog-research-race-to-native-code-execution-in-plcs",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "rockwell",
+    "title": "Blog Research Critical Authentication Bypass In Rockwell Software",
+    "url": "https://www.claroty.com/2021/02/25/blog-research-critical-authentication-bypass-in-rockwell-software",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Blog Research Vulnerabilities In Tbox Rtus",
+    "url": "https://www.claroty.com/2021/03/23/blog-research-vulnerabilities-in-tbox-rtus",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "rockwell",
+    "title": "Blog Research Critical Vulnerabilities Found In Rockwell Factorytalk Assetcentre",
+    "url": "https://www.claroty.com/2021/04/01/blog-research-critical-vulnerabilities-found-in-rockwell-factorytalk-assetcentre",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Blog Research Crashing Sip Clients With A Single Slash",
+    "url": "https://www.claroty.com/2021/08/31/blog-research-crashing-sip-clients-with-a-single-slash",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Blog Research All Roads Lead To Openvpn Pwning Industrial Remote Access Clients",
+    "url": "https://www.claroty.com/2021/11/19/blog-research-all-roads-lead-to-openvpn-pwning-industrial-remote-access-clients",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Blog Research Bugs In The Cloud How One Vulnerability Exposed Offline Devices To A Security Risk",
+    "url": "https://www.claroty.com/2021/12/13/blog-research-bugs-in-the-cloud-how-one-vulnerability-exposed-offline-devices-to-a-security-risk",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Blog Research Securing Network Management Systems Nagios Xi",
+    "url": "https://claroty.com/2021/09/21/blog-research-securing-network-management-systems-nagios-xi",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Blog Research Securing Network Management Systems Moxa Mxview",
+    "url": "https://www.claroty.com/2022/02/10/blog-research-securing-network-management-systems-moxa-mxview",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "rockwell",
+    "title": "Blog Research Hiding Code On Rockwell Automation Plcs",
+    "url": "https://claroty.com/2022/03/31/blog-research-hiding-code-on-rockwell-automation-plcs",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "modbus",
+    "title": "Blog Research Blinding Snort Breaking The Modbus Ot Preprocessor",
+    "url": "https://claroty.com/2022/04/14/blog-research-blinding-snort-breaking-the-modbus-ot-preprocessor",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Blog Research From Project File To Code Execution Exploiting Vulnerabilities In Xinje Plc Program Tool",
+    "url": "https://claroty.com/2022/05/11/blog-research-from-project-file-to-code-execution-exploiting-vulnerabilities-in-xinje-plc-program-tool",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "siemens",
+    "title": "Blog Research Securing Network Management Systems Part 3 Siemens Sinec Nms",
+    "url": "https://claroty.com/2022/06/16/blog-research-securing-network-management-systems-part-3-siemens-sinec-nms",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Evil Plc Attack Weaponizing Plcs",
+    "url": "https://claroty.com/team82/research/white-papers/evil-plc-attack-weaponizing-plcs",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Jumping Nat To Shut Down Electric Devices",
+    "url": "https://claroty.com/team82/research/jumping-nat-to-shut-down-electric-devices",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "siemens",
+    "title": "The Race To Native Code Execution In Plcs Using Rce To Uncover Siemens Simatic S7 1200 1500 Hardcoded Cryptographic Keys",
+    "url": "https://claroty.com/team82/research/the-race-to-native-code-execution-in-plcs-using-rce-to-uncover-siemens-simatic-s7-1200-1500-hardcoded-cryptographic-keys",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "An Oil And Gas Weak Spot Flow Computers",
+    "url": "https://claroty.com/team82/research/an-oil-and-gas-weak-spot-flow-computers",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Hacking Ics Historians The Pivot Point From It To Ot",
+    "url": "https://claroty.com/team82/research/hacking-ics-historians-the-pivot-point-from-it-to-ot",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "The Silent Spy Among Us Modern Attacks Against Smart Intercoms",
+    "url": "https://claroty.com/team82/research/the-silent-spy-among-us-modern-attacks-against-smart-intercoms",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Triple Threat Breaking Teltonika Routers Three Ways",
+    "url": "https://claroty.com/team82/research/triple-threat-breaking-teltonika-routers-three-ways",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "The Path To The Cloud Is Filled With Holes Exploiting 4G Edge Routers",
+    "url": "https://claroty.com/team82/research/the-path-to-the-cloud-is-filled-with-holes-exploiting-4g-edge-routers",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Dicom Demystified Exploring The Underbelly Of Medical Imaging",
+    "url": "https://claroty.com/team82/research/dicom-demystified-exploring-the-underbelly-of-medical-imaging",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Opc Ua Deep Dive History Of The Opc Ua Protocol",
+    "url": "https://claroty.com/team82/research/opc-ua-deep-dive-history-of-the-opc-ua-protocol",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "malware",
+    "title": "Unpacking The Blackjack Groups Fuxnet Malware",
+    "url": "https://claroty.com/team82/research/unpacking-the-blackjack-groups-fuxnet-malware",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "siemens",
+    "title": "Exploiting A Classic Deserialization Vulnerability In Siemens Simatic Energy Manager",
+    "url": "https://claroty.com/team82/research/exploiting-a-classic-deserialization-vulnerability-in-siemens-simatic-energy-manager",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Exploiting Honeywell Controledge Virtualuoc",
+    "url": "https://claroty.com/team82/research/exploiting-honeywell-controledge-virtualuoc",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Threat Modeling Industrial Environments Using Virtual Factories Part 1",
+    "url": "https://claroty.com/team82/research/threat-modeling-industrial-environments-using-virtual-factories-part-1",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Practical And Theoretical Attacks In The Industrial Landscape Part 2",
+    "url": "https://claroty.com/team82/research/practical-and-theoretical-attacks-in-the-industrial-landscape-part-2",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "rockwell",
+    "title": "Bypassing Rockwell Automation Logix Controllers Local Chassis Security Protection",
+    "url": "https://claroty.com/team82/research/bypassing-rockwell-automation-logix-controllers-local-chassis-security-protection",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Mms Under The Microscope Examining The Security Of A Power Automation Standard",
+    "url": "https://claroty.com/team82/research/mms-under-the-microscope-examining-the-security-of-a-power-automation-standard",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Delving Into Windows Ce Lets Build An Embedded Windows Application",
+    "url": "https://claroty.com/team82/research/delving-into-windows-ce-lets-build-an-embedded-windows-application",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Delving Into Windows Ce Part 2 Analyzing Windows Ce Debugging Constructs",
+    "url": "https://claroty.com/team82/research/delving-into-windows-ce-part-2-analyzing-windows-ce-debugging-constructs",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Hack The Emulated Planet Vulnerability Hunting On Planet Wgs 804Hpt Industrial Switches",
+    "url": "https://claroty.com/team82/research/hack-the-emulated-planet-vulnerability-hunting-on-planet-wgs-804hpt-industrial-switches",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "The Insecure Iot Cloud Strikes Again Rce On Ruijie Cloud Connected Devices",
+    "url": "https://claroty.com/team82/research/the-insecure-iot-cloud-strikes-again-rce-on-ruijie-cloud-connected-devices",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "malware",
+    "title": "Inside A New Ot Iot Cyber Weapon Iocontrol",
+    "url": "https://claroty.com/team82/research/inside-a-new-ot-iot-cyber-weapon-iocontrol",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Delving Into Windows Ce Part3 Introducing Team82S Open Source Debugger",
+    "url": "https://claroty.com/team82/research/delving-into-windows-ce-part3-introducing-team82s-open-source-debugger",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Delving Into Windows Ce Part 4 Vulnerability Research Into A Windows Ce Based Hmi Used In The Wild",
+    "url": "https://claroty.com/team82/research/delving-into-windows-ce-part-4-vulnerability-research-into-a-windows-ce-based-hmi-used-in-the-wild",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "rockwell",
+    "title": "Attention High Voltage Exploring The Attack Surface Of The Rockwell Automation Powermonitor 1000",
+    "url": "https://claroty.com/team82/research/attention-high-voltage-exploring-the-attack-surface-of-the-rockwell-automation-powermonitor-1000",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Cascading Chaos A Got Oriented Exploit Story",
+    "url": "https://claroty.com/team82/research/cascading-chaos-a-got-oriented-exploit-story",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Turning Camera Surveillance On Its Axis",
+    "url": "https://claroty.com/team82/research/turning-camera-surveillance-on-its-axis",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Roaring Access Exploiting A Pre Auth Root Rce On Sixnet Rtus",
+    "url": "https://claroty.com/team82/research/roaring-access-exploiting-a-pre-auth-root-rce-on-sixnet-rtus",
+    "source": "Claroty"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwn2Own Toronto 2023 Part 1 How It All Started",
+    "url": "https://blog.compass-security.com/2024/03/pwn2own-toronto-2023-part-1-how-it-all-started",
+    "source": "Compass Security"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwn2Own Toronto 2023 Part 2 Exploring The Attack Surface",
+    "url": "https://blog.compass-security.com/2024/03/pwn2own-toronto-2023-part-2-exploring-the-attack-surface",
+    "source": "Compass Security"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwn2Own Toronto 2023 Part 3 Exploration",
+    "url": "https://blog.compass-security.com/2024/03/pwn2own-toronto-2023-part-3-exploration",
+    "source": "Compass Security"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwn2Own Toronto 2023 Part 4 Memory Corruption Analysis",
+    "url": "https://blog.compass-security.com/2024/03/pwn2own-toronto-2023-part-4-memory-corruption-analysis",
+    "source": "Compass Security"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwn2Own Toronto 2023 Part 5 The Exploit",
+    "url": "https://blog.compass-security.com/2024/03/pwn2own-toronto-2023-part-5-the-exploit",
+    "source": "Compass Security"
+  },
+  {
+    "vendor": "general",
+    "title": "A Patchdiffing Journey Tp Link Omada",
+    "url": "https://blog.compass-security.com/2024/08/a-patchdiffing-journey-tp-link-omada",
+    "source": "Compass Security"
+  },
+  {
+    "vendor": "general",
+    "title": "How To Pwn2Own The Cisco Rv340 Router",
+    "url": "https://www.crowdstrike.com/blog/how-to-pwn2own-the-cisco-rv340-router",
+    "source": "CrowdStrike"
+  },
+  {
+    "vendor": "ewon",
+    "title": "Authenticated Remote Code Execution In Ewon Flexy 205",
+    "url": "https://cyberdanube.com/security-research/authenticated-remote-code-execution-in-ewon-flexy-205",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Multiple Vulnerabilities In Abb Ac500V3",
+    "url": "https://cyberdanube.com/security-research/multiple-vulnerabilities-in-abb-ac500v3",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "St Polten Uas Path Traversal In Korenix Jetport",
+    "url": "https://cyberdanube.com/security-research/st-polten-uas-path-traversal-in-korenix-jetport",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "St Polten Uas Stored Cross Site Scripting In Seh Utnserver Pro",
+    "url": "https://cyberdanube.com/security-research/st-polten-uas-stored-cross-site-scripting-in-seh-utnserver-pro",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "St Polten Uas Multiple Vulnerabilities In Oring Iap",
+    "url": "https://cyberdanube.com/security-research/st-polten-uas-multiple-vulnerabilities-in-oring-iap",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Multiple Vulnerabilities In Riello Netman 204",
+    "url": "https://cyberdanube.com/security-research/multiple-vulnerabilities-in-riello-netman-204",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Authenticated Command Injection In Helmholz Rex100 Router",
+    "url": "https://cyberdanube.com/security-research/authenticated-command-injection-in-helmholz-rex100-router",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Multiple Vulnerabilities In Perten Processplus",
+    "url": "https://cyberdanube.com/security-research/multiple-vulnerabilities-in-perten-processplus",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Multiple Vulnerabilities In Korenix Jetport",
+    "url": "https://cyberdanube.com/security-research/multiple-vulnerabilities-in-korenix-jetport",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Multiple Vulnerabilities In Seh Untserver Pro",
+    "url": "https://cyberdanube.com/security-research/multiple-vulnerabilities-in-seh-untserver-pro",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Multiple Vulnerabilities In Advantech Eki 15Xx Series",
+    "url": "https://cyberdanube.com/security-research/multiple-vulnerabilities-in-advantech-eki-15xx-series",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Authenticated Command Injection In Hirschmann Belden Bat C2",
+    "url": "https://cyberdanube.com/security-research/authenticated-command-injection-in-hirschmann-belden-bat-c2",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Multiple Vulnerabilities In Delta Electronics Dx 2100 L1 Cn",
+    "url": "https://cyberdanube.com/security-research/multiple-vulnerabilities-in-delta-electronics-dx-2100-l1-cn",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Authenticated Command Injection In Delta Electronics Dvw W02W2 E2",
+    "url": "https://cyberdanube.com/security-research/authenticated-command-injection-in-delta-electronics-dvw-w02w2-e2",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "general",
+    "title": "Multiple Cyber Security Iot Vulnerabilities In Industrial Router",
+    "url": "https://cyberdanube.com/security-research/multiple-cyber-security-iot-vulnerabilities-in-industrial-router",
+    "source": "CyberDanube"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Bug Hunting Stories Schneider Electric The Andover Continuum Web Client",
+    "url": "https://www.cyberark.com/resources/threat-research-blog/bug-hunting-stories-schneider-electric-the-andover-continuum-web-client",
+    "source": "CyberArk"
+  },
+  {
+    "vendor": "general",
+    "title": "625551Dd440D0B187Fa96D38 Jekyllbot 5 Vulnerability Disclosure Report",
+    "url": "https://assets.website-files.com/5d2ad783e06f4c19469d363a/625551dd440d0b187fa96d38_JekyllBot-5-Vulnerability-Disclosure-Report.pdf",
+    "source": "Cynerio"
+  },
+  {
+    "vendor": "malware",
+    "title": "Dragos Chernovitewp V2B",
+    "url": "https://hub.dragos.com/hubfs/116-Whitepapers/Dragos_ChernoviteWP_v2b.pdf",
+    "source": "Dragos"
+  },
+  {
+    "vendor": "malware",
+    "title": "Chernovite Pipedream Malware Targeting Industrial Control Systems",
+    "url": "https://www.dragos.com/blog/industry-news/chernovite-pipedream-malware-targeting-industrial-control-systems",
+    "source": "Dragos"
+  },
+  {
+    "vendor": "malware",
+    "title": "Dragos Sb Cosmicenergy June23 Final Web",
+    "url": "https://hub.dragos.com/hubfs/116-Whitepapers/Dragos_SB_COSMICENERGY_June23_FINAL_WEB.pdf",
+    "source": "Dragos"
+  },
+  {
+    "vendor": "general",
+    "title": "Plc Bug Hunt Fa3A0Aeae9Ab",
+    "url": "https://medium.com/tenable-techblog/plc-bug-hunt-fa3a0aeae9ab",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Examining Crypto And Bypassing Authentication In Schneider Electric Plcs M340 M580 F37Cf9F3Ff34",
+    "url": "https://medium.com/tenable-techblog/examining-crypto-and-bypassing-authentication-in-schneider-electric-plcs-m340-m580-f37cf9f3ff34",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2021 50",
+    "url": "https://www.tenable.com/security/research/tra-2021-50",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2021 47",
+    "url": "https://www.tenable.com/security/research/tra-2021-47",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2021 40",
+    "url": "https://www.tenable.com/security/research/tra-2021-40",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2021 28",
+    "url": "https://www.tenable.com/security/research/tra-2021-28",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2021 24",
+    "url": "https://www.tenable.com/security/research/tra-2021-24",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2021 51",
+    "url": "https://www.tenable.com/security/research/tra-2021-51",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Arris Cable Modem Teardown 5E294B7007Eb",
+    "url": "https://medium.com/tenable-techblog/arris-cable-modem-teardown-5e294b7007eb",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2022 33",
+    "url": "https://www.tenable.com/security/research/tra-2022-33",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2022 32",
+    "url": "https://www.tenable.com/security/research/tra-2022-32",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2022 23",
+    "url": "https://www.tenable.com/security/research/tra-2022-23",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2022 22",
+    "url": "https://www.tenable.com/security/research/tra-2022-22",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2022 13",
+    "url": "https://www.tenable.com/security/research/tra-2022-13",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "general",
+    "title": "Tra 2023 13",
+    "url": "https://www.tenable.com/security/research/tra-2023-13",
+    "source": "Tenable"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Wp Industrial Robot Security",
+    "url": "https://documents.trendmicro.com/assets/wp/wp-industrial-robot-security.pdf",
+    "source": "Trend Micro"
+  },
+  {
+    "vendor": "general",
+    "title": "Fake Company Real Threats Building A Fake Manufacturing System For A Sting",
+    "url": "https://www.trendmicro.com/en_us/research/20/e/fake-company-real-threats-building-a-fake-manufacturing-system-for-a-sting.html",
+    "source": "Trend Micro"
+  },
+  {
+    "vendor": "general",
+    "title": "Fake Company Real Threats The Reality Of Cyberattacks On Factories",
+    "url": "https://www.trendmicro.com/en_us/research/20/e/fake-company-real-threats-the-reality-of-cyberattacks-on-factories.html",
+    "source": "Trend Micro"
+  },
+  {
+    "vendor": "general",
+    "title": "Wp Hacker Machine Interface",
+    "url": "https://documents.trendmicro.com/assets/wp/wp-hacker-machine-interface.pdf",
+    "source": "Trend Micro"
+  },
+  {
+    "vendor": "general",
+    "title": "Somebodys Watching When Cameras Are More Than Just Smart",
+    "url": "https://ics-cert.kaspersky.com/reports/2018/03/12/somebodys-watching-when-cameras-are-more-than-just-smart",
+    "source": "Kaspersky"
+  },
+  {
+    "vendor": "general",
+    "title": "Iot Hack How To Break A Smart Home Again",
+    "url": "https://ics-cert.kaspersky.com/reports/2018/02/28/iot-hack-how-to-break-a-smart-home-again",
+    "source": "Kaspersky"
+  },
+  {
+    "vendor": "general",
+    "title": "Security Research Thingspro Suite Iiot Gateway And Device Manager By Moxa",
+    "url": "https://ics-cert.kaspersky.com/reports/2019/01/22/security-research-thingspro-suite-iiot-gateway-and-device-manager-by-moxa",
+    "source": "Kaspersky"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Security Research Codesys Runtime A Plc Control Framework Part 1",
+    "url": "https://ics-cert.kaspersky.com/reports/2019/09/18/security-research-codesys-runtime-a-plc-control-framework-part-1",
+    "source": "Kaspersky"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Security Research Codesys Runtime A Plc Control Framework Part 2",
+    "url": "https://ics-cert.kaspersky.com/reports/2019/09/18/security-research-codesys-runtime-a-plc-control-framework-part-2",
+    "source": "Kaspersky"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Security Research Codesys Runtime A Plc Control Framework Part 3",
+    "url": "https://ics-cert.kaspersky.com/reports/2019/09/18/security-research-codesys-runtime-a-plc-control-framework-part-3",
+    "source": "Kaspersky"
+  },
+  {
+    "vendor": "general",
+    "title": "Montysthree Industrial Espionage With Steganography And A Russian Accent On Both Sides",
+    "url": "https://ics-cert.kaspersky.com/reports/2020/10/08/montysthree-industrial-espionage-with-steganography-and-a-russian-accent-on-both-sides",
+    "source": "Kaspersky"
+  },
+  {
+    "vendor": "general",
+    "title": "Isapwn Research On The Security Of Isagraf Runtime",
+    "url": "https://ics-cert.kaspersky.com/publications/reports/2022/05/23/isapwn-research-on-the-security-of-isagraf-runtime",
+    "source": "Kaspersky"
+  },
+  {
+    "vendor": "schneider",
+    "title": "The Secrets Of Schneider Electrics Umas Protocol",
+    "url": "https://ics-cert.kaspersky.com/publications/reports/2022/09/29/the-secrets-of-schneider-electrics-umas-protocol",
+    "source": "Kaspersky"
+  },
+  {
+    "vendor": "general",
+    "title": "Financially Motivated Actors Are Expanding Access Into Ot",
+    "url": "https://www.fireeye.com/blog/threat-research/2020/07/financially-motivated-actors-are-expanding-access-into-ot.html",
+    "source": "Fireeye"
+  },
+  {
+    "vendor": "malware",
+    "title": "Triton Actor Ttp Profile Custom Attack Tools Detections",
+    "url": "https://www.fireeye.com/blog/threat-research/2019/04/triton-actor-ttp-profile-custom-attack-tools-detections.html",
+    "source": "Fireeye"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Rooting Logitech Harmony Hub Improving Iot Security",
+    "url": "https://www.fireeye.com/blog/threat-research/2018/05/rooting-logitech-harmony-hub-improving-iot-security.html",
+    "source": "Fireeye"
+  },
+  {
+    "vendor": "general",
+    "title": "Solarcity Exploitation Of X2E Iot Device Part One",
+    "url": "https://www.fireeye.com/blog/threat-research/2021/02/solarcity-exploitation-of-x2e-iot-device-part-one.html",
+    "source": "Fireeye"
+  },
+  {
+    "vendor": "general",
+    "title": "Solarcity Exploitation Of X2E Iot Device Part Two",
+    "url": "https://www.fireeye.com/blog/threat-research/2021/02/solarcity-exploitation-of-x2e-iot-device-part-two.html",
+    "source": "Fireeye"
+  },
+  {
+    "vendor": "general",
+    "title": "Ekans Ransomware Targeting Ot Ics Systems",
+    "url": "https://www.fortinet.com/blog/threat-research/ekans-ransomware-targeting-ot-ics-systems",
+    "source": "Fortinet"
+  },
+  {
+    "vendor": "general",
+    "title": "Amnesia33 How Tcp Ip Stacks Breed Critical Vulnerabilities In Iot Ot And It Devices",
+    "url": "https://www.forescout.com/company/resources/amnesia33-how-tcp-ip-stacks-breed-critical-vulnerabilities-in-iot-ot-and-it-devices",
+    "source": "Forescout"
+  },
+  {
+    "vendor": "general",
+    "title": "Numberjack Forescout Research Labs Finds Nine Isn Generation Vulnerabilities Affecting Tcpip Stacks",
+    "url": "https://www.forescout.com/company/blog/numberjack-forescout-research-labs-finds-nine-isn-generation-vulnerabilities-affecting-tcpip-stacks",
+    "source": "Forescout"
+  },
+  {
+    "vendor": "general",
+    "title": "Namewreck Breaking And Fixing Dns Implementations",
+    "url": "https://www.forescout.com/company/resources/namewreck-breaking-and-fixing-dns-implementations",
+    "source": "Forescout"
+  },
+  {
+    "vendor": "general",
+    "title": "Infrahalt Discovering Mitigating Large Scale Ot Vulnerabilities",
+    "url": "https://www.forescout.com/resources/infrahalt-discovering-mitigating-large-scale-ot-vulnerabilities",
+    "source": "Forescout"
+  },
+  {
+    "vendor": "general",
+    "title": "Nucleus13 Research Report Dissecting The Nucleus Tcpip Stack",
+    "url": "https://www.forescout.com/resources/nucleus13-research-report-dissecting-the-nucleus-tcpip-stack",
+    "source": "Forescout"
+  },
+  {
+    "vendor": "general",
+    "title": "Project Memoria Lookback Report",
+    "url": "https://www.forescout.com/resources/project-memoria-lookback-report",
+    "source": "Forescout"
+  },
+  {
+    "vendor": "general",
+    "title": "Hvacking Understanding The Delta Between Security And Reality",
+    "url": "https://www.mcafee.com/blogs/other-blogs/mcafee-labs/hvacking-understanding-the-delta-between-security-and-reality",
+    "source": "McAfee"
+  },
+  {
+    "vendor": "malware",
+    "title": "www.netresec.com",
+    "url": "https://www.netresec.com/?page=Blog&month=2014-11&post=Observing-the-Havex-RAT",
+    "source": "Netresec"
+  },
+  {
+    "vendor": "malware",
+    "title": "www.netresec.com",
+    "url": "https://www.netresec.com/?page=Blog&month=2014-10&post=Full-Disclosure-of-Havex-Trojans",
+    "source": "Netresec"
+  },
+  {
+    "vendor": "iec104",
+    "title": "www.netresec.com",
+    "url": "https://www.netresec.com/?page=Blog&month=2012-08&post=SCADA-Network-Forensics-with-IEC-104",
+    "source": "Netresec"
+  },
+  {
+    "vendor": "malware",
+    "title": "www.netresec.com",
+    "url": "https://www.netresec.com/?page=Blog&month=2022-04&post=Industroyer2-IEC-104-Analysis",
+    "source": "Netresec"
+  },
+  {
+    "vendor": "general",
+    "title": "Remote Code Execution On Western Digital Pr4100 Nas Cve 2022 23121",
+    "url": "https://research.nccgroup.com/2022/03/24/remote-code-execution-on-western-digital-pr4100-nas-cve-2022-23121",
+    "source": "NCC Group"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwn2Own 3 Bugs Technical External",
+    "url": "https://research.nccgroup.com/wp-content/uploads/2022/07/pwn2own-3-bugs-technical-external.pdf",
+    "source": "NCC Group"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwn2Own How To Win External",
+    "url": "https://research.nccgroup.com/wp-content/uploads/2022/07/pwn2own-how-to-win-external.pdf",
+    "source": "NCC Group"
+  },
+  {
+    "vendor": "general",
+    "title": "Advisory Festo Cecc X M1 Command Injection Vulnerabilities",
+    "url": "https://onekey.com/blog/advisory-festo-cecc-x-m1-command-injection-vulnerabilities",
+    "source": "Onekey"
+  },
+  {
+    "vendor": "general",
+    "title": "Security Advisory Wago Unauthenticated Config Export Vulnerability",
+    "url": "https://onekey.com/blog/security-advisory-wago-unauthenticated-config-export-vulnerability",
+    "source": "Onekey"
+  },
+  {
+    "vendor": "general",
+    "title": "Security Advisory Netmodule Multiple Vulnerabilities",
+    "url": "https://onekey.com/blog/security-advisory-netmodule-multiple-vulnerabilities",
+    "source": "Onekey"
+  },
+  {
+    "vendor": "general",
+    "title": "Airlink Acemanager Vulnerabilities",
+    "url": "https://www.otorio.com/blog/airlink-acemanager-vulnerabilities",
+    "source": "OTORIO"
+  },
+  {
+    "vendor": "general",
+    "title": "Whitepaper%20 %20Industrial%20Wireless%20Iot%20Research",
+    "url": "https://go.otorio.com/hubfs/Whitepapers%20and%20Reports/whitepaper%20-%20Industrial%20wireless%20IoT%20research.pdf",
+    "source": "OTORIO"
+  },
+  {
+    "vendor": "general",
+    "title": "Exploiting Automation License Manager Using Dfs For Pcs 7 Takeover",
+    "url": "https://www.otorio.com/blog/exploiting-automation-license-manager-using-dfs-for-pcs-7-takeover",
+    "source": "OTORIO"
+  },
+  {
+    "vendor": "general",
+    "title": "Hijacking Abb 800Xa Communication For Admin Privileges",
+    "url": "https://www.otorio.com/blog/hijacking-abb-800xa-communication-for-admin-privileges",
+    "source": "OTORIO"
+  },
+  {
+    "vendor": "general",
+    "title": "Vulnerabilities In Iconics Software Suite",
+    "url": "https://unit42.paloaltonetworks.com/vulnerabilities-in-iconics-software-suite",
+    "source": "Palo Alto"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Cve 2020 10611 Achieving Code Execution On The Triangle Microworks Scada Data Gateway",
+    "url": "https://www.zerodayinitiative.com/blog/2020/8/24/cve-2020-10611-achieving-code-execution-on-the-triangle-microworks-scada-data-gateway",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "general",
+    "title": "A Trio Of Bugs Used To Exploit Inductive Automation At Pwn2Own Miami",
+    "url": "https://www.zerodayinitiative.com/blog/2020/6/10/a-trio-of-bugs-used-to-exploit-inductive-automation-at-pwn2own-miami",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "general",
+    "title": "The Anatomy Of A Bug Door Dissecting Two D Link Router Authentication Bypasses",
+    "url": "https://www.thezdi.com/blog/2020/9/30/the-anatomy-of-a-bug-door-dissecting-two-d-link-router-authentication-bypasses",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "rockwell",
+    "title": "Chaining 5 Bugs For Code Execution On The Rockwell Factorytalk Hmi At Pwn2Own Miami",
+    "url": "https://www.thezdi.com/blog/2020/7/22/chaining-5-bugs-for-code-execution-on-the-rockwell-factorytalk-hmi-at-pwn2own-miami",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Reliably Finding And Exploiting Icsscada Bugs",
+    "url": "https://www.zerodayinitiative.com/blog/2020/1/15/reliably-finding-and-exploiting-icsscada-bugs",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Performing Sql Backflips To Achieve Code Execution On Schneider Electrics Ecostruxure Operator Terminal Expert At Pwn2Own Miami 2020",
+    "url": "https://www.thezdi.com/blog/2020/9/9/performing-sql-backflips-to-achieve-code-execution-on-schneider-electrics-ecostruxure-operator-terminal-expert-at-pwn2own-miami-2020",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwn2Owning Two Hosts At The Same Time Abusing Inductive Automation Ignitions Custom Deserialization",
+    "url": "https://www.zerodayinitiative.com/blog/2023/2/6/pwn2owning-two-hosts-at-the-same-time-abusing-inductive-automation-ignitions-custom-deserialization",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "general",
+    "title": "Looking At The Chargepoint Home Flex Threat Landscape",
+    "url": "https://www.zerodayinitiative.com/blog/2023/9/7/looking-at-the-chargepoint-home-flex-threat-landscape",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "general",
+    "title": "From Pwn2Own Automotive More Autel Maxicharger Vulnerabilities",
+    "url": "https://www.zerodayinitiative.com/blog/2024/10/2/from-pwn2own-automotive-more-autel-maxicharger-vulnerabilities",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "general",
+    "title": "From Pwn2Own Automotive Taking Over The Autel Maxicharger",
+    "url": "https://www.zerodayinitiative.com/blog/2024/8/22/from-pwn2own-automotive-taking-over-the-autel-maxicharger",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "general",
+    "title": "Multiple Vulnerabilities In The Deep Sea Electronics Dse855",
+    "url": "https://www.zerodayinitiative.com/blog/2024/7/25/multiple-vulnerabilities-in-the-deep-sea-electronics-dse855",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "general",
+    "title": "Mindshare Decapping Chips For Electromagnetic Fault Injection Emfi",
+    "url": "https://www.zerodayinitiative.com/blog/2024/5/23/mindshare-decapping-chips-for-electromagnetic-fault-injection-emfi",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "general",
+    "title": "Extracting Embedded Multimediacard Emmc Contents In System",
+    "url": "https://www.zerodayinitiative.com/blog/2025/6/18/extracting-embedded-multimediacard-emmc-contents-in-system",
+    "source": "Zero day Initiative"
+  },
+  {
+    "vendor": "general",
+    "title": "Vdoo Discovers Significant Vulnerabilities In Axis Cameras",
+    "url": "https://www.vdoo.com/blog/vdoo-discovers-significant-vulnerabilities-in-axis-cameras",
+    "source": "Jfrog (Vdoo)"
+  },
+  {
+    "vendor": "general",
+    "title": "Significant Vulnerability In Hikvision Cameras",
+    "url": "https://www.vdoo.com/blog/significant-vulnerability-in-hikvision-cameras",
+    "source": "Jfrog (Vdoo)"
+  },
+  {
+    "vendor": "general",
+    "title": "Giving Back Securing Open Source Iot Projects",
+    "url": "https://www.vdoo.com/blog/giving-back-securing-open-source-iot-projects",
+    "source": "Jfrog (Vdoo)"
+  },
+  {
+    "vendor": "general",
+    "title": "Vdoo Has Found Major Vulnerabilities In Foscam Cameras",
+    "url": "https://www.vdoo.com/blog/vdoo-has-found-major-vulnerabilities-in-foscam-cameras",
+    "source": "Jfrog (Vdoo)"
+  },
+  {
+    "vendor": "general",
+    "title": "Cve 2020 25860 Significant Vulnerability Discovered Rauc Embedded Firmware Update Framework",
+    "url": "https://www.vdoo.com/blog/cve-2020-25860-significant-vulnerability-discovered-rauc-embedded-firmware-update-framework",
+    "source": "Jfrog (Vdoo)"
+  },
+  {
+    "vendor": "general",
+    "title": "Realtek Rtl8195A Vulnerabilities Discovered",
+    "url": "https://www.vdoo.com/blog/realtek-rtl8195a-vulnerabilities-discovered",
+    "source": "Jfrog (Vdoo)"
+  },
+  {
+    "vendor": "malware",
+    "title": "Nozomi Networks Greyenergy Dissecting The Malware",
+    "url": "https://www.nozominetworks.com/downloads/US/Nozomi-Networks-GreyEnergy-Dissecting-the-Malware.pdf",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "malware",
+    "title": "Nozomi Networks Triton The First Sis Cyberattack",
+    "url": "https://www.nozominetworks.com/downloads/US/Nozomi-Networks-TRITON-The-First-SIS-Cyberattack.pdf",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "malware",
+    "title": "Industroyer2 Nozomi Networks Labs Analyzes The Iec 104 Payload",
+    "url": "https://www.nozominetworks.com/blog/industroyer2-nozomi-networks-labs-analyzes-the-iec-104-payload",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "malware",
+    "title": "Nozomi Networks Wp Industroyer2",
+    "url": "https://www.nozominetworks.com/downloads/US/Nozomi-Networks-WP-Industroyer2.pdf",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "general",
+    "title": "How Iot Botnets Evade Detection And Analysis",
+    "url": "https://www.nozominetworks.com/blog/how-iot-botnets-evade-detection-and-analysis",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "general",
+    "title": "How Iot Botnets Evade Detection And Analysis Part 2",
+    "url": "https://www.nozominetworks.com/blog/how-iot-botnets-evade-detection-and-analysis-part-2",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Vulnerabilities In Bmc Firmware Affect Ot Iot Device Security Part 1",
+    "url": "https://www.nozominetworks.com/blog/vulnerabilities-in-bmc-firmware-affect-ot-iot-device-security-part-1",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "general",
+    "title": "Flaws In Hitachi Relion 650 670 Series Ieds Update Mechanism",
+    "url": "https://www.nozominetworks.com/blog/flaws-in-hitachi-relion-650-670-series-ieds-update-mechanism",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "phoenix",
+    "title": "Protecting The Phoenix Unveiling Critical Vulnerabilities In Phoenix Contact Hmi Part 3",
+    "url": "https://www.nozominetworks.com/blog/protecting-the-phoenix-unveiling-critical-vulnerabilities-in-phoenix-contact-hmi-part-3",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "general",
+    "title": "Dji Mavic 3 Drone Research Part 1 Firmware Analysis",
+    "url": "https://www.nozominetworks.com/blog/dji-mavic-3-drone-research-part-1-firmware-analysis",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "general",
+    "title": "Dji Mavic 3 Drone Research Part 2 Vulnerability Analysis",
+    "url": "https://www.nozominetworks.com/blog/dji-mavic-3-drone-research-part-2-vulnerability-analysis",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "general",
+    "title": "Critical Vulnerabilities Found In Tridium Niagara Framework",
+    "url": "https://www.nozominetworks.com/blog/critical-vulnerabilities-found-in-tridium-niagara-framework",
+    "source": "Nozomi Networks"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Incontroller State Sponsored Ics Tool",
+    "url": "https://www.mandiant.com/resources/incontroller-state-sponsored-ics-tool",
+    "source": "Mandiant"
+  },
+  {
+    "vendor": "malware",
+    "title": "Industroyer V2 Old Malware New Tricks",
+    "url": "https://www.mandiant.com/resources/industroyer-v2-old-malware-new-tricks",
+    "source": "Mandiant"
+  },
+  {
+    "vendor": "general",
+    "title": "Sandworm Disrupts Power Ukraine Operational Technology",
+    "url": "https://www.mandiant.com/resources/blog/sandworm-disrupts-power-ukraine-operational-technology",
+    "source": "Mandiant"
+  },
+  {
+    "vendor": "general",
+    "title": "Securing Protection Relays Modern Substations",
+    "url": "https://cloud.google.com/blog/topics/threat-intelligence/securing-protection-relays-modern-substations",
+    "source": "Mandiant"
+  },
+  {
+    "vendor": "general",
+    "title": "Lexmark Printers Firmware Extraction Part A",
+    "url": "https://www.medigate.io/lexmark-printers-firmware-extraction-part-a",
+    "source": "Medigate"
+  },
+  {
+    "vendor": "general",
+    "title": "Lexmark Printers Firmware Extraction Part B",
+    "url": "https://www.medigate.io/lexmark-printers-firmware-extraction-part-b",
+    "source": "Medigate"
+  },
+  {
+    "vendor": "general",
+    "title": "Lexmark Printers Firmware Extraction Part C",
+    "url": "https://www.medigate.io/lexmark-printers-firmware-extraction-part-c",
+    "source": "Medigate"
+  },
+  {
+    "vendor": "general",
+    "title": "Badalloc Memory Allocation Vulnerabilities Could Affect Wide Range Of Iot And Ot Devices In Industrial Medical And Enterprise Networks",
+    "url": "https://msrc-blog.microsoft.com/2021/04/29/badalloc-memory-allocation-vulnerabilities-could-affect-wide-range-of-iot-and-ot-devices-in-industrial-medical-and-enterprise-networks",
+    "source": "Microsoft"
+  },
+  {
+    "vendor": "general",
+    "title": "How I Shut Down A Test Factory With A Single Layer 2 Packet",
+    "url": "https://www.rapid7.com/blog/post/2019/12/09/how-i-shut-down-a-test-factory-with-a-single-layer-2-packet",
+    "source": "Rapid-7"
+  },
+  {
+    "vendor": "siemens",
+    "title": "Siemens Discovery",
+    "url": "https://redballoonsecurity.com/siemens-discovery",
+    "source": "Redballoon Security"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Plc Hacking Part 1",
+    "url": "https://redfoxsec.com/blog/plc-hacking-part-1",
+    "source": "Redfox Security"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Plc Hacking Part 2",
+    "url": "https://redfoxsec.com/blog/plc-hacking-part-2",
+    "source": "Redfox Security"
+  },
+  {
+    "vendor": "general",
+    "title": "How Mishandling Of Websockets Can Cause Dos And Energy Theft",
+    "url": "https://www.saiflow.com/how-mishandling-of-websockets-can-cause-dos-and-energy-theft",
+    "source": "Saiflow"
+  },
+  {
+    "vendor": "general",
+    "title": "Hijacking Chargers Identifier To Cause Dos",
+    "url": "https://www.saiflow.com/hijacking-chargers-identifier-to-cause-dos",
+    "source": "Saiflow"
+  },
+  {
+    "vendor": "general",
+    "title": "The Impact Of Api Vulnerabilities On Csms Services Charging Network Operators The Use Case Of Abb Chargersync",
+    "url": "https://www.saiflow.com/the-impact-of-api-vulnerabilities-on-csms-services-charging-network-operators-the-use-case-of-abb-chargersync",
+    "source": "Saiflow"
+  },
+  {
+    "vendor": "general",
+    "title": "Abb Terra Ac Improper Authentication Can Lead To Evse Takeover Cve 2023 0863 Cve 2023 0864",
+    "url": "https://www.saiflow.com/abb-terra-ac-improper-authentication-can-lead-to-evse-takeover-cve-2023-0863-cve-2023-0864",
+    "source": "Saiflow"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Scadafence Hack The Port Report 2022",
+    "url": "https://www.scadafence.com/wp-content/uploads/2022/04/SCADAfence-Hack-The-Port-Report-2022.pdf",
+    "source": "Scadafence"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Scadafence Discovers First Cves Detected In Alerton Plcs",
+    "url": "https://blog.scadafence.com/scadafence-discovers-first-cves-detected-in-alerton-plcs",
+    "source": "Scadafence"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "2022 07 Opc Ua Net Standard Trusted Application Check Bypass",
+    "url": "https://sector7.computest.nl/post/2022-07-opc-ua-net-standard-trusted-application-check-bypass",
+    "source": "Sector7"
+  },
+  {
+    "vendor": "general",
+    "title": "2022 07 Inductive Automation Ignition Rce",
+    "url": "https://sector7.computest.nl/post/2022-07-inductive-automation-ignition-rce",
+    "source": "Sector7"
+  },
+  {
+    "vendor": "general",
+    "title": "Ssd Advisory Hongdian H8922 Multiple Vulnerabilities",
+    "url": "https://ssd-disclosure.com/ssd-advisory-hongdian-h8922-multiple-vulnerabilities",
+    "source": "SSD Disclousre"
+  },
+  {
+    "vendor": "malware",
+    "title": "Eset Greyenergy",
+    "url": "https://www.welivesecurity.com/wp-content/uploads/2018/10/ESET_GreyEnergy.pdf",
+    "source": "WeLiveSecurity"
+  },
+  {
+    "vendor": "malware",
+    "title": "Industroyer2 Industroyer Reloaded",
+    "url": "https://www.welivesecurity.com/2022/04/12/industroyer2-industroyer-reloaded",
+    "source": "WeLiveSecurity"
+  },
+  {
+    "vendor": "siemens",
+    "title": "Security Wall Of S7Commplus Part 1",
+    "url": "https://blog.viettelcybersecurity.com/security-wall-of-s7commplus-part-1",
+    "source": "Viettel Security"
+  },
+  {
+    "vendor": "siemens",
+    "title": "Security Wall Of S7Commplus 3",
+    "url": "https://blog.viettelcybersecurity.com/security-wall-of-s7commplus-3",
+    "source": "Viettel Security"
+  },
+  {
+    "vendor": "general",
+    "title": "Tmw Bug Chain And Rust",
+    "url": "https://stepfunc.io/blog/tmw-bug-chain-and-rust",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Blog",
+    "url": "http://muffsec.com/blog/?p=608",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwn2Own Or Not2Pwn Part 1 3F152C44563E",
+    "url": "https://medium.com/cognite/pwn2own-or-not2pwn-part-1-3f152c44563e",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Pwn2Own Or Not2Pwn Part 2 5 A Brief Tale Of Free 0Days E1Df142Eb815",
+    "url": "https://medium.com/cognite/pwn2own-or-not2pwn-part-2-5-a-brief-tale-of-free-0days-e1df142eb815",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Jsof Ripple20 Technical Whitepaper June20",
+    "url": "https://www.jsof-tech.com/wp-content/uploads/2020/06/JSOF_Ripple20_Technical_Whitepaper_June20.pdf",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Shodan Telling Us Ics Belgium",
+    "url": "https://www.vanimpe.eu/2017/03/23/shodan-telling-us-ics-belgium",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Sux",
+    "url": "http://www.scada.sl/2013/01/sux.html",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "How To Hack Sd Wan And Keep Your Sanity",
+    "url": "http://www.scada.sl/2018/09/how-to-hack-sd-wan-and-keep-your-sanity.html",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Cve 2019 12480",
+    "url": "https://1modm.github.io/CVE-2019-12480.html",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "53806381",
+    "url": "https://vimeo.com/53806381",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Vulnerabilities In Schneider Electric Somachine And M221 Plc",
+    "url": "https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/vulnerabilities-in-schneider-electric-somachine-and-m221-plc",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Attacking Scada Part Ii Vulnerabilities In Schneider Electric Ecostruxure Machine Expert And M221 Plc",
+    "url": "https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/attacking-scada-part-ii-vulnerabilities-in-schneider-electric-ecostruxure-machine-expert-and-m221-plc",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Attacking Scada Part Iii Hardcoded Salt In Schneider Electric Ecostruxure Machine Expert Cve 2020 28214",
+    "url": "https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/attacking-scada-part-iii-hardcoded-salt-in-schneider-electric-ecostruxure-machine-expert-cve-2020-28214",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Warcodes Attacking Ics Through Industrial Barcode Scanners",
+    "url": "https://ioactive.com/warcodes-attacking-ics-through-industrial-barcode-scanners",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Def Con Ics Ctf",
+    "url": "https://www.domaintools.com/resources/blog/def-con-ics-ctf",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Silent Schneider Revealing A Hidden Patch In Ecostruxure Operator Terminal Expert",
+    "url": "https://srcincite.io/blog/2020/02/18/silent-schneider-revealing-a-hidden-patch-in-ecostruxure-operator-terminal-expert.html",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Ge Healthcare Mac 5500 Vulnerabilities",
+    "url": "https://www.atredis.com/blog/2018/5/14/ge-healthcare-mac-5500-vulnerabilities",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "34C3 8956 Scada Gateway To S Hell",
+    "url": "https://media.ccc.de/v/34c3-8956-scada_-_gateway_to_s_hell",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Izi Izi Pwn2Own Ics Miami",
+    "url": "https://www.synacktiv.com/publications/izi-izi-pwn2own-ics-miami.html",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Offensive Ics Exploitation A Technical Description",
+    "url": "https://labs.f-secure.com/archive/offensive-ics-exploitation-a-technical-description",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Running A Fake Power Plant On The Internet For A Month 4A624F685Aaa",
+    "url": "https://grimminck.medium.com/running-a-fake-power-plant-on-the-internet-for-a-month-4a624f685aaa",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "Packet Modification Attack On Plc With Arp Spoofing Mitm Attack F0C4D58E3E83",
+    "url": "https://medium.com/@npcole/packet-modification-attack-on-plc-with-arp-spoofing-mitm-attack-f0c4d58e3e83",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "rockwell",
+    "title": "2019 04 21 Rockwell Zero Day",
+    "url": "https://halcyonic.net/2019-04-21-rockwell-zero-day",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "malware",
+    "title": "Analyzing The Triton Industrial Malware",
+    "url": "https://www.midnightbluelabs.com/blog/2018/1/16/analyzing-the-triton-industrial-malware",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "17967",
+    "url": "https://isc.sans.edu/forums/diary/Looking+for+malicious+traffic+in+electrical+SCADA+networks+part+1/17967",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "17981",
+    "url": "https://isc.sans.edu/forums/diary/Looking+for+malicious+traffic+in+electrical+SCADA+networks+part+2+solving+problems+with+DNP3+Secure+Authentication+Version+5/17981",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "ics-general",
+    "title": "13927",
+    "url": "https://isc.sans.edu/forums/diary/Authentication+Issues+between+entities+during+protocol+message+exchange+in+SCADA+Systems/13927",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Misconfiguration In Ilc Gsm Gprs Devices Leaves Over 1 200 Ics Devices Vulnerable To Attacks Over 82C2D4A91561",
+    "url": "https://sergiusechel.medium.com/misconfiguration-in-ilc-gsm-gprs-devices-leaves-over-1-200-ics-devices-vulnerable-to-attacks-over-82c2d4a91561",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Iot Ics Armageddon Hacking Devices Like Theres No Tomorrow Part 1",
+    "url": "https://www.redtimmy.com/iot-ics-armageddon-hacking-devices-like-theres-no-tomorrow-part-1",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Two Lines Of Jscript For 20000 Pwn2Own Miami 2022",
+    "url": "https://trenchant.io/two-lines-of-jscript-for-20000-pwn2own-miami-2022",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Part 1 Introduction Context Methodology",
+    "url": "https://guillaumebour.fr/articles/security_testing_pacemaker_ecosystem/part_1_introduction_context_methodology",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Reverse Engineering An Ev Charger",
+    "url": "https://www.mnemonic.io/resources/blog/reverse-engineering-an-ev-charger",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Guidepoint Security Researcher Discovers Vulnerability In The Integrity Of Common Hmi Client Server Protocol",
+    "url": "https://www.guidepointsecurity.com/blog/guidepoint-security-researcher-discovers-vulnerability-in-the-integrity-of-common-hmi-client-server-protocol",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "02 Gotta Kep Tcha Em All Bypassing Anti Debugging Methods In Kepserver",
+    "url": "https://starlabs.sg/blog/2023/02-gotta-kep-tcha-em-all-bypassing-anti-debugging-methods-in-kepserver",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "schneider",
+    "title": "Losing Control Over Schneiders",
+    "url": "https://www.reversemode.com/2023/04/losing-control-over-schneiders.html",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Vendor Re Use Opens The Aperture On Many Vulnerabilities",
+    "url": "https://eclypsium.com/blog/vendor-re-use-opens-the-aperture-on-many-vulnerabilities",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Solarview Exploitation",
+    "url": "https://vulncheck.com/blog/solarview-exploitation",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "malware",
+    "title": "Acidrain A Modem Wiper Rains Down On Europe",
+    "url": "https://www.sentinelone.com/labs/acidrain-a-modem-wiper-rains-down-on-europe",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "malware",
+    "title": "Powerdrop A New Insidious Powershell Script For Command And Control Attacks Targets U S Aerospace Defense Industry",
+    "url": "https://adlumin.com/post/powerdrop-a-new-insidious-powershell-script-for-command-and-control-attacks-targets-u-s-aerospace-defense-industry",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Blutacc",
+    "url": "https://duck.moe/blog/blutacc",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Sektorcert The Attack Against Danish Critical Infrastructure Tlp Clear",
+    "url": "https://sektorcert.dk/wp-content/uploads/2023/11/SektorCERT-The-attack-against-Danish-critical-infrastructure-TLP-CLEAR.pdf",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Cve 2023 50220 Inductive Automation Ignition Xml Deserialization To Rce 7B395412C6Cf",
+    "url": "https://petrusviet.medium.com/cve-2023-50220-inductive-automation-ignition-xml-deserialization-to-rce-7b395412c6cf",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Flatlined Analyzing Pulse Secure Firmware And Bypassing Integrity Checking",
+    "url": "https://eclypsium.com/blog/flatlined-analyzing-pulse-secure-firmware-and-bypassing-integrity-checking",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Reversing Embedded Device Bootloader U Boot P.1",
+    "url": "https://www.shielder.com/blog/2022/03/reversing-embedded-device-bootloader-u-boot-p.1",
+    "source": "Miscellaneous"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1140",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1140",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1003",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1003",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0771",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0771",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2017 0445",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2017-0445",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1026",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1026",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1025",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1025",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1024",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1024",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1069",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1069",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2016 0184",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2016-0184",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1144",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1144",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0868",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0868",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0825",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0825",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0827",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0827",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0847",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0847",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0822",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0822",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0824",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0824",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0851",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0851",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0823",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0823",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0826",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0826",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0866",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0866",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0867",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0867",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0808",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0808",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0807",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0807",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2018 0736",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2018-0736",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0806",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0806",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0766",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0766",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2018 0735",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2018-0735",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0763",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0763",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2018 0737",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2018-0737",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0764",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0764",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0765",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0765",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2018 0738",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2018-0738",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2018 0745",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2018-0745",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2018 0739",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2018-0739",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2018 0743",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2018-0743",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0768",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0768",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2018 0740",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2018-0740",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2018 0741",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2018-0741",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0769",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0769",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2018 0742",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2018-0742",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0770",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0770",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2019 0767",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2019-0767",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1174",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1174",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1184",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1184",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1008",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1008",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1169",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1169",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2020 1168",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2020-1168",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1236",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1236",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1273",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1273",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1271",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1271",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1272",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1272",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1270",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1270",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1274",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1274",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1306",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1306",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1304",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1304",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1303",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1303",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1301",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1301",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1302",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1302",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1300",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1300",
+    "source": "Cisco Talos"
+  },
+  {
+    "vendor": "general",
+    "title": "Talos 2021 1305",
+    "url": "https://talosintelligence.com/vulnerability_reports/TALOS-2021-1305",
+    "source": "Cisco Talos"
+  }
+]

@@ -329,6 +329,12 @@ pub enum DbCmd {
         #[arg(long)]
         id: i64,
     },
+    /// List ICS research references from awesome-ics-writeups (optionally filtered by vendor)
+    Refs {
+        /// Vendor slug: beckhoff, siemens, schneider, rockwell, mitsubishi, omron,
+        /// phoenix, ewon, modbus, iec104, enip, snmp, malware, ics-general, general
+        vendor: Option<String>,
+    },
 }
 
 // ===================================================================
@@ -1664,6 +1670,21 @@ fn run_db(cmd: DbCmd) -> Result<()> {
         DbCmd::Remove { id } => {
             db.delete_device(id)?;
             crate::display::print_success(&format!("Removed device id={id}"));
+        }
+        DbCmd::Refs { vendor } => {
+            use scadaver_rs::references;
+            let entries: Vec<&references::Reference> = match vendor.as_deref() {
+                Some(v) => references::for_vendor(v),
+                None => references::all().iter().collect(),
+            };
+            if entries.is_empty() {
+                println!("No references found.");
+                println!("Valid slugs: beckhoff siemens schneider rockwell mitsubishi omron");
+                println!("            phoenix ewon modbus iec104 enip snmp malware ics-general general");
+            }
+            for r in entries {
+                println!("[{}]  {}\n  {}\n", r.source, r.title, r.url);
+            }
         }
     }
     Ok(())

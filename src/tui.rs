@@ -526,6 +526,7 @@ enum Mode {
     VendorPicker,
     Search,
     Help,
+    References,
     OutputZoom,
 }
 
@@ -552,6 +553,7 @@ struct App {
     filter: String,
     filtered_indices: Vec<usize>,
     active_jobs: u32,
+    references_scroll: usize,
 }
 
 impl App {
@@ -587,6 +589,7 @@ impl App {
             filter: String::new(),
             filtered_indices,
             active_jobs: 0,
+            references_scroll: 0,
         }
     }
 
@@ -4136,6 +4139,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
     match app.mode {
         Mode::ScanMenu => draw_scan_menu(frame, size, app),
         Mode::Help => draw_help(frame, size),
+        Mode::References => draw_references(frame, size, app),
         Mode::ExploitInput => draw_exploit_input_popup(frame, size, app),
         Mode::ExploitConfirm => draw_exploit_confirm_popup(frame, size, app),
         Mode::VendorPicker => draw_vendor_picker(frame, size, app),
@@ -4156,13 +4160,14 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let title = format!(" SCADAver ICS Red Team Tool v1.0{scan_tag} ");
     let keys = match app.mode {
         Mode::Normal =>
-            " [A] Add IP  [S] Scan  [E] Exploit  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear output  [?] Help  [Q] Quit",
+            " [A] Add IP  [S] Scan  [E] Exploit  [W] References  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear  [?] Help  [Q] Quit",
         Mode::IpInput => " Enter IP address \u{2014} [ESC] cancel",
         Mode::ExploitMenu => " [J/K] Navigate  [ENTER] Run  [V] View as protocol  [O] Zoom  [PgUp/PgDn] Scroll  [ESC] back",
         Mode::Search => " Type to filter \u{2014} [ESC] clear  [ENTER] confirm",
         Mode::ExploitInput => " Enter parameter \u{2014} [ENTER] run  [ESC] cancel",
         Mode::ExploitConfirm => " Type YES to confirm action \u{2014} [ENTER] confirm  [ESC] cancel",
         Mode::OutputZoom => " [J/K/PgUp/PgDn] Scroll  [G] Bottom  [g] Top  [C] Clear  [O/ESC] Close",
+        Mode::References => " [J/K/↑↓] Scroll  [W/ESC] Close",
         _ => " [ESC / ?] back",
     };
 
@@ -4934,6 +4939,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
             s.fg(Color::White),
         )),
         Line::from(Span::styled(
+            "  W        Open research references for selected vendor",
+            s.fg(Color::White),
+        )),
+        Line::from(Span::styled(
             "  R        Rescan selected device",
             s.fg(Color::White),
         )),
@@ -5085,6 +5094,141 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     );
 }
 
+fn handle_references(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Char('w' | 'W') => app.mode = Mode::Normal,
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.references_scroll = app.references_scroll.saturating_add(1);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.references_scroll = app.references_scroll.saturating_sub(1);
+        }
+        KeyCode::PageDown => {
+            app.references_scroll = app.references_scroll.saturating_add(10);
+        }
+        KeyCode::PageUp => {
+            app.references_scroll = app.references_scroll.saturating_sub(10);
+        }
+        _ => {}
+    }
+}
+
+fn references_vendor_refs(app: &App) -> Vec<&'static scadaver_rs::references::Reference> {
+    use scadaver_rs::references;
+    let Some(dev) = app.selected_device() else {
+        return Vec::new();
+    };
+    let vendor = dev.vendor.as_str();
+    if vendor == "multi" {
+        let protocols: Vec<String> = dev
+            .fields
+            .get("protocols")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        references::for_multi(&protocols)
+    } else {
+        references::for_vendor(vendor)
+    }
+}
+
+fn draw_references(frame: &mut Frame, area: Rect, app: &mut App) {
+    use scadaver_rs::references::Reference;
+
+    let popup = centered_rect(72, 82, area);
+    frame.render_widget(Clear, popup);
+
+    let s = Style::default();
+    let refs: Vec<&Reference> = references_vendor_refs(app);
+
+    let vendor_label = app
+        .selected_device()
+        .map_or_else(
+            || "\u{2014}".into(),
+            |d| {
+                if d.vendor == "multi" {
+                    d.fields
+                        .get("protocols")
+                        .and_then(|v| v.as_array())
+                        .map_or_else(
+                            || "multi".into(),
+                            |arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(" + ")
+                            },
+                        )
+                } else {
+                    d.vendor.clone()
+                }
+            },
+        );
+
+    let title = format!(" Research References \u{2014} {vendor_label} ");
+
+    let inner_width = popup.width.saturating_sub(4) as usize;
+
+    let mut lines: Vec<Line> = vec![Line::from("")];
+
+    if refs.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No references found for this vendor.",
+            s.fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Select a device first, or try 'scadaver db refs <vendor>' in the CLI.",
+            s.fg(Color::DarkGray),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            format!("  {} references  (source: neutrinoguy/awesome-ics-writeups)", refs.len()),
+            s.fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(""));
+
+        for r in &refs {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  [{source}]  ", source = r.source),
+                    s.fg(Color::Cyan),
+                ),
+                Span::styled(r.title.clone(), s.fg(Color::White).add_modifier(Modifier::BOLD)),
+            ]));
+            let url_display = if r.url.len() > inner_width {
+                format!("  {}…", &r.url[..inner_width.saturating_sub(1)])
+            } else {
+                format!("  {}", r.url)
+            };
+            lines.push(Line::from(Span::styled(url_display, s.fg(Color::DarkGray))));
+            lines.push(Line::from(""));
+        }
+    }
+
+    // Clamp scroll
+    let max_scroll = lines.len().saturating_sub(1);
+    if app.references_scroll > max_scroll {
+        app.references_scroll = max_scroll;
+    }
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(s.fg(Color::Rgb(255, 140, 0)));
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .scroll((u16::try_from(app.references_scroll).unwrap_or(u16::MAX), 0))
+            .wrap(Wrap { trim: false }),
+        popup,
+    );
+}
+
 fn draw_quit_confirm(frame: &mut Frame, area: Rect) {
     let popup = centered_rect(38, 22, area);
     frame.render_widget(Clear, popup);
@@ -5175,6 +5319,10 @@ fn handle_key(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers) -
         }
         Mode::Help => {
             app.mode = Mode::Normal;
+            false
+        }
+        Mode::References => {
+            handle_references(app, code);
             false
         }
         Mode::OutputZoom => {
@@ -5277,6 +5425,10 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
         KeyCode::Char('/') => {
             app.input_buf.clear();
             app.mode = Mode::Search;
+        }
+        KeyCode::Char('w' | 'W') => {
+            app.references_scroll = 0;
+            app.mode = Mode::References;
         }
         KeyCode::Char('?') => app.mode = Mode::Help,
         KeyCode::Esc => {
@@ -6182,6 +6334,7 @@ mod tests {
             filtered_indices: vec![0],
             active_jobs: 0,
             exploit_list_state: ratatui::widgets::ListState::default(),
+            references_scroll: 0,
         }
     }
 
