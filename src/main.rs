@@ -1,10 +1,11 @@
 ﻿mod cli;
-mod core;
 mod creds;
 mod db;
 mod display;
 mod tui;
-mod vendors;
+
+pub use scadaver_rs::core;
+pub use scadaver_rs::vendors;
 
 fn main() {
     use clap::Parser;
