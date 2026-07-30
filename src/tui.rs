@@ -4269,12 +4269,13 @@ fn draw_device_list(frame: &mut Frame, area: Rect, app: &mut App) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Rgb(50, 50, 70))
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("\u{25b6} ");
 
     frame.render_stateful_widget(list, area, &mut app.list_state);
+
 }
 
 fn draw_right_panel(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -4327,8 +4328,19 @@ fn draw_detail_panel(frame: &mut Frame, area: Rect, app: &App) {
                 for (k, v) in map {
                     let val_str = match v {
                         Value::String(s) if !s.is_empty() => s.clone(),
-                        Value::Null | Value::String(_) => continue,
-                        other => other.to_string(),
+                        // booleans are shown via capability lines; objects are per-vendor
+                        // blobs for multi devices; protocols key is handled separately
+                        Value::Null
+                        | Value::String(_)
+                        | Value::Bool(_)
+                        | Value::Object(_) => continue,
+                        _ if k == "protocols" => continue,
+                        Value::Array(arr) => arr
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        other @ Value::Number(_) => other.to_string(),
                     };
                     lines.push(Line::from(vec![
                         Span::styled(format!(" {k}:"), Style::default().fg(Color::DarkGray)),
@@ -4377,6 +4389,40 @@ fn draw_detail_panel(frame: &mut Frame, area: Rect, app: &App) {
 
 fn append_capability_lines(dev: &DeviceRecord, lines: &mut Vec<Line<'_>>) {
     let vendor = dev.vendor.to_ascii_lowercase();
+
+    if vendor == "multi" {
+        let protocols: Vec<String> = dev
+            .fields
+            .get("protocols")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for proto in &protocols {
+            lines.push(Line::from(Span::styled(
+                format!(" {proto}:"),
+                Style::default()
+                    .fg(vendor_color(proto))
+                    .add_modifier(Modifier::BOLD),
+            )));
+            if let Some(Value::Object(sub_map)) = dev.fields.get(proto) {
+                let sub_dev = DeviceRecord {
+                    id: dev.id,
+                    ip: dev.ip.clone(),
+                    vendor: proto.clone(),
+                    last_seen: dev.last_seen,
+                    fields: Value::Object(sub_map.clone()),
+                };
+                append_capability_lines(&sub_dev, lines);
+            }
+        }
+        return;
+    }
+
     let caps: &[(&str, CapabilityKey)] = match vendor.as_str() {
         "beckhoff" => &[
             ("ads tcp", CapabilityKey::BeckhoffAds),
@@ -5199,8 +5245,13 @@ fn draw_references(frame: &mut Frame, area: Rect, app: &mut App) {
                 ),
                 Span::styled(r.title.clone(), s.fg(Color::White).add_modifier(Modifier::BOLD)),
             ]));
-            let url_display = if r.url.len() > inner_width {
-                format!("  {}…", &r.url[..inner_width.saturating_sub(1)])
+            let url_display = if r.url.chars().count() > inner_width {
+                let truncate_at = r
+                    .url
+                    .char_indices()
+                    .nth(inner_width.saturating_sub(2))
+                    .map_or(r.url.len(), |(i, _)| i);
+                format!("  {}…", &r.url[..truncate_at])
             } else {
                 format!("  {}", r.url)
             };
