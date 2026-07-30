@@ -2,11 +2,16 @@
 // Each test exercises the public surface as an external crate would —
 // using scadaver_rs:: paths, not crate:: paths.
 
+use scadaver_rs::core::autodetect::{DeviceInfo, ProbeInfo, SweepOutcome};
 use scadaver_rs::core::bytes;
 use scadaver_rs::vendors::beckhoff::ads;
 use scadaver_rs::vendors::enip::enums;
 use scadaver_rs::vendors::ewon::exploit;
+use scadaver_rs::vendors::mitsubishi::slmp::SlmpValue;
+use scadaver_rs::vendors::omron::fins::{FinsDevice, AREA_DM_WORD, FINS_TCP_PORT};
 use scadaver_rs::vendors::rockwell::driver;
+use scadaver_rs::vendors::schneider::session_hijack::{SchneiderDeviceInfo, SchneiderSession};
+use scadaver_rs::vendors::siemens::scan as siemens_scan;
 use scadaver_rs::vendors::snmp::oids;
 
 // ── core::bytes ──────────────────────────────────────────────────────────────
@@ -331,4 +336,209 @@ fn ads_ams_route_fields_accessible() {
     };
     assert_eq!(route.remote_port, 801);
     assert_eq!(route.local_netid, "127.0.0.1.1.1");
+}
+
+#[test]
+fn ads_build_local_netid_loopback() {
+    assert_eq!(ads::build_local_netid("127.0.0.1"), "7f0000010101");
+}
+
+#[test]
+fn ads_build_local_netid_class_c() {
+    assert_eq!(ads::build_local_netid("192.168.1.1"), "c0a801010101");
+}
+
+#[test]
+fn ads_decode_value_bool_false() {
+    assert_eq!(ads::decode_ads_value("BOOL", &[0]), "false");
+}
+
+#[test]
+fn ads_decode_value_bool_true() {
+    assert_eq!(ads::decode_ads_value("BOOL", &[1]), "true");
+}
+
+#[test]
+fn ads_decode_value_int_1337() {
+    // INT = i16 LE: 1337 = 0x0539
+    assert_eq!(ads::decode_ads_value("INT", &[0x39, 0x05]), "1337");
+}
+
+#[test]
+fn ads_decode_value_dint_neg1() {
+    // DINT = i32 LE: -1 = [0xFF, 0xFF, 0xFF, 0xFF]
+    assert_eq!(ads::decode_ads_value("DINT", &[0xFF, 0xFF, 0xFF, 0xFF]), "-1");
+}
+
+#[test]
+fn ads_decode_value_real_one() {
+    // REAL = f32 LE: 1.0 = [0x00, 0x00, 0x80, 0x3F]
+    assert_eq!(ads::decode_ads_value("REAL", &[0x00, 0x00, 0x80, 0x3F]), "1");
+}
+
+#[test]
+fn ads_decode_value_string_null_terminated() {
+    assert_eq!(ads::decode_ads_value("STRING(80)", b"hello\x00rest"), "\"hello\"");
+}
+
+#[test]
+fn ads_decode_value_unknown_type_hex_dump() {
+    let result = ads::decode_ads_value("MYSTRUCT", &[0xDE, 0xAD]);
+    assert!(result.contains("de") || result.contains("DE") || result.contains("dead"),
+        "expected hex dump, got: {result}");
+}
+
+// ── omron::fins ───────────────────────────────────────────────────────────────
+
+#[test]
+fn fins_cpu_state_stop() {
+    assert_eq!(FinsDevice::cpu_state_str(0x00), "Stop");
+}
+
+#[test]
+fn fins_cpu_state_run() {
+    assert_eq!(FinsDevice::cpu_state_str(0x01), "Run");
+}
+
+#[test]
+fn fins_cpu_state_monitor() {
+    assert_eq!(FinsDevice::cpu_state_str(0x02), "Monitor");
+}
+
+#[test]
+fn fins_cpu_state_program() {
+    assert_eq!(FinsDevice::cpu_state_str(0x04), "Program");
+}
+
+#[test]
+fn fins_cpu_state_unknown() {
+    assert_eq!(FinsDevice::cpu_state_str(0xFF), "Unknown");
+}
+
+#[test]
+fn fins_constants() {
+    assert_eq!(FINS_TCP_PORT, 9600);
+    assert_eq!(AREA_DM_WORD, 0x82);
+}
+
+#[test]
+fn fins_device_struct_fields_accessible() {
+    let dev = FinsDevice {
+        node_addr: 1,
+        model: "CJ2M-CPU31".into(),
+        version: "3.0".into(),
+    };
+    assert_eq!(dev.node_addr, 1);
+    assert_eq!(dev.model, "CJ2M-CPU31");
+    assert_eq!(dev.version, "3.0");
+}
+
+// ── mitsubishi::slmp ──────────────────────────────────────────────────────────
+
+#[test]
+fn slmp_default_port() {
+    assert_eq!(scadaver_rs::vendors::mitsubishi::slmp::DEFAULT_PORT, 5007);
+}
+
+#[test]
+fn slmp_value_struct_fields_accessible() {
+    let val = SlmpValue {
+        display: "D0=1337".into(),
+        raw: 1337,
+        value_str: "1337".into(),
+    };
+    assert_eq!(val.raw, 1337);
+    assert_eq!(val.display, "D0=1337");
+    assert_eq!(val.value_str, "1337");
+}
+
+// ── schneider::session_hijack ─────────────────────────────────────────────────
+
+#[test]
+fn schneider_session_struct_fields_accessible() {
+    let sess = SchneiderSession {
+        cookie_value: "abc123".into(),
+        power_on_count: 42,
+    };
+    assert_eq!(sess.cookie_value, "abc123");
+    assert_eq!(sess.power_on_count, 42);
+}
+
+#[test]
+fn schneider_device_info_struct_fields_accessible() {
+    let info = SchneiderDeviceInfo {
+        device: "M340".into(),
+        mac: "00:11:22:33:44:55".into(),
+        firmware: "V2.40".into(),
+        state: "run".into(),
+    };
+    assert_eq!(info.device, "M340");
+    assert_eq!(info.firmware, "V2.40");
+    assert_eq!(info.mac, "00:11:22:33:44:55");
+}
+
+// ── siemens::scan ─────────────────────────────────────────────────────────────
+
+#[test]
+fn siemens_device_all_fields() {
+    let dev = siemens_scan::SiemensDevice {
+        ip: "192.168.1.10".into(),
+        hardware: Some("6ES7 315-2EH14".into()),
+        firmware: Some("V3.3".into()),
+        cpu_state: Some("Run".into()),
+        open_ports: vec![102],
+    };
+    assert_eq!(dev.ip, "192.168.1.10");
+    assert_eq!(dev.hardware.as_deref(), Some("6ES7 315-2EH14"));
+    assert_eq!(dev.firmware.as_deref(), Some("V3.3"));
+    assert_eq!(dev.open_ports, vec![102]);
+}
+
+#[test]
+fn siemens_device_optional_fields_none() {
+    let dev = siemens_scan::SiemensDevice {
+        ip: "10.0.0.1".into(),
+        hardware: None,
+        firmware: None,
+        cpu_state: None,
+        open_ports: vec![],
+    };
+    assert!(dev.hardware.is_none());
+    assert!(dev.cpu_state.is_none());
+    assert!(dev.open_ports.is_empty());
+}
+
+// ── core::autodetect ──────────────────────────────────────────────────────────
+
+#[test]
+fn autodetect_probe_info_fields_accessible() {
+    let probe = ProbeInfo {
+        label: "Test Protocol",
+        transport: "TCP 9999",
+    };
+    assert_eq!(probe.label, "Test Protocol");
+    assert_eq!(probe.transport, "TCP 9999");
+}
+
+#[test]
+fn autodetect_sweep_outcome_no_device() {
+    let outcome = SweepOutcome {
+        probe: ProbeInfo { label: "Test", transport: "UDP 161" },
+        device: None,
+    };
+    assert!(outcome.device.is_none());
+    assert_eq!(outcome.probe.label, "Test");
+}
+
+#[test]
+fn autodetect_device_info_struct_fields_accessible() {
+    use std::collections::HashMap;
+    let info = DeviceInfo {
+        vendor: "siemens".into(),
+        ip: "192.168.1.10".into(),
+        fields: HashMap::new(),
+    };
+    assert_eq!(info.vendor, "siemens");
+    assert_eq!(info.ip, "192.168.1.10");
+    assert!(info.fields.is_empty());
 }

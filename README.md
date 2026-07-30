@@ -3,7 +3,7 @@
 Unified ICS red team multi-tool written in Rust. Supports discovery, enumeration, and
 exploitation across ten industrial control protocols.
 
-**License:** GPL-3.0-or-later  
+**License:** [PolyForm Noncommercial 1.0.0](LICENSE) — free for non-commercial use  
 **Platform:** Linux / Windows / macOS
 
 ---

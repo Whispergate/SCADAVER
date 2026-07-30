@@ -7,7 +7,7 @@ description = "Unified ICS Red Team Multi-Tool — Rust edition"
 repository = "https://github.com/SawyersPresent/scadaver-rs"
 keywords = ["ics", "scada", "pentest", "modbus", "redteam"]
 categories = ["network-programming", "command-line-utilities"]
-license = "GPL-3.0-or-later"
+license = "LicenseRef-PolyForm-Noncommercial-1.0"
 
 [[bin]]
 name = "scadaver"
