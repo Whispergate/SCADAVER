@@ -60,6 +60,7 @@ const ILC390_STATE_PACKETS: &[&str] = &[
     "cc01000f400d00009089",
 ];
 
+/// Identity of a Phoenix Contact PLC read over the `ProConOS` info protocol (type, firmware, build).
 #[derive(Debug, Clone)]
 pub struct PhoenixDeviceInfo {
     pub plc_type: String,

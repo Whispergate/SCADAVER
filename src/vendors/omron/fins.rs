@@ -7,7 +7,9 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};
 use std::time::Duration;
 
+/// Default FINS/TCP port.
 pub const FINS_TCP_PORT: u16 = 9600;
+/// Default FINS/UDP port.
 pub const FINS_UDP_PORT: u16 = 9600;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -22,6 +24,7 @@ pub struct FinsDevice {
 }
 
 impl FinsDevice {
+    /// Map a FINS CPU operating-mode byte to a human-readable state string.
     pub fn cpu_state_str(state: u8) -> &'static str {
         match state {
             0x00 => "Stop",

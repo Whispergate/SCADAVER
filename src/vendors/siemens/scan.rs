@@ -1,5 +1,6 @@
 use crate::vendors::siemens::s7comm::{get_device_snapshot, tcp_scan, S7_PORT};
 
+/// A scanned Siemens S7 PLC: its open ports plus hardware, firmware, and CPU state where readable.
 #[derive(Debug, Clone)]
 pub struct SiemensDevice {
     pub ip: String,
@@ -9,6 +10,8 @@ pub struct SiemensDevice {
     pub open_ports: Vec<u16>,
 }
 
+/// Scan a single IP for a Siemens S7 PLC over S7comm, reading its identity snapshot when reachable.
+/// Pass `port = 0` to use the default S7 port (102).
 pub fn scan_ip_with_port(ip: &str, port: u16) -> SiemensDevice {
     let port = if port == 0 { S7_PORT } else { port };
     let open_ports = tcp_scan(ip);

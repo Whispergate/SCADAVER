@@ -7,6 +7,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+/// Default TCP port for IEC 60870-5-104.
 pub const IEC104_PORT: u16 = 2404;
 const TIMEOUT: Duration = Duration::from_secs(5);
 

@@ -12,6 +12,7 @@ const MAX_REGISTERS: u16 = 125;
 const MAX_BITS: u16 = 2000;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// A single decoded Modbus register or bit, with both protocol and user-facing addresses.
 #[derive(Debug, Clone)]
 pub struct ModbusRegister {
     /// 0-based protocol address.
@@ -24,12 +25,14 @@ pub struct ModbusRegister {
     pub value_str: String,
 }
 
+/// A raw Modbus PDU response: the responding unit id and the bytes following the function code.
 #[derive(Debug, Clone)]
 pub struct ModbusReply {
     pub unit_id: u8,
     pub data: Vec<u8>,
 }
 
+/// Decoded Modbus "Read Device Identification" (FC 0x2B/MEI 0x0E) objects, keyed by object id.
 #[derive(Debug, Clone)]
 pub struct ModbusDeviceId {
     pub unit_id: u8,
@@ -37,19 +40,23 @@ pub struct ModbusDeviceId {
 }
 
 impl ModbusDeviceId {
+    /// Vendor name (object 0x00), if present.
     pub fn manufacturer(&self) -> Option<&str> {
         self.objects.get(&0x00).map(String::as_str)
     }
 
+    /// Product code / model name (object 0x01), if present.
     pub fn product_name(&self) -> Option<&str> {
         self.objects.get(&0x01).map(String::as_str)
     }
 
+    /// Firmware/major-minor revision (object 0x02), if present.
     pub fn version(&self) -> Option<&str> {
         self.objects.get(&0x02).map(String::as_str)
     }
 }
 
+/// A Modbus TCP client that transacts against a device, trying each configured unit id in turn.
 #[derive(Debug, Clone)]
 pub struct ModbusTcpClient {
     ip: String,
@@ -59,6 +66,7 @@ pub struct ModbusTcpClient {
 }
 
 impl ModbusTcpClient {
+    /// Create a client for `ip` using the default port (502), 5s timeout, and unit ids [0x01, 0xFF].
     pub fn new(ip: impl Into<String>) -> Self {
         Self {
             ip: ip.into(),
@@ -68,24 +76,31 @@ impl ModbusTcpClient {
         }
     }
 
+    /// Override the TCP port; a port of 0 falls back to the default (502).
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = effective_port(port);
         self
     }
 
+    /// Override the connect/read/write timeout (clamped to at least 1 second).
     pub fn with_timeout_secs(mut self, timeout_secs: u64) -> Self {
         self.timeout = Duration::from_secs(timeout_secs.max(1));
         self
     }
 
+    /// Send a PDU and return the reply, erroring if the device answers with a Modbus exception.
     pub fn transact(&self, pdu: &[u8], expected_fc: u8) -> Result<ModbusReply> {
         self.transact_inner(pdu, expected_fc, false)
     }
 
+    /// Like [`Self::transact`] but returns a Modbus exception response as a successful reply
+    /// (useful for reachability probes where any answer confirms the device is alive).
     pub fn transact_allow_exception(&self, pdu: &[u8], expected_fc: u8) -> Result<ModbusReply> {
         self.transact_inner(pdu, expected_fc, true)
     }
 
+    /// Read and decode the device identification objects (vendor, product, version) over paged
+    /// FC 0x2B/MEI 0x0E requests.
     pub fn read_device_id(&self) -> Result<ModbusDeviceId> {
         let mut objects = BTreeMap::new();
         let mut next_obj_id: u8 = 0;
@@ -135,6 +150,7 @@ impl ModbusTcpClient {
         Ok(ModbusDeviceId { unit_id, objects })
     }
 
+    /// Read a single holding register (FC 0x03), accepting an exception reply as proof of life.
     pub fn probe_holding_register(&self) -> Result<ModbusReply> {
         self.transact_allow_exception(&read_request_pdu(0x03, 0, 1), 0x03)
     }
@@ -228,6 +244,7 @@ impl ModbusTcpClient {
     }
 }
 
+/// Return `port`, substituting the Modbus default (502) when it is 0.
 pub fn effective_port(port: u16) -> u16 {
     if port == 0 {
         DEFAULT_PORT
@@ -343,6 +360,7 @@ fn read_bits(
     Ok(registers)
 }
 
+/// Read `count` holding registers (FC 0x03) starting at `start`; display addresses use the 4xxxx range.
 pub fn read_holding_registers(
     ip: &str,
     port: u16,
@@ -352,6 +370,7 @@ pub fn read_holding_registers(
     read_words(ip, port, start, count, 0x03, 40001)
 }
 
+/// Read `count` input registers (FC 0x04) starting at `start`; display addresses use the 3xxxx range.
 pub fn read_input_registers(
     ip: &str,
     port: u16,
@@ -361,6 +380,7 @@ pub fn read_input_registers(
     read_words(ip, port, start, count, 0x04, 30001)
 }
 
+/// Read `count` coils (FC 0x01) starting at `start`; each register decodes to "ON"/"OFF".
 pub fn read_coils(
     ip: &str,
     port: u16,
@@ -370,6 +390,7 @@ pub fn read_coils(
     read_bits(ip, port, start, count, 0x01, 1)
 }
 
+/// Read `count` discrete inputs (FC 0x02) starting at `start`; display addresses use the 1xxxx range.
 pub fn read_discrete_inputs(
     ip: &str,
     port: u16,
@@ -379,6 +400,7 @@ pub fn read_discrete_inputs(
     read_bits(ip, port, start, count, 0x02, 10001)
 }
 
+/// Write a single coil (FC 0x05) to on/off at `address`.
 pub fn write_single_coil(ip: &str, port: u16, address: u16, on: bool) -> Result<()> {
     let value: u16 = if on { 0xFF00 } else { 0x0000 };
     let pdu = [
@@ -392,6 +414,7 @@ pub fn write_single_coil(ip: &str, port: u16, address: u16, on: bool) -> Result<
     Ok(())
 }
 
+/// Write a single holding register (FC 0x06) at `address`.
 pub fn write_single_register(ip: &str, port: u16, address: u16, value: u16) -> Result<()> {
     let pdu = [
         0x06,
@@ -404,6 +427,8 @@ pub fn write_single_register(ip: &str, port: u16, address: u16, value: u16) -> R
     Ok(())
 }
 
+/// Write consecutive holding registers (FC 0x10) starting at `start`; returns the count written
+/// (values are capped at the Modbus per-request maximum of 125).
 pub fn write_multiple_registers(ip: &str, port: u16, start: u16, values: &[u16]) -> Result<u16> {
     if values.is_empty() {
         bail!("write_multiple_registers: empty values slice");

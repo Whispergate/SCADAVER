@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
+/// Default SLMP TCP port.
 pub const DEFAULT_PORT: u16 = 5007;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_WORD_COUNT: u16 = 960;
@@ -13,6 +14,7 @@ const CMD_BATCH_WRITE: u16 = 0x1401;
 const SUBCMD_WORD: u16 = 0x0000;
 const SUBCMD_BIT: u16 = 0x0001;
 
+/// A single SLMP device value: its display address, raw word, and formatted string.
 pub struct SlmpValue {
     pub display: String,
     pub raw: u16,

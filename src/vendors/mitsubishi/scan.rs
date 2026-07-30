@@ -12,6 +12,7 @@ const DISCOVERY_PACKET: &str = "57010000001111070000ffff030000fe0300001e001c0a16
 
 const SLMP_DISCOVERY_PACKET: &str = "5000ffff03ff0c000101 00000000000000000000";
 
+/// A discovered Mitsubishi MELSEC PLC, including the protocol/transport it answered on.
 #[derive(Debug, Clone)]
 pub struct MitsubishiDevice {
     pub ip: String,
@@ -23,6 +24,7 @@ pub struct MitsubishiDevice {
     pub discovery_transport: Option<String>,
 }
 
+/// Which transport(s) a Mitsubishi scan should use: UDP discovery, TCP SLMP, or both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
     Udp,

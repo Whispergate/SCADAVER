@@ -58,6 +58,7 @@ pub fn vendor_from_sys_oid(oid: &str) -> Option<&'static str> {
     }
 }
 
+/// Common default SNMP community strings tried during community discovery.
 pub const COMMON_COMMUNITIES: &[&str] = &[
     "public", "private", "community", "snmp", "admin", "manager",
     "read", "write", "secret", "monitor", "test",

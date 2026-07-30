@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+/// Default S7comm / ISO-on-TCP port.
 pub const S7_PORT: u16 = 102;
 const BUFFER_SIZE: usize = 65000;
 
@@ -553,6 +554,7 @@ pub fn probe_auth_required(ip: &str, port: u16, timeout_secs: u64) -> bool {
     }
 }
 
+/// Return `true` if a TCP connection to `ip:port` succeeds within a 1-second timeout.
 pub fn scan_port(ip: &str, port: u16) -> bool {
     TcpStream::connect_timeout(
         &format!("{ip}:{port}")
@@ -563,6 +565,7 @@ pub fn scan_port(ip: &str, port: u16) -> bool {
     .is_ok()
 }
 
+/// Probe the common Siemens ports (102, 502) and return those that are open.
 pub fn tcp_scan(ip: &str) -> Vec<u16> {
     let mut ports = Vec::new();
     if scan_port(ip, 102) {

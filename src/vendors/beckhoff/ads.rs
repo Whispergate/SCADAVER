@@ -45,6 +45,7 @@ pub fn construct_ams_packet(
     format!("0000{ams_len}{ams_data}")
 }
 
+/// Parameters for the supported ADS command payloads (read, write, read-state, write-control).
 pub enum AdsParams {
     Read(u32, u32, u32),
     Write(u32, u32, Vec<u8>),
@@ -94,6 +95,7 @@ fn build_ads_data(cmd_id: u16, params: &AdsParams) -> String {
 }
 
 // Fields are exercised by unit tests; compiler doesn't count cfg(test) as "read".
+/// A parsed AMS/TCP response: the AMS header fields plus the raw ADS payload as a hex string.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct AmsResponse {
@@ -109,6 +111,7 @@ pub struct AmsResponse {
     pub ads_data: String,
 }
 
+/// Parse raw AMS/TCP response bytes into an [`AmsResponse`], or `None` if malformed/too short.
 pub fn parse_ams_response(response: &[u8]) -> Option<AmsResponse> {
     if response.len() < 38 {
         return None;
@@ -148,6 +151,7 @@ pub fn parse_ams_response(response: &[u8]) -> Option<AmsResponse> {
     })
 }
 
+/// Split an ADS payload hex string into its error code and data hex; returns `None` if truncated.
 pub fn parse_ads_response(ads_hex: &str) -> Option<(String, String)> {
     if ads_hex.len() < 8 {
         return None;

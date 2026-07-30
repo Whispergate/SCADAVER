@@ -12,6 +12,7 @@ const DISCOVERY_PACKETS: &[&str] = &[
     "4950434f4e460000000000000000000a000000000000000000000000000000000000000000000000",
 ];
 
+/// An eWON device discovered over the IPCONF UDP protocol (network, MAC, serial, firmware).
 #[derive(Debug, Clone)]
 pub struct EwonDevice {
     pub ip: Option<String>,

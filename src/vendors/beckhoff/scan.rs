@@ -13,6 +13,7 @@ use crate::vendors::beckhoff::ads::{
 const DISCOVERY_PORT: u16 = 48899;
 pub const DEFAULT_ADS_PORT: u16 = 48898;
 
+/// A discovered Beckhoff `TwinCAT` device: its IP, AMS Net ID, and version/kernel identity.
 #[derive(Debug, Clone)]
 pub struct BeckhoffDevice {
     pub ip: String,
@@ -491,6 +492,7 @@ fn parse_tc3_xml(xml: &str, info: &mut BeckhoffDeviceInfo) {
     }
 }
 
+/// Extended Beckhoff device details parsed from the TC3 device-info XML (model, serial, OS).
 #[derive(Debug, Clone)]
 pub struct BeckhoffDeviceInfo {
     pub name: String,
@@ -508,6 +510,7 @@ const ADSIGRP_SYM_UPLOADINFO: u32 = 0xF00F;
 const ADSIGRP_SYM_UPLOAD: u32 = 0xF00B;
 const MAX_VALUE_READS: usize = 500;
 
+/// A single ADS symbol from a device's symbol table: its name, type, address, and decoded value.
 #[derive(Debug, Clone)]
 pub struct AdsSymbol {
     pub name: String,

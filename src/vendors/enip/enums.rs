@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+/// Map a CIP device type id to its human-readable name, or "Unknown (id)" if unrecognized.
 pub fn device_type_name(id: u32) -> String {
     let map: HashMap<u32, &str> = [
         (0, "Generic Device (deprecated)"),
@@ -45,6 +46,7 @@ pub fn device_type_name(id: u32) -> String {
     map.get(&id).map_or_else(|| format!("Unknown ({id})"), |s| (*s).to_string())
 }
 
+/// Map a CIP vendor id to its registered vendor name, or "Unknown (id)" if unrecognized.
 pub fn vendor_name(id: u32) -> String {
     let map: HashMap<u32, &str> = [
         (0, "Reserved"),

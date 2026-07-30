@@ -7,6 +7,7 @@ const INDEX_ACTIVE_REBOOT: &str = "1329528576";
 const INDEX_INACTIVE_REBOOT: &str = "1330577152";
 const INDEX_ACTIVE_USER: &str = "1339031296";
 const INDEX_INACTIVE_USER: &str = "1340079872";
+/// Default port for the Beckhoff CX web/UPnP configuration service.
 pub const DEFAULT_WEB_PORT: u16 = 5120;
 
 fn get_uuid(target_ip: &str) -> Option<String> {

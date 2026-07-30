@@ -5,6 +5,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
 
+/// An IPv4-capable local network interface: its name, address, and netmask.
 #[derive(Clone, Debug)]
 pub struct NetworkInterface {
     pub name: String,

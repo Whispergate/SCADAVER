@@ -1,11 +1,13 @@
 use std::time::Duration;
 
+/// A hijacked Schneider web session: the leaked cookie value and the device's power-on count.
 #[derive(Debug, Clone)]
 pub struct SchneiderSession {
     pub cookie_value: String,
     pub power_on_count: u32,
 }
 
+/// Device details retrieved through a hijacked Schneider session (model, MAC, firmware, state).
 #[derive(Debug, Clone)]
 pub struct SchneiderDeviceInfo {
     pub device: String,

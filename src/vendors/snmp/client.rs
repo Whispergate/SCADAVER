@@ -3,6 +3,7 @@ use std::net::UdpSocket;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+/// Default SNMP UDP port.
 pub const SNMP_PORT: u16 = 161;
 const TIMEOUT: Duration = Duration::from_secs(4);
 const MAX_WALK: usize = 512;
@@ -16,6 +17,7 @@ fn next_id() -> u32 {
 
 // ─── Value type ──────────────────────────────────────────────────────────────
 
+/// A decoded SNMP variable-binding value, covering the `SMIv2` base and application types.
 #[derive(Debug, Clone)]
 pub enum SnmpValue {
     Integer(i64),
@@ -33,6 +35,8 @@ pub enum SnmpValue {
 }
 
 impl SnmpValue {
+    /// Render the value as a human-readable string (printable octet strings kept as text,
+    /// binary shown as colon-separated hex).
     pub fn display(&self) -> String {
         match self {
             Self::Integer(n) => n.to_string(),
@@ -55,6 +59,7 @@ impl SnmpValue {
         }
     }
 
+    /// Return the value as an `i64` for the numeric variants, else `None`.
     pub fn as_int(&self) -> Option<i64> {
         match self {
             Self::Integer(n) => Some(*n),
@@ -64,11 +69,13 @@ impl SnmpValue {
         }
     }
 
+    /// Return the raw bytes if this is an `OctetString`, else `None`.
     pub fn as_bytes(&self) -> Option<&[u8]> {
         if let Self::OctetString(b) = self { Some(b) } else { None }
     }
 }
 
+/// Format a numeric OID (arc list) as a dotted string, e.g. `[1,3,6,1]` → `"1.3.6.1"`.
 pub fn arcs_to_str(arcs: &[u32]) -> String {
     arcs.iter().map(std::string::ToString::to_string).collect::<Vec<_>>().join(".")
 }

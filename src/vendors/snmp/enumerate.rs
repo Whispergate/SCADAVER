@@ -6,6 +6,7 @@ use super::oids;
 
 // ─── Structs ─────────────────────────────────────────────────────────────────
 
+/// MIB-II system-group scalars plus derived ICS vendor/APC hints for a target.
 #[derive(Debug, Clone, Default)]
 pub struct SystemInfo {
     pub descr: String,
@@ -19,6 +20,7 @@ pub struct SystemInfo {
     pub is_apc_ups: bool,
 }
 
+/// A per-interface summary decoded from the IF-MIB ifTable.
 #[derive(Debug, Clone)]
 pub struct Interface {
     pub index: u32,
@@ -30,6 +32,7 @@ pub struct Interface {
     pub out_errors: u64,
 }
 
+/// A CVE/advisory matched against a device's SNMP identity, with score, summary, and reference.
 #[derive(Debug, Clone)]
 pub struct CveHit {
     pub id: &'static str,
@@ -40,6 +43,7 @@ pub struct CveHit {
 
 // ─── Enumeration ─────────────────────────────────────────────────────────────
 
+/// Read the MIB-II system group and derive ICS vendor / APC-UPS hints from sysObjectID.
 pub fn get_system_info(ip: &str, port: u16, community: &str) -> Result<SystemInfo> {
     let scalar_oids = [
         oids::SYS_DESCR,
@@ -168,6 +172,7 @@ pub fn get_topology(ip: &str, port: u16, community: &str) -> Result<Vec<String>>
 
 // ─── CVE matching ─────────────────────────────────────────────────────────────
 
+/// Match a device's SNMP identity (community, sysDescr, sysObjectID) against known ICS CVEs.
 pub fn check_cves(info: &SystemInfo) -> Vec<CveHit> {
     let mut hits = Vec::new();
     let descr = info.descr.to_ascii_lowercase();

@@ -8,6 +8,7 @@ use crate::vendors::enip::enums::{device_type_name, vendor_name};
 const DISCOVERY_PACKET: &str = "630000000000000000000000000000000000000000000000";
 const DEST_PORT: u16 = 44818;
 
+/// An EtherNet/IP device identified via a List Identity response (product name, vendor, revision).
 #[derive(Debug, Clone)]
 pub struct EnipDevice {
     pub ip: String,

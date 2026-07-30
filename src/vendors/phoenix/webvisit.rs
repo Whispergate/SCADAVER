@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::time::Duration;
 
+/// A credential recovered from a `WebVisit` HMI: a user level with either a cleartext password or a hash.
 #[derive(Debug, Clone)]
 pub struct PasswordEntry {
     pub user_level: String,

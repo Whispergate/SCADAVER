@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
 
+/// The result of vendor autodetection: the identified vendor slug, target IP, and a flattened
+/// map of vendor-specific fields (ports, identity strings, capability flags).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
     pub vendor: String,
@@ -25,18 +27,61 @@ fn vendor_priority(vendor: &str) -> u8 {
 
 type ProbeFn = Box<dyn Fn(&str) -> Option<DeviceInfo> + Send + Sync>;
 
-fn make_probes() -> Vec<ProbeFn> {
+/// Display metadata for one protocol probe in an auto-sweep.
+#[derive(Clone, Copy)]
+pub struct ProbeInfo {
+    pub label: &'static str,
+    pub transport: &'static str,
+}
+
+/// One protocol's result from `sweep`: what was probed and what (if anything) responded.
+pub struct SweepOutcome {
+    pub probe: ProbeInfo,
+    pub device: Option<DeviceInfo>,
+}
+
+fn make_probes() -> Vec<(ProbeInfo, ProbeFn)> {
     vec![
-        Box::new(probe_beckhoff),
-        Box::new(probe_siemens),
-        Box::new(probe_enip),
-        Box::new(probe_ewon),
-        Box::new(probe_mitsubishi),
-        Box::new(probe_schneider),
-        Box::new(probe_phoenix),
-        Box::new(probe_omron),
-        Box::new(probe_iec104),
-        Box::new(probe_snmp),
+        (
+            ProbeInfo { label: "Beckhoff ADS", transport: "UDP 48899 / TCP 48898" },
+            Box::new(probe_beckhoff),
+        ),
+        (
+            ProbeInfo { label: "Siemens S7", transport: "TCP 102" },
+            Box::new(probe_siemens),
+        ),
+        (
+            ProbeInfo { label: "EtherNet/IP", transport: "TCP 44818" },
+            Box::new(probe_enip),
+        ),
+        (
+            ProbeInfo { label: "eWON", transport: "UDP 1507" },
+            Box::new(probe_ewon),
+        ),
+        (
+            ProbeInfo { label: "Mitsubishi MELSEC", transport: "UDP 5561 / TCP 5007" },
+            Box::new(probe_mitsubishi),
+        ),
+        (
+            ProbeInfo { label: "Schneider Modbus", transport: "TCP 502 / UDP" },
+            Box::new(probe_schneider),
+        ),
+        (
+            ProbeInfo { label: "Phoenix Contact", transport: "TCP 1962" },
+            Box::new(probe_phoenix),
+        ),
+        (
+            ProbeInfo { label: "Omron FINS", transport: "TCP/UDP 9600" },
+            Box::new(probe_omron),
+        ),
+        (
+            ProbeInfo { label: "IEC 60870-5-104", transport: "TCP 2404" },
+            Box::new(probe_iec104),
+        ),
+        (
+            ProbeInfo { label: "SNMP", transport: "UDP 161" },
+            Box::new(probe_snmp),
+        ),
     ]
 }
 
@@ -460,44 +505,59 @@ fn probe_snmp(ip: &str) -> Option<DeviceInfo> {
     Some(DeviceInfo { vendor: vendor.into(), ip: ip.into(), fields })
 }
 
-/// Probe all vendors in parallel. Returns the highest-confidence match.
-/// Timeout in seconds applies to the overall collection window.
-pub fn detect_device(ip: &str, timeout_secs: u64) -> Option<DeviceInfo> {
+/// Probe all protocol families in parallel against a single IP.
+///
+/// Returns one `SweepOutcome` per protocol in probe order, each carrying the
+/// probe metadata and the `DeviceInfo` that responded (or `None` on no response).
+/// `timeout_secs` bounds the overall collection window; probes still running when
+/// it elapses are reported as non-responding.
+pub fn sweep(ip: &str, timeout_secs: u64) -> Vec<SweepOutcome> {
     use std::sync::mpsc;
     let probes = make_probes();
-    let (tx, rx) = mpsc::channel::<DeviceInfo>();
+    let count = probes.len();
+    let metas: Vec<ProbeInfo> = probes.iter().map(|(meta, _)| *meta).collect();
+    let (tx, rx) = mpsc::channel::<(usize, Option<DeviceInfo>)>();
 
-    let _handles: Vec<_> = probes
-        .into_iter()
-        .map(|probe| {
-            let ip = ip.to_string();
-            let tx = tx.clone();
-            thread::spawn(move || {
-                if let Some(info) = probe(&ip) {
-                    let _ = tx.send(info);
-                }
-            })
-        })
-        .collect();
-    drop(tx); // close our copy so channel drains when all threads finish
+    for (idx, (_, probe)) in probes.into_iter().enumerate() {
+        let ip = ip.to_string();
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let _ = tx.send((idx, probe(&ip)));
+        });
+    }
+    drop(tx); // close our copy so the channel drains when all threads finish
 
     let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
-    let mut results: Vec<DeviceInfo> = Vec::new();
-    loop {
+    let mut devices: Vec<Option<DeviceInfo>> = vec![None; count];
+    let mut received = 0usize;
+    while received < count {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             break;
         }
         match rx.recv_timeout(remaining) {
-            Ok(info) => results.push(info),
+            Ok((idx, device)) => {
+                devices[idx] = device;
+                received += 1;
+            }
             Err(_) => break,
         }
     }
 
-    results
-        .iter()
+    metas
+        .into_iter()
+        .zip(devices)
+        .map(|(probe, device)| SweepOutcome { probe, device })
+        .collect()
+}
+
+/// Probe all vendors in parallel. Returns the highest-confidence match.
+/// Timeout in seconds applies to the overall collection window.
+pub fn detect_device(ip: &str, timeout_secs: u64) -> Option<DeviceInfo> {
+    sweep(ip, timeout_secs)
+        .into_iter()
+        .filter_map(|outcome| outcome.device)
         .min_by_key(|r| vendor_priority(&r.vendor))
-        .cloned()
 }
 
 // Keep hex module available for decode

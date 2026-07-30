@@ -18,6 +18,7 @@ const REG_SESSION: &[u8] = &[
     0x00, 0x00, // Options flags
 ];
 
+/// A tag from a Logix controller's symbol table: its name, encoded type word, and array rank.
 #[derive(Debug, Clone)]
 pub struct LogixTag {
     pub name: String,
@@ -26,6 +27,7 @@ pub struct LogixTag {
     pub instance_id: u32,
 }
 
+/// Identity of an EtherNet/IP / Logix device (vendor, product type/code, revision, serial, name).
 #[derive(Debug, Clone)]
 pub struct LogixDevice {
     pub vendor: String,

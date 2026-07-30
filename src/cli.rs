@@ -899,23 +899,26 @@ fn run_scan(cmd: ScanCmd) -> Result<()> {
         }
 
         ScanCmd::Auto { ip, timeout } => {
-            use crate::core::autodetect::detect_device;
-            let pb = crate::display::spinner_start(&format!("Detecting device at {ip}…"));
-            let info = detect_device(&ip, timeout);
-            pb.finish_and_clear();
-            match info {
-                Some(d) => {
-                    crate::display::print_success(&format!(
-                        "Detected: {} ({})",
-                        d.vendor.to_uppercase(),
-                        ip
-                    ));
-                    for (k, v) in &d.fields {
-                        println!("  {k}: {v}");
-                    }
-                }
-                None => crate::display::print_warn(&format!("Could not identify device at {ip}")),
+            use colored::Colorize;
+            crate::display::print_info(&format!("Scanning {ip} across all protocols…"));
+            println!();
+            let outcomes = crate::core::autodetect::sweep(&ip, timeout);
+            for outcome in &outcomes {
+                let (tag, detail) = match &outcome.device {
+                    Some(dev) => ("[+]".green().bold(), summarize_device(dev).normal()),
+                    None => ("[-]".yellow().bold(), "no response".dimmed()),
+                };
+                println!(
+                    "{tag} {:<18} {:<22} {detail}",
+                    outcome.probe.label, outcome.probe.transport
+                );
             }
+            let responded = outcomes.iter().filter(|o| o.device.is_some()).count();
+            println!();
+            crate::display::print_success(&format!(
+                "{responded}/{} protocol(s) responded.",
+                outcomes.len()
+            ));
         }
     }
     Ok(())
@@ -2203,6 +2206,42 @@ fn local_ip_for(target: &str) -> String {
     let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else { return "0.0.0.0".into() };
     let _ = sock.connect(format!("{target}:1"));
     sock.local_addr().map_or_else(|_| "0.0.0.0".into(), |a| a.ip().to_string())
+}
+
+fn summarize_device(info: &crate::core::autodetect::DeviceInfo) -> String {
+    const FIELDS: &[(&str, &str)] = &[
+        ("hardware", "Hardware"),
+        ("firmware", "FW"),
+        ("cpu_state", "CPU"),
+        ("product_name", "Product"),
+        ("revision", "Rev"),
+        ("plc_type", "Type"),
+        ("model", "Model"),
+        ("version", "Version"),
+        ("name", "Name"),
+        ("tc_version", "TwinCAT"),
+        ("netid", "NetID"),
+        ("serial", "Serial"),
+        ("snmp_community", "community"),
+        ("sys_descr", "sysDescr"),
+        ("sys_name", "sysName"),
+    ];
+    let mut parts = Vec::new();
+    for (key, label) in FIELDS {
+        let Some(value) = info.fields.get(*key) else { continue };
+        let text = match value {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        if !text.is_empty() {
+            parts.push(format!("{label}={text}"));
+        }
+    }
+    if parts.is_empty() {
+        info.vendor.to_uppercase()
+    } else {
+        format!("{}  {}", info.vendor.to_uppercase(), parts.join("  "))
+    }
 }
 
 fn hex_encode(b: &[u8]) -> String {

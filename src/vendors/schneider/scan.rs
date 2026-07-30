@@ -8,6 +8,7 @@ use crate::core::network::NetworkInterface;
 const DEST_PORT: u16 = 1740;
 const SOURCE_PORT: u16 = 1740;
 
+/// A discovered Schneider Electric device, from either UDP discovery or a Modbus TCP identity read.
 #[derive(Debug, Clone)]
 pub struct SchneiderDevice {
     pub ip: String,
@@ -20,6 +21,7 @@ pub struct SchneiderDevice {
     pub identity_match: bool,
 }
 
+/// Which transport(s) a Schneider scan should use: UDP discovery, Modbus TCP, or both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
     Udp,
