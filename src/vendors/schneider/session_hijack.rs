@@ -3,7 +3,6 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub struct SchneiderSession {
     pub cookie_value: String,
-    pub bootup_time: String,
     pub power_on_count: u32,
 }
 
@@ -37,7 +36,6 @@ pub fn get_session_cookie(target_ip: &str, port: u16) -> Option<SchneiderSession
 
     let mut power_on_count = 0u32;
     let mut cookie_val = None;
-    let mut bootup_time = None;
 
     for line in body.lines() {
         if line.contains("Firmware core2") {
@@ -46,19 +44,13 @@ pub fn get_session_cookie(target_ip: &str, port: u16) -> Option<SchneiderSession
             if let Some(val) = parts.get(1) {
                 cookie_val = Some((*val).to_string());
             }
-            if line.contains('(') && line.contains(')') {
-                let bt = line.split('(').nth(1)?.split(')').next()?;
-                bootup_time = Some(bt.to_string());
-            }
         }
     }
 
     let cookie_value = cookie_val?;
-    let bootup_time = bootup_time.unwrap_or_default();
 
     Some(SchneiderSession {
         cookie_value,
-        bootup_time,
         power_on_count: power_on_count / 2,
     })
 }

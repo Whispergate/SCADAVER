@@ -741,19 +741,18 @@ pub enum PhoenixCmd {
 
 pub fn run(args: Args) -> Result<()> {
     crate::display::print_banner();
-
-    match args.command {
-        None => crate::interactive::run(),
-        Some(Command::Scan { sub }) => run_scan(sub),
-        Some(Command::Control { sub }) => { run_control(sub); Ok(()) }
-        Some(Command::Exploit { sub }) => run_exploit(sub),
-        Some(Command::Rockwell { sub }) => { run_rockwell(sub); Ok(()) }
-        Some(Command::Siemens { sub }) => { run_siemens(sub); Ok(()) }
-        Some(Command::Phoenix { sub }) => run_phoenix(sub),
-        Some(Command::Omron { sub }) => { run_omron(sub); Ok(()) }
-        Some(Command::Iec104 { sub }) => run_iec104(sub),
-        Some(Command::Db { sub }) => run_db(sub),
-        Some(Command::Snmp { sub }) => run_snmp(sub),
+    let Some(command) = args.command else { return Ok(()); };
+    match command {
+        Command::Scan { sub } => run_scan(sub),
+        Command::Control { sub } => { run_control(sub); Ok(()) }
+        Command::Exploit { sub } => run_exploit(sub),
+        Command::Rockwell { sub } => { run_rockwell(sub); Ok(()) }
+        Command::Siemens { sub } => { run_siemens(sub); Ok(()) }
+        Command::Phoenix { sub } => run_phoenix(sub),
+        Command::Omron { sub } => { run_omron(sub); Ok(()) }
+        Command::Iec104 { sub } => run_iec104(sub),
+        Command::Db { sub } => run_db(sub),
+        Command::Snmp { sub } => run_snmp(sub),
     }
 }
 

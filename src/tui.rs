@@ -331,6 +331,7 @@ const ALL_VENDORS: &[&str] = &[
     "phoenix",
     "omron",
     "ewon",
+    "snmp",
     "iec104",
 ];
 
@@ -6252,5 +6253,17 @@ mod tests {
         assert_eq!(phoenix.action_port("phoenix", 4), 1962);
         assert_eq!(phoenix.action_port("phoenix", 5), 0);
         assert_eq!(phoenix.action_port("phoenix", 6), 0);
+
+        let snmp = app_with_device(
+            "snmp",
+            serde_json::json!({"snmp_port": 162}),
+        );
+        assert_eq!(snmp.action_port("snmp", 0), 162);
+
+        let snmp_default = app_with_device("snmp", serde_json::json!({}));
+        assert_eq!(
+            snmp_default.action_port("snmp", 0),
+            crate::vendors::snmp::client::SNMP_PORT,
+        );
     }
 }

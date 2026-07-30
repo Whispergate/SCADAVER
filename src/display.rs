@@ -22,17 +22,6 @@ pub fn print_banner() {
     println!();
 }
 
-pub fn print_rule(title: &str) {
-    let width = 76usize;
-    let pad = if title.len() + 2 < width {
-        (width - title.len() - 2) / 2
-    } else {
-        0
-    };
-    let line = format!("{} {} {}", "─".repeat(pad), title, "─".repeat(pad));
-    println!("{}", line.cyan());
-}
-
 pub fn print_success(msg: &str) {
     println!("{} {}", "[+]".green().bold(), msg);
 }

@@ -375,6 +375,7 @@ fn is_schneider_name(value: &str) -> bool {
 
 fn hex_decode(s: &str) -> Vec<u8> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if !s.len().is_multiple_of(2) { return vec![]; }
     (0..s.len())
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
@@ -451,5 +452,50 @@ mod tests {
 
         assert!(dev.identity_match);
         assert_eq!(dev.name.as_deref(), Some("Modicon M580"));
+    }
+
+    #[test]
+    fn hex_decode_odd_length_returns_empty() {
+        assert!(hex_decode("A").is_empty());
+        assert!(hex_decode("ABC").is_empty());
+    }
+
+    #[test]
+    fn hex_decode_even_length_works() {
+        assert_eq!(hex_decode("DEAD"), vec![0xDE, 0xAD]);
+        assert_eq!(hex_decode("DE AD"), vec![0xDE, 0xAD]);
+    }
+
+    #[test]
+    fn parse_response_empty_slice_returns_default() {
+        let dev = parse_response(&[], "1.2.3.4");
+        assert_eq!(dev.ip, "1.2.3.4");
+        assert!(dev.name.is_none());
+        assert!(dev.firmware.is_none());
+        assert!(!dev.identity_match);
+    }
+
+    #[test]
+    fn parse_response_short_slice_skips_fields() {
+        let data = vec![0u8; 52];
+        let dev = parse_response(&data, "10.0.0.1");
+        assert!(dev.firmware.is_none());
+        assert!(!dev.identity_match);
+    }
+
+    #[test]
+    fn parse_response_53_bytes_populates_firmware_and_name() {
+        let mut data = vec![0u8; 54];
+        // firmware: reversed — data[51].data[50].data[49].data[48]
+        data[48] = 4;
+        data[49] = 3;
+        data[50] = 2;
+        data[51] = 1;
+        data[52] = b'M';
+        data[53] = b'B';
+        let dev = parse_response(&data, "192.168.1.1");
+        assert_eq!(dev.firmware.as_deref(), Some("1.2.3.4"));
+        assert_eq!(dev.ip, "192.168.1.1");
+        assert!(dev.identity_match);
     }
 }

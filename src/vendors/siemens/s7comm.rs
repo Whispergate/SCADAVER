@@ -16,6 +16,7 @@ const COTP_TSAPS: &[&str] = &[
 
 fn hex_decode(s: &str) -> Vec<u8> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if !s.len().is_multiple_of(2) { return vec![]; }
     (0..s.len())
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
@@ -289,13 +290,12 @@ pub fn write_data_block(
     if data.is_empty() {
         anyhow::bail!("write_data_block: no data to write");
     }
-    let mut stream = connect_authenticated(ip, port, timeout_secs, password)
-        .ok_or_else(|| anyhow::anyhow!("failed to establish S7Comm session to {ip}:{port}"))?;
-
     let n = data.len();
     if n > 8191 {
         anyhow::bail!("write_data_block: data too large ({n} bytes, max 8191)");
     }
+    let mut stream = connect_authenticated(ip, port, timeout_secs, password)
+        .ok_or_else(|| anyhow::anyhow!("failed to establish S7Comm session to {ip}:{port}"))?;
     let bit_addr = u32::from(offset) * 8;
     // data section: error_code(1) + transport_size(1) + bit_count(2) + data(n)
     let data_section_len = 4 + n;
@@ -577,4 +577,38 @@ pub fn tcp_scan(ip: &str) -> Vec<u16> {
 fn bits_to_hex_byte(bits: &str) -> String {
     use crate::core::bytes::bits_to_hex_byte;
     bits_to_hex_byte(bits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_merkers_offset_overflow_returns_false() {
+        // Guard fires before any network call — no live PLC needed.
+        assert!(!set_merkers("127.0.0.1", "11111111", 0x20_0000, 102, 1, None));
+    }
+
+    #[test]
+    fn write_data_block_too_large_is_rejected() {
+        // Guard is now before connect_authenticated — no live PLC needed.
+        let big = vec![0u8; 8192];
+        let err = write_data_block("127.0.0.1", 1, 0, &big, 102, 1, None).unwrap_err();
+        assert!(
+            err.to_string().contains("too large"),
+            "expected 'too large', got: {err}",
+        );
+    }
+
+    #[test]
+    fn hex_decode_odd_length_returns_empty() {
+        assert!(hex_decode("A").is_empty());
+        assert!(hex_decode("ABC").is_empty());
+    }
+
+    #[test]
+    fn hex_decode_even_length_works() {
+        assert_eq!(hex_decode("DEAD"), vec![0xDE, 0xAD]);
+        assert_eq!(hex_decode("DE AD"), vec![0xDE, 0xAD]);
+    }
 }

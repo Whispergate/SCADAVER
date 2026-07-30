@@ -437,3 +437,123 @@ pub fn discover_community(ip: &str, port: u16) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{dec_int, dec_oid, parse_response, SnmpValue};
+
+    // ── dec_int ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dec_int_empty_is_zero() {
+        assert_eq!(dec_int(&[]), 0);
+    }
+
+    #[test]
+    fn dec_int_zero() {
+        assert_eq!(dec_int(&[0x00]), 0);
+    }
+
+    #[test]
+    fn dec_int_one() {
+        assert_eq!(dec_int(&[0x01]), 1);
+    }
+
+    #[test]
+    fn dec_int_neg1_single_byte() {
+        assert_eq!(dec_int(&[0xFF]), -1);
+    }
+
+    #[test]
+    fn dec_int_pos127() {
+        assert_eq!(dec_int(&[0x7F]), 127);
+    }
+
+    #[test]
+    fn dec_int_pos255_two_bytes() {
+        // 0x00 prefix prevents sign extension; value = 255
+        assert_eq!(dec_int(&[0x00, 0xFF]), 255);
+    }
+
+    #[test]
+    fn dec_int_pos256() {
+        assert_eq!(dec_int(&[0x01, 0x00]), 256);
+    }
+
+    #[test]
+    fn dec_int_neg128() {
+        // 0xFF sign-extends then 0x80 gives -128
+        assert_eq!(dec_int(&[0xFF, 0x80]), -128);
+    }
+
+    // ── dec_oid ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dec_oid_empty_returns_empty() {
+        assert_eq!(dec_oid(&[]), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn dec_oid_iso_org() {
+        // 0x2B = 43 = 40*1 + 3 → [1, 3]
+        assert_eq!(dec_oid(&[0x2B]), vec![1u32, 3]);
+    }
+
+    #[test]
+    fn dec_oid_sysdescr_oid() {
+        let buf: &[u8] = &[0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00];
+        assert_eq!(dec_oid(buf), vec![1u32, 3, 6, 1, 2, 1, 1, 1, 0]);
+    }
+
+    #[test]
+    fn dec_oid_multi_byte_arc() {
+        // [0x00, 0x81, 0x00]: arcs [0,0], then (1<<7)|0 = 128
+        assert_eq!(dec_oid(&[0x00, 0x81, 0x00]), vec![0u32, 0, 128]);
+    }
+
+    #[test]
+    fn dec_oid_enterprises_prefix() {
+        // [0x2B, 0x86, 0x48]: [1,3], then (6<<7)|72 = 840
+        assert_eq!(dec_oid(&[0x2B, 0x86, 0x48]), vec![1u32, 3, 840]);
+    }
+
+    // ── parse_response ────────────────────────────────────────────────────────
+
+    // Hand-crafted 49-byte SNMPv2c GetResponse for sysDescr.0 = "Linux x86".
+    // Lengths verified: VarBind=21, VarBindList=23, PDU=34, SEQUENCE=47.
+    #[rustfmt::skip]
+    const SYSDESCR_RESPONSE: &[u8] = &[
+        0x30, 0x2f,                                           // SEQUENCE len=47
+        0x02, 0x01, 0x01,                                     // INTEGER 1 (SNMPv2c)
+        0x04, 0x06, b'p', b'u', b'b', b'l', b'i', b'c',      // OCTET_STRING "public"
+        0xa2, 0x22,                                           // GetResponse-PDU len=34
+        0x02, 0x01, 0x01,                                     // req-id=1
+        0x02, 0x01, 0x00,                                     // error-status=0
+        0x02, 0x01, 0x00,                                     // error-index=0
+        0x30, 0x17,                                           // VarBindList len=23
+        0x30, 0x15,                                           // VarBind len=21
+        0x06, 0x08, 0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00, // OID sysDescr.0
+        0x04, 0x09, b'L', b'i', b'n', b'u', b'x', b' ', b'x', b'8', b'6', // "Linux x86"
+    ];
+
+    #[test]
+    fn parse_response_decodes_sysdescr() {
+        let result = parse_response(SYSDESCR_RESPONSE).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, vec![1u32, 3, 6, 1, 2, 1, 1, 1, 0]);
+        match &result[0].1 {
+            SnmpValue::OctetString(b) => assert_eq!(b, b"Linux x86"),
+            other => panic!("expected OctetString, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_error_status_nonzero_returns_empty() {
+        // error-status value is at offset 20 (after SEQUENCE+len, INTEGER×3, OCTET_STRING+len+6,
+        // PDU+len, req-id tag+len+val, error-status tag+len).
+        let mut pkt = SYSDESCR_RESPONSE.to_vec();
+        pkt[20] = 0x01;
+        let result = parse_response(&pkt).unwrap();
+        assert!(result.is_empty());
+    }
+}

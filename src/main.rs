@@ -3,7 +3,6 @@ mod core;
 mod creds;
 mod db;
 mod display;
-mod interactive;
 mod tui;
 mod vendors;
 

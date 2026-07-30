@@ -756,6 +756,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 fn hex_decode(s: &str) -> Vec<u8> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if !s.len().is_multiple_of(2) { return vec![]; }
     (0..s.len())
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
@@ -918,5 +919,61 @@ mod tests {
         assert_eq!(dev.netid_str, "192.168.1.20.1.1");
         assert!(dev.name.contains("49001"));
         assert!(derived_ads_device("not-an-ip", 49001).is_none());
+    }
+
+    #[test]
+    fn discovery_frame_name_len_zero_returns_none() {
+        // name_len = 0 must return None, not panic on the usize underflow in data[28..28+name_len-1].
+        let mut frame = vec![0u8; 28];
+        frame[12..18].copy_from_slice(&[1, 2, 3, 4, 5, 6]);
+        frame[26] = 0;
+        frame[27] = 0;
+        assert!(parse_discovery_frame(&frame, "10.0.0.1").is_none());
+    }
+
+    #[test]
+    fn discovery_frame_name_len_exceeds_buffer_returns_none() {
+        // name_len=200 but the frame is only 28 bytes — must return None, not panic on OOB slice.
+        let mut frame = vec![0u8; 28];
+        frame[12..18].copy_from_slice(&[1, 2, 3, 4, 5, 6]);
+        frame[26] = 200;
+        frame[27] = 0;
+        assert!(parse_discovery_frame(&frame, "10.0.0.1").is_none());
+    }
+
+    #[test]
+    fn send_recv_ams_refuses_oversized_length() {
+        // A malicious/buggy device sends a 6-byte AMS/TCP header claiming a 4 GB body.
+        // The guard must return None without allocating 4 GB.
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::net::TcpStream;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let _server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4];
+            conn.read_exact(&mut buf).ok();
+            // reserved(2) + length(4 LE) where length = 0xFFFF_FFFF
+            conn.write_all(&[0, 0, 0xFF, 0xFF, 0xFF, 0xFF]).ok();
+        });
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        let result = send_recv_ams(&mut stream, &[0u8; 4]);
+        assert!(result.is_none(), "length > 65536 must return None, not OOM");
+    }
+
+    #[test]
+    fn hex_decode_odd_length_returns_empty() {
+        assert!(hex_decode("A").is_empty());
+        assert!(hex_decode("ABC").is_empty());
+    }
+
+    #[test]
+    fn hex_decode_even_length_works() {
+        assert_eq!(hex_decode("DEAD"), vec![0xDE, 0xAD]);
+        assert_eq!(hex_decode("DE AD"), vec![0xDE, 0xAD]);
     }
 }

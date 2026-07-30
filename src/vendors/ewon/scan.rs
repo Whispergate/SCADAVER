@@ -247,8 +247,91 @@ fn print_device(dev: &EwonDevice) {
 }
 
 fn hex_decode(s: &str) -> Vec<u8> {
+    if !s.len().is_multiple_of(2) { return vec![]; }
     (0..s.len())
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_decode_odd_length_returns_empty() {
+        assert!(hex_decode("A").is_empty());
+        assert!(hex_decode("ABC").is_empty());
+    }
+
+    #[test]
+    fn hex_decode_even_length_works() {
+        assert_eq!(hex_decode("DEAD"), vec![0xDE, 0xAD]);
+    }
+
+    #[test]
+    fn parse_response_empty_returns_none() {
+        assert!(parse_response(&[]).is_none());
+    }
+
+    #[test]
+    fn parse_response_too_short_returns_none() {
+        assert!(parse_response(&[0u8; 15]).is_none());
+    }
+
+    #[test]
+    fn parse_response_type2_returns_device_info() {
+        let mut data = vec![0u8; 16];
+        data[15] = 2;
+        let dev = parse_response(&data).unwrap();
+        assert_eq!(dev.response_type, "device_info");
+    }
+
+    #[test]
+    fn parse_response_type5_returns_firmware_info() {
+        let mut data = vec![0u8; 16];
+        data[15] = 5;
+        let dev = parse_response(&data).unwrap();
+        assert_eq!(dev.response_type, "firmware_info");
+    }
+
+    #[test]
+    fn parse_response_unknown_type_returns_none() {
+        let mut data = vec![0u8; 16];
+        data[15] = 99;
+        assert!(parse_response(&data).is_none());
+    }
+
+    #[test]
+    fn parse_device_info_empty_has_no_fields() {
+        let dev = parse_device_info(&[]);
+        assert!(dev.ip.is_none());
+        assert!(dev.mac.is_none());
+        assert!(dev.serial.is_none());
+        assert!(dev.identifier.is_none());
+        assert_eq!(dev.response_type, "device_info");
+    }
+
+    #[test]
+    fn parse_device_info_with_identifier() {
+        let mut data = vec![0u8; 4];
+        data[..4].copy_from_slice(b"IPCO");
+        let dev = parse_device_info(&data);
+        assert_eq!(dev.identifier.as_deref(), Some("IPCO"));
+    }
+
+    #[test]
+    fn parse_firmware_info_empty_has_no_firmware() {
+        let dev = parse_firmware_info(&[]);
+        assert!(dev.firmware.is_none());
+        assert_eq!(dev.response_type, "firmware_info");
+    }
+
+    #[test]
+    fn parse_firmware_info_with_version() {
+        let mut data = vec![0u8; 28];
+        data[20..27].copy_from_slice(b"14.6s0\0");
+        let dev = parse_firmware_info(&data);
+        assert_eq!(dev.firmware.as_deref(), Some("14.6s0"));
+    }
 }

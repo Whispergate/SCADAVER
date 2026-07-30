@@ -9,11 +9,6 @@ pub struct SiemensDevice {
     pub open_ports: Vec<u16>,
 }
 
-/// Probe a single IP for a Siemens S7 device.
-pub fn scan_ip(ip: &str) -> SiemensDevice {
-    scan_ip_with_port(ip, S7_PORT)
-}
-
 pub fn scan_ip_with_port(ip: &str, port: u16) -> SiemensDevice {
     let port = if port == 0 { S7_PORT } else { port };
     let open_ports = tcp_scan(ip);

@@ -245,3 +245,76 @@ fn parse_response_objects(frame: &[u8], out: &mut Vec<DataObject>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_response_objects_empty_frame_yields_nothing() {
+        let mut out = vec![];
+        parse_response_objects(&[], &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn parse_response_objects_nine_bytes_yields_nothing() {
+        let mut out = vec![];
+        parse_response_objects(&[0u8; 9], &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn parse_response_objects_num_one_but_empty_data_yields_nothing() {
+        // frame.len()=10 passes the guard; vsq=1 means num=1 but data=[] → breaks
+        let mut frame = vec![0u8; 10];
+        frame[5] = 1; // vsq: num=1, not sequential
+        let mut out = vec![];
+        parse_response_objects(&frame, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn parse_response_objects_gi_actcon_adds_one_object() {
+        // 14-byte payload returned by recv(): ctrl(4) + ASDU(10)
+        // ASDU: C_IC_NA_1(0x64), vsq=1, COT=ActCon(7), addr=1, IOA=0, QOI=0x14
+        let frame: &[u8] = &[
+            0x00, 0x00, 0x00, 0x00,  // I-frame control (tx=0, rx=0)
+            0x64,                    // type_id = 100 (C_IC_NA_1)
+            0x01,                    // vsq: 1 object, not sequential
+            0x07, 0x00,              // COT: ActCon (7)
+            0x01, 0x00,              // ASDU address = 1
+            0x00, 0x00, 0x00,        // IOA = 0
+            0x14,                    // QOI = 20 (station interrogation)
+        ];
+        let mut out = vec![];
+        parse_response_objects(frame, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].type_id, 0x64);
+        assert_eq!(out[0].ioa, 0);
+        assert_eq!(out[0].value, vec![0x14]);
+    }
+
+    #[test]
+    fn parse_response_objects_sequence_flag_extracts_multi_ioa() {
+        // sq=1 (vsq & 0x80), num=3, base IOA=1
+        let frame: &[u8] = &[
+            0x00, 0x00, 0x00, 0x00, // ctrl
+            0x01,                   // type_id = 1 (M_SP_NA_1)
+            0x83,                   // vsq: seq=1, num=3
+            0x0b, 0x00,             // COT
+            0x01, 0x00,             // ASDU addr
+            0x01, 0x00, 0x00,       // IOA base = 1
+            0x01,                   // value[0]
+            0x00,                   // value[1]
+            0x01,                   // value[2]
+        ];
+        let mut out = vec![];
+        parse_response_objects(frame, &mut out);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].ioa, 1);
+        assert_eq!(out[1].ioa, 2);
+        assert_eq!(out[2].ioa, 3);
+        assert_eq!(out[0].type_id, 1);
+    }
+}

@@ -722,3 +722,278 @@ fn product_type_name(id: u16) -> &'static str {
         _ => "Unknown Product Type",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_value, parse_list_identity_response, type_name, type_parts};
+
+    // 67-byte List Identity response matching the eip_sim.py format.
+    // EIP header (24) + CPF body (43): item_count(2) + item_type(2) + item_len(2) + item(37).
+    const LIST_ID_RESP: &[u8] = &[
+        // EIP header
+        0x63, 0x00,
+        0x2b, 0x00,  // data_len = 43
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        // CPF body
+        0x01, 0x00,  // item_count = 1
+        0x0c, 0x00,  // item_type = Identity
+        0x25, 0x00,  // item_len = 37
+        // Identity item: enc_version(2) + socket_addr(16) + vendor(2) + dev_type(2)
+        //   + prod_code(2) + revision(2) + status(2) + serial(4) + name_len(1) + name(3) + state(1)
+        0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00,  // vendor_id = 1
+        0x0e, 0x00,  // device_type = 0x0E (Programmable Logic Controller)
+        0x01, 0x00,  // product_code = 1
+        0x1f, 0x03,  // revision: major=31, minor=3
+        0x00, 0x00,  // status
+        0x78, 0x56, 0x34, 0x12,  // serial LE → "12345678"
+        0x03,        // name_len = 3
+        b'P', b'L', b'C',
+        0x03,        // state
+    ];
+
+    // ── decode_value ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn decode_value_too_short_returns_dash() {
+        assert_eq!(decode_value(0xC3, &[0x00]), "-");
+    }
+
+    #[test]
+    fn decode_value_bool_true() {
+        assert_eq!(decode_value(0xC1, &[0, 0, 1]), "true  (1)");
+    }
+
+    #[test]
+    fn decode_value_bool_false() {
+        assert_eq!(decode_value(0xC1, &[0, 0, 0]), "false (0)");
+    }
+
+    #[test]
+    fn decode_value_bool_empty_val_returns_question() {
+        assert_eq!(decode_value(0xC1, &[0, 0]), "?");
+    }
+
+    #[test]
+    fn decode_value_sint_neg1() {
+        assert_eq!(decode_value(0xC2, &[0, 0, 0xFF]), "-1");
+    }
+
+    #[test]
+    fn decode_value_int_1337() {
+        // 1337 LE = 0x39, 0x05
+        assert_eq!(decode_value(0xC3, &[0, 0, 0x39, 0x05]), "1337");
+    }
+
+    #[test]
+    fn decode_value_dint_max() {
+        assert_eq!(decode_value(0xC4, &[0, 0, 0xFF, 0xFF, 0xFF, 0x7F]), "2147483647");
+    }
+
+    #[test]
+    fn decode_value_lint_neg1() {
+        assert_eq!(
+            decode_value(0xC5, &[0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+            "-1"
+        );
+    }
+
+    #[test]
+    fn decode_value_usint_255() {
+        assert_eq!(decode_value(0xC6, &[0, 0, 255]), "255");
+    }
+
+    #[test]
+    fn decode_value_uint_max() {
+        assert_eq!(decode_value(0xC7, &[0, 0, 0xFF, 0xFF]), "65535");
+    }
+
+    #[test]
+    fn decode_value_udint_max() {
+        assert_eq!(decode_value(0xC8, &[0, 0, 0xFF, 0xFF, 0xFF, 0xFF]), "4294967295");
+    }
+
+    #[test]
+    fn decode_value_real_one() {
+        // 1.0f32 LE = [0x00, 0x00, 0x80, 0x3F]
+        assert_eq!(decode_value(0xCA, &[0, 0, 0x00, 0x00, 0x80, 0x3F]), "1");
+    }
+
+    #[test]
+    fn decode_value_string_hello() {
+        let cip_data: &[u8] = &[0, 0, 5, 0, 0, 0, b'h', b'e', b'l', b'l', b'o'];
+        assert_eq!(decode_value(0xD0, cip_data), "\"hello\"");
+    }
+
+    #[test]
+    fn decode_value_string_truncated_returns_question() {
+        // length field says 5 but only 1 byte of data present
+        assert_eq!(decode_value(0xD0, &[0, 0, 0x05]), "\"?\"");
+    }
+
+    #[test]
+    fn decode_value_unknown_type_shows_hex() {
+        assert_eq!(decode_value(0xFF, &[0, 0, 0xAB, 0xCD]), "0xabcd");
+    }
+
+    #[test]
+    fn decode_value_unknown_type_empty_val_returns_dash() {
+        assert_eq!(decode_value(0xFF, &[0, 0]), "-");
+    }
+
+    // ── type_name ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn type_name_dint_scalar() {
+        assert_eq!(type_name(0xC4), "DINT");
+    }
+
+    #[test]
+    fn type_name_dint_1d() {
+        assert_eq!(type_name(0x10C4), "DINT[1D]");
+    }
+
+    #[test]
+    fn type_name_dint_2d() {
+        assert_eq!(type_name(0x20C4), "DINT[2D]");
+    }
+
+    #[test]
+    fn type_name_dint_3d() {
+        assert_eq!(type_name(0x30C4), "DINT[3D]");
+    }
+
+    #[test]
+    fn type_name_dint_dims4_treated_as_scalar() {
+        assert_eq!(type_name(0x40C4), "DINT");
+    }
+
+    #[test]
+    fn type_name_real_scalar() {
+        assert_eq!(type_name(0xCA), "REAL");
+    }
+
+    #[test]
+    fn type_name_string_scalar() {
+        assert_eq!(type_name(0xD0), "STRING");
+    }
+
+    #[test]
+    fn type_name_bool_bit5() {
+        assert_eq!(type_name(0x0005), "BOOL.b5");
+    }
+
+    #[test]
+    fn type_name_bool_bit5_1d() {
+        assert_eq!(type_name(0x1005), "BOOL.b5[1D]");
+    }
+
+    #[test]
+    fn type_name_struct_scalar() {
+        assert_eq!(type_name(0x8042), "STRUCT(0x042)");
+    }
+
+    #[test]
+    fn type_name_struct_1d() {
+        // (0x9042 >> 12) & 7 = 9 & 7 = 1 → 1D
+        assert_eq!(type_name(0x9042), "STRUCT(0x042)[1D]");
+    }
+
+    #[test]
+    fn type_name_unknown_code_shows_hex() {
+        assert_eq!(type_name(0x00AB), "?0xab");
+    }
+
+    // ── type_parts ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn type_parts_dint_scalar() {
+        assert_eq!(type_parts(0xC4), ("DINT".to_string(), "-"));
+    }
+
+    #[test]
+    fn type_parts_dint_1d() {
+        assert_eq!(type_parts(0x10C4), ("DINT".to_string(), "1D"));
+    }
+
+    #[test]
+    fn type_parts_struct_scalar() {
+        assert_eq!(type_parts(0x8042), ("STRUCT(0x042)".to_string(), "-"));
+    }
+
+    #[test]
+    fn type_parts_struct_1d() {
+        assert_eq!(type_parts(0x9042), ("STRUCT(0x042)".to_string(), "1D"));
+    }
+
+    #[test]
+    fn type_parts_bool_bit5() {
+        assert_eq!(type_parts(0x0005), ("BOOL.b5".to_string(), "-"));
+    }
+
+    #[test]
+    fn type_parts_unknown_code() {
+        assert_eq!(type_parts(0x00AB), ("?0xab".to_string(), "-"));
+    }
+
+    // ── parse_list_identity_response ─────────────────────────────────────────
+
+    #[test]
+    fn parse_list_identity_response_empty_is_err() {
+        assert!(parse_list_identity_response(&[], "1.2.3.4").is_err());
+    }
+
+    #[test]
+    fn parse_list_identity_response_wrong_command_is_err() {
+        let buf = &[0x64u8, 0x00, 0x00, 0x00];
+        assert!(parse_list_identity_response(buf, "1.2.3.4").is_err());
+    }
+
+    #[test]
+    fn parse_list_identity_response_claimed_len_overflow_is_err() {
+        // data_len = 9999, but buffer is only 4 bytes — triggers "too short"
+        let buf = &[0x63u8, 0x00, 0x0F, 0x27];
+        let err = parse_list_identity_response(buf, "1.2.3.4").unwrap_err();
+        assert!(err.to_string().contains("too short"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_list_identity_response_wrong_cpf_item_type_is_err() {
+        // 30-byte frame: valid EIP header with data_len=6, CPF with item_type=0x000D
+        let mut frame = vec![0u8; 30];
+        frame[0] = 0x63;
+        frame[2] = 0x06;  // data_len = 6
+        frame[25] = 0x01; // item_count = 1
+        frame[26] = 0x0d; // item_type ≠ 0x0C
+        let err = parse_list_identity_response(&frame, "1.2.3.4").unwrap_err();
+        assert!(err.to_string().contains("CPF item type"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_list_identity_response_item_too_short_is_err() {
+        // 34-byte frame: valid EIP header, CPF with item_type=0x000C, item_len=4 (< 33)
+        let mut frame = vec![0u8; 34];
+        frame[0] = 0x63;
+        frame[2] = 0x0A;  // data_len = 10
+        frame[25] = 0x01; // item_count = 1
+        frame[26] = 0x0c; // item_type = Identity
+        frame[28] = 0x04; // item_len = 4 (< 33) → triggers "Identity item too short"
+        let err = parse_list_identity_response(&frame, "1.2.3.4").unwrap_err();
+        assert!(err.to_string().contains("Identity item too short"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_list_identity_response_valid_returns_device() {
+        let dev = parse_list_identity_response(LIST_ID_RESP, "1.2.3.4").unwrap();
+        assert_eq!(dev.product_name, "PLC");
+        assert_eq!(dev.serial, "12345678");
+        assert_eq!(dev.revision, "31.3");
+        assert_eq!(dev.product_code, 1);
+        assert_eq!(dev.product_type, "Programmable Logic Controller");
+    }
+}

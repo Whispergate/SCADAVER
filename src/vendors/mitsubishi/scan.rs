@@ -287,8 +287,57 @@ fn print_device(d: &MitsubishiDevice) {
 
 fn hex_decode(s: &str) -> Vec<u8> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if !s.len().is_multiple_of(2) { return vec![]; }
     (0..s.len())
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_decode_odd_length_returns_empty() {
+        assert!(hex_decode("A").is_empty());
+        assert!(hex_decode("ABC").is_empty());
+    }
+
+    #[test]
+    fn hex_decode_even_length_works() {
+        assert_eq!(hex_decode("DEAD"), vec![0xDE, 0xAD]);
+        assert_eq!(hex_decode("DE AD"), vec![0xDE, 0xAD]);
+    }
+
+    #[test]
+    fn parse_gxworks_response_empty_returns_default() {
+        let dev = parse_gxworks_response(&[], "1.2.3.4");
+        assert_eq!(dev.ip, "1.2.3.4");
+        assert_eq!(dev.protocol.as_deref(), Some("gxworks_udp"));
+    }
+
+    #[test]
+    fn parse_gxworks_response_partial_no_panic() {
+        let data = &[0x57u8, 0x01, 0x00, 0x00, 0x00];
+        let dev = parse_gxworks_response(data, "10.0.0.1");
+        assert_eq!(dev.ip, "10.0.0.1");
+    }
+
+    #[test]
+    fn parse_slmp_response_empty_returns_default_model() {
+        let dev = parse_slmp_response(&[], "1.2.3.4");
+        assert_eq!(dev.ip, "1.2.3.4");
+        assert_eq!(dev.plc_type, "Mitsubishi Q/L Series");
+    }
+
+    #[test]
+    fn parse_slmp_response_with_model_name() {
+        // bytes[11..] = "Q03UD\0"
+        let mut data = vec![0u8; 17];
+        data[11..16].copy_from_slice(b"Q03UD");
+        let dev = parse_slmp_response(&data, "10.0.0.2");
+        assert_eq!(dev.plc_type, "Q03UD");
+        assert_eq!(dev.protocol.as_deref(), Some("slmp_udp"));
+    }
 }

@@ -246,10 +246,11 @@ fn decode_int_le(bytes: &[u8], n: usize) -> String {
     let signed: i64 = match n {
         2 => i64::from(i16::from_le_bytes([bytes[0], bytes[1]])),
         4 => i64::from(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
-        _ => i64::from_le_bytes([
+        8 => i64::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3],
             bytes[4], bytes[5], bytes[6], bytes[7],
         ]),
+        _ => return hex_dump(bytes),
     };
     signed.to_string()
 }
@@ -317,5 +318,49 @@ mod tests {
             decode_ads_value("STRING(80)", b"hello\0ignored"),
             "\"hello\""
         );
+    }
+
+    #[test]
+    fn decode_int_le_odd_width_returns_hex_dump() {
+        // n=3 is not 2, 4, or 8 — falls through to `_` arm which must hex-dump, not panic.
+        let result = decode_int_le(&[0xAA, 0xBB, 0xCC], 3);
+        assert!(result.contains("aa") || result.contains("AA") || result.contains("aabbcc"),
+            "expected hex dump, got: {result}");
+    }
+
+    #[test]
+    fn decode_int_le_short_data_returns_hex_dump() {
+        // bytes.len() < n — the early-return guard fires before the match.
+        let result = decode_int_le(&[0x01, 0x00, 0x00], 8);
+        assert!(!result.starts_with('-'), "expected hex dump for short data, got: {result}");
+    }
+
+    #[test]
+    fn construct_ams_packet_layout_is_correct() {
+        // Verify the fixed AMS/TCP header layout introduced after the bug where
+        // {0u64:016} wrote 16 decimal chars instead of 8 hex chars, corrupting
+        // both the error_code and invoke_id fields simultaneously.
+        let route = AmsRoute {
+            remote_netid: "010203040506",
+            remote_port: 851,
+            local_netid: "7f000001011e",
+            local_port: 32905,
+        };
+        let pkt = construct_ams_packet(
+            &route,
+            2, // ADS Read
+            &AdsParams::Read(0x0001_0001, 0, 4),
+            Some("12345678"),
+            true,
+        );
+
+        // The AMS/TCP reserved field is exactly 2 bytes (4 hex chars) of zeros.
+        assert_eq!(&pkt[0..4], "0000", "reserved field must be 2 zero bytes");
+
+        // error_code is 4 bytes (8 hex chars) at offset 60, all zero.
+        assert_eq!(&pkt[60..68], "00000000", "error_code must be 4 bytes");
+
+        // invoke_id at offset 68 is byte-reversed "12345678" → "78563412".
+        assert_eq!(&pkt[68..76], "78563412", "invoke_id must be at the correct offset");
     }
 }

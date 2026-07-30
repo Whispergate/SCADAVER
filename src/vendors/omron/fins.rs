@@ -120,9 +120,10 @@ fn send_fins_udp(ip: &str, cmd: &[u8], server_node: u8) -> Result<Vec<u8>> {
     frame.extend_from_slice(&header);
     frame.extend_from_slice(cmd);
     sock.send_to(&frame, format!("{ip}:{FINS_UDP_PORT}"))?;
-    let mut buf = [0u8; 2048];
+    let mut buf = vec![0u8; 65536];
     let (n, _) = sock.recv_from(&mut buf)?;
-    Ok(buf[..n].to_vec())
+    buf.truncate(n);
+    Ok(buf)
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────

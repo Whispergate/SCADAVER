@@ -26,6 +26,11 @@ class PortProfile:
     siemens: int
     ewon: int
     snmp: int
+    rockwell: int
+    fins: int
+    iec104: int
+    phoenix: int
+    phoenix_http: int
 
 
 PROFILES = {
@@ -37,6 +42,11 @@ PROFILES = {
         siemens=102,
         ewon=80,
         snmp=161,
+        rockwell=44818,
+        fins=9600,
+        iec104=2404,
+        phoenix=1962,
+        phoenix_http=8080,
     ),
     "high": PortProfile(
         modbus=1502,
@@ -46,6 +56,11 @@ PROFILES = {
         siemens=1102,
         ewon=8080,
         snmp=1161,
+        rockwell=14818,
+        fins=19600,
+        iec104=12404,
+        phoenix=11962,
+        phoenix_http=11980,
     ),
 }
 
@@ -84,6 +99,13 @@ def selected_ports(args: argparse.Namespace) -> PortProfile:
         siemens=valid_port(args.siemens_port or profile.siemens, "siemens port"),
         ewon=valid_port(args.ewon_port or profile.ewon, "ewon port"),
         snmp=valid_port(args.snmp_port or profile.snmp, "snmp port"),
+        rockwell=valid_port(args.rockwell_port or profile.rockwell, "rockwell port"),
+        fins=valid_port(args.fins_port or profile.fins, "fins port"),
+        iec104=valid_port(args.iec104_port or profile.iec104, "iec104 port"),
+        phoenix=valid_port(args.phoenix_port or profile.phoenix, "phoenix port"),
+        phoenix_http=valid_port(
+            args.phoenix_http_port or profile.phoenix_http, "phoenix http port"
+        ),
     )
 
 
@@ -132,6 +154,34 @@ def build_specs(host: str, ports: PortProfile) -> list[SimSpec]:
             "snmp_sim.py",
             ("--host", host, "--port", str(ports.snmp)),
             udp_ports=(ports.snmp,),
+        ),
+        SimSpec(
+            "rockwell",
+            "eip_sim.py",
+            ("--host", host, "--port", str(ports.rockwell)),
+            tcp_ports=(ports.rockwell,),
+        ),
+        SimSpec(
+            "fins",
+            "fins_sim.py",
+            ("--host", host, "--port", str(ports.fins)),
+            tcp_ports=(ports.fins,),
+        ),
+        SimSpec(
+            "iec104",
+            "iec104_sim.py",
+            ("--host", host, "--port", str(ports.iec104)),
+            tcp_ports=(ports.iec104,),
+        ),
+        SimSpec(
+            "phoenix",
+            "phoenix_sim.py",
+            (
+                "--host", host,
+                "--port", str(ports.phoenix),
+                "--http-port", str(ports.phoenix_http),
+            ),
+            tcp_ports=(ports.phoenix, ports.phoenix_http),
         ),
     ]
 
@@ -284,10 +334,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--siemens-port", type=int)
     parser.add_argument("--ewon-port", type=int)
     parser.add_argument("--snmp-port", type=int)
+    parser.add_argument("--rockwell-port", type=int)
+    parser.add_argument("--fins-port", type=int)
+    parser.add_argument("--iec104-port", type=int)
+    parser.add_argument("--phoenix-port", type=int)
+    parser.add_argument("--phoenix-http-port", type=int)
     parser.add_argument(
         "--only",
         nargs="+",
-        choices=["modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp"],
+        choices=["modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp",
+                 "rockwell", "fins", "iec104", "phoenix"],
         help="start only selected simulators",
     )
     parser.add_argument(

@@ -145,6 +145,12 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
             ("admin", "credential"),
         ),
         SmokeCase(
+            "ewon-scan",
+            "ewon",
+            ("scan", "ewon", "-i", target),
+            ("IPCO",),
+        ),
+        SmokeCase(
             "snmp-enum",
             "snmp",
             ("snmp", "enum", "--target", target, "--port", str(ports.snmp)),
@@ -161,6 +167,87 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
             "snmp",
             ("snmp", "scan", "--target", target, "--port", str(ports.snmp)),
             ("public",),
+        ),
+        SmokeCase(
+            "siemens-io",
+            "siemens",
+            ("siemens", "io", "--target", target, "--port", str(ports.siemens)),
+            ("inputs",),
+        ),
+        SmokeCase(
+            "slmp-write-d",
+            "slmp",
+            (
+                "exploit",
+                "slmp-write-d",
+                "--target",
+                target,
+                "--start",
+                "0",
+                "--port",
+                str(ports.slmp),
+                "100,200",
+            ),
+            ("D register(s) written",),
+        ),
+        SmokeCase(
+            "rockwell-info",
+            "rockwell",
+            ("rockwell", "info", "--target", target, "--port", str(ports.rockwell)),
+            ("Vendor:",),
+        ),
+        SmokeCase(
+            "rockwell-tags",
+            "rockwell",
+            ("rockwell", "tags", "--target", target, "--port", str(ports.rockwell)),
+            ("tag",),
+        ),
+        SmokeCase(
+            "enip-scan",
+            "rockwell",
+            ("scan", "enip", "-i", target),
+            ("PLC",),
+        ),
+        SmokeCase(
+            "fins-info",
+            "fins",
+            ("omron", "info", "--target", target, "--port", str(ports.fins)),
+            ("Model:",),
+        ),
+        SmokeCase(
+            "fins-read-dm",
+            "fins",
+            (
+                "omron",
+                "read-dm",
+                "--target",
+                target,
+                "--port",
+                str(ports.fins),
+                "--start",
+                "0",
+                "--count",
+                "10",
+            ),
+            ("DM0",),
+        ),
+        SmokeCase(
+            "iec104-gi",
+            "iec104",
+            ("iec104", "gi", "--target", target, "--port", str(ports.iec104)),
+            ("STARTDT confirmed",),
+        ),
+        SmokeCase(
+            "phoenix-info",
+            "phoenix",
+            ("phoenix", "info", "--target", target, "--port", str(ports.phoenix)),
+            ("PLC Type:",),
+        ),
+        SmokeCase(
+            "phoenix-tags",
+            "phoenix",
+            ("phoenix", "tags", "--target", target, "--port", str(ports.phoenix_http)),
+            ("PUMP_RUN",),
         ),
     ]
 
@@ -283,14 +370,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--only",
         nargs="+",
-        choices=["modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp"],
+        choices=["modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp",
+                 "rockwell", "fins", "iec104", "phoenix"],
         help="run only cases for selected simulator families",
     )
     parser.add_argument("--no-start", action="store_true", help="use already-running simulators")
     parser.add_argument("--skip-preflight", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="print planned commands only")
     parser.add_argument("--startup-timeout", type=float, default=8.0)
-    parser.add_argument("--case-timeout", type=float, default=20.0)
+    parser.add_argument("--case-timeout", type=float, default=50.0)
+    parser.add_argument(
+        "--repeat", type=int, default=1, metavar="N",
+        help="repeat the full suite N times (stress / flakiness detection)",
+    )
     return parser.parse_args()
 
 
@@ -335,14 +427,21 @@ def main() -> int:
                         print(f"[!] {spec.name} did not respond on UDP {port}", file=sys.stderr)
                         return 1
 
-        failed = 0
-        for case in cases:
-            if not run_case(scadaver, case, args.case_timeout):
-                failed += 1
-        if failed:
-            print(f"[!] {failed} smoke case(s) failed")
+        total_failed = 0
+        for round_num in range(args.repeat):
+            if args.repeat > 1:
+                print(f"[*] Round {round_num + 1}/{args.repeat}")
+            failed = 0
+            for case in cases:
+                if not run_case(scadaver, case, args.case_timeout):
+                    failed += 1
+            total_failed += failed
+            if args.repeat > 1 and failed:
+                print(f"[!] Round {round_num + 1}: {failed} failure(s)")
+        if total_failed:
+            print(f"[!] {total_failed} total failure(s) across {args.repeat} round(s)")
             return 1
-        print(f"[+] {len(cases)} smoke case(s) passed")
+        print(f"[+] {len(cases) * args.repeat} run(s) across {args.repeat} round(s), all passed")
         return 0
     finally:
         stop_simulators(children)

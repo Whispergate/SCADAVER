@@ -20,8 +20,41 @@ Expected TUI output with 'Extract Credentials adm:5':
 import argparse
 import http.server
 import os
+import threading
 
 PORT = 80
+
+
+def _build_ipconf_response() -> bytes:
+    resp = bytearray(38)
+    resp[0:4] = b"IPCO"            # identifier → data[0..4]
+    resp[15] = 2                    # response_type = device_info
+    resp[16] = 1                    # product_code
+    # IP 127.0.0.1 stored in reversed-octet order (data[23].data[22].data[21].data[20])
+    resp[20] = 1; resp[21] = 0; resp[22] = 0; resp[23] = 127
+    # netmask 255.255.255.0 reversed
+    resp[24] = 0; resp[25] = 0xFF; resp[26] = 0xFF; resp[27] = 0xFF
+    # MAC
+    resp[32] = 0xDE; resp[33] = 0xAD; resp[34] = 0xBE
+    resp[35] = 0xEF; resp[36] = 0x00; resp[37] = 0x01
+    return bytes(resp)
+
+
+def _udp_ipconf_worker(port: int) -> None:
+    import socket as _socket
+    resp = _build_ipconf_response()
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        sock.bind(("0.0.0.0", port))
+        sock.settimeout(1.0)
+        while True:
+            try:
+                data, addr = sock.recvfrom(1024)
+                if len(data) >= 7 and data[:7] == b"IPCONF\x00":
+                    sock.sendto(resp, addr)
+            except _socket.timeout:
+                continue
+
 
 # Split on '","': 19 separators -> 20 parts
 EWON_RESPONSE = (
@@ -88,6 +121,12 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("SCADAVER_SIM_HOST", "0.0.0.0"),
         help="IP address to bind (default: 0.0.0.0 or SCADAVER_SIM_HOST)",
     )
+    parser.add_argument(
+        "--udp-port",
+        type=int,
+        default=1507,
+        help="UDP port for IPCONF discovery responses (default: 1507)",
+    )
     return parser.parse_args()
 
 
@@ -96,6 +135,10 @@ if __name__ == '__main__':
     port = args.port or args.legacy_port or int(os.environ.get("EWON_SIM_PORT", str(PORT)))
     if not 1 <= port <= 65535:
         raise ValueError("--port must be between 1 and 65535")
+
+    threading.Thread(
+        target=_udp_ipconf_worker, args=(args.udp_port,), daemon=True
+    ).start()
 
     srv = http.server.HTTPServer((args.host, port), EwonHandler)
     print(f"eWON HTTP stub listening on {args.host}:{port}")

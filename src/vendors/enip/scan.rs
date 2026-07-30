@@ -165,8 +165,85 @@ fn print_device(d: &EnipDevice) {
 }
 
 fn hex_decode(s: &str) -> Vec<u8> {
+    if !s.len().is_multiple_of(2) { return vec![]; }
     (0..s.len())
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-        .collect()
+        .collect()}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_decode_odd_length_returns_empty() {
+        assert!(hex_decode("A").is_empty());
+        assert!(hex_decode("ABC").is_empty());
+    }
+
+    #[test]
+    fn hex_decode_even_length_works() {
+        assert_eq!(hex_decode("DEAD"), vec![0xDE, 0xAD]);
+    }
+
+    const LIST_ID_RESP: &[u8] = &[
+        // EIP header (24 bytes)
+        0x63, 0x00,
+        0x2b, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        // CPF body (43 bytes): item_count(2) + item_type(2) + item_len(2) + item(37)
+        0x01, 0x00,
+        0x0c, 0x00,
+        0x25, 0x00,
+        // Identity item (37 bytes): enc_version(2) + socket_addr(16) + ...
+        0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00,   // vendor_id = 1
+        0x0e, 0x00,   // device_type = 14
+        0x01, 0x00,   // product_code = 1
+        0x1f, 0x03,   // revision: major=31, minor=3
+        0x00, 0x00,   // status
+        0x78, 0x56, 0x34, 0x12,  // serial LE = 0x12345678
+        0x03,         // name_len = 3
+        b'P', b'L', b'C',
+        0x03,         // state
+    ];
+
+    #[test]
+    fn parse_list_identity_empty_returns_none() {
+        assert!(parse_list_identity(&[]).is_none());
+    }
+
+    #[test]
+    fn parse_list_identity_too_short_returns_none() {
+        assert!(parse_list_identity(&[0x63, 0x00, 0x00]).is_none());
+    }
+
+    #[test]
+    fn parse_list_identity_wrong_command_returns_none() {
+        let mut buf = [0u8; 67];
+        buf[..LIST_ID_RESP.len()].copy_from_slice(LIST_ID_RESP);
+        buf[0] = 0x64;
+        assert!(parse_list_identity(&buf).is_none());
+    }
+
+    #[test]
+    fn parse_list_identity_claimed_len_overflow_returns_none() {
+        // data[2..4] claims 0xFFFF bytes but buffer is tiny
+        let buf = &[0x63u8, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00];
+        assert!(parse_list_identity(buf).is_none());
+    }
+
+    #[test]
+    fn parse_list_identity_valid_response_returns_device() {
+        let dev = parse_list_identity(LIST_ID_RESP).unwrap();
+        assert_eq!(dev.vendor_id, "0001");
+        assert_eq!(dev.product_name, "PLC");
+        assert_eq!(dev.device_type, 14);
+        assert_eq!(dev.revision, "31.3");
+    }
 }

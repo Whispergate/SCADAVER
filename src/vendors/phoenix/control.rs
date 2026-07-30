@@ -250,6 +250,7 @@ pub fn control_ilc390(target_ip: &str, port: u16, action: &str) -> Result<String
 
 fn hex_decode(s: &str) -> Vec<u8> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if !s.len().is_multiple_of(2) { return vec![]; }
     (0..s.len())
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
@@ -262,4 +263,21 @@ fn hex_encode(b: &[u8]) -> String {
         let _ = write!(s, "{x:02x}");
         s
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_decode_odd_length_returns_empty() {
+        assert!(hex_decode("A").is_empty());
+        assert!(hex_decode("ABC").is_empty());
+    }
+
+    #[test]
+    fn hex_decode_even_length_works() {
+        assert_eq!(hex_decode("DEAD"), vec![0xDE, 0xAD]);
+        assert_eq!(hex_decode("DE AD"), vec![0xDE, 0xAD]);
+    }
 }
