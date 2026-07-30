@@ -9,6 +9,10 @@ license = "GPL-3.0-or-later"
 name = "scadaver"
 path = "src/main.rs"
 
+[lib]
+name = "scadaver_rs"
+path = "src/lib.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive", "color"] }
 anyhow = "1"
