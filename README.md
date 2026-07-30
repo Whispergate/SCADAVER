@@ -95,8 +95,10 @@ python sim/smoke.py --profile high
 ```
 
 The smoke suite starts the covered simulators, runs read-only `scadaver` commands, and
-fails with captured command output if a protocol path regresses. Current simulator
-coverage is Schneider/Modbus, Mitsubishi/SLMP, Beckhoff/ADS, Siemens/S7Comm, and eWON.
+fails with captured command output if a protocol path regresses. All ten protocol
+families have simulator coverage: Schneider/Modbus, Mitsubishi/SLMP, Beckhoff/ADS,
+Siemens/S7Comm, eWON, SNMP, Rockwell/EtherNet/IP, Omron/FINS, IEC 104, and
+Phoenix Contact WebVisit.
 
 ---
 
@@ -293,16 +295,18 @@ offset 7. The `DA1` field (byte 4) is the client's own node address.
 
 ---
 
-### HMS eWON Flexy — Proprietary UDP Discovery
+### HMS eWON Flexy — HTTP + UDP IPCONF Discovery
 
-**Ports:** UDP broadcast on standard interfaces
+**Ports:** TCP 80 (HTTP management), UDP 1507 (IPCONF discovery, listen on 1506)
 
 **Discovery:**
-- Broadcasts a proprietary discovery datagram — returns device name, MAC address, serial
-  number
+- UDP IPCONF broadcast (`IPCONF\x00` prefix) to port 1507 — returns device type, IP
+  address, netmask, and MAC address:
+  `scadaver scan ewon -i <IP>`
 
 **Exploitation:**
-- CVE-2019-9015: Auth bypass — retrieve all credentials from `/ExportAccount`:
+- CVE-2019-9015: Auth bypass — retrieve all credentials via HTTP POST to
+  `/wrcgi.bin/wsdReadForm` without authentication:
   `scadaver exploit ewon-creds --target <IP>`
 - Supports up to `--max-users` accounts (default 20)
 
@@ -311,9 +315,9 @@ credentials without authentication.
 
 ---
 
-### Phoenix Contact — ILC WebVisit HMI
+### Phoenix Contact — ProConOS + WebVisit HMI
 
-**Ports:** TCP 80 (HTTP WebVisit), TCP 4000 (ILC proprietary)
+**Ports:** TCP 1962 (ProConOS binary protocol), TCP 80/8080 (HTTP WebVisit)
 
 **Discovery / Enumeration:**
 - HTTP GET to WebVisit endpoint — parses PLC type and firmware
@@ -330,6 +334,31 @@ credentials without authentication.
 
 **Auth:** CVE-2016-8366 and CVE-2016-8380 are unauthenticated vulnerabilities. Patched
 in firmware ≥ 2.40 (ILC 150) and ≥ 2.30 (ILC 390).
+
+---
+
+### SNMP — Simple Network Management Protocol
+
+**Ports:** UDP 161
+
+**Discovery:**
+- Community string brute-force against a list of common strings (`public`, `private`, etc.)
+- sysDescr, sysObjectID, sysName, sysLocation, sysContact, sysUptime enumeration:
+  `scadaver snmp enum --target <IP>`
+- Full OID subtree walk:
+  `scadaver snmp walk --target <IP> --oid 1.3.6.1.2.1.1`
+- Community discovery only:
+  `scadaver snmp scan --target <IP>`
+
+**Enumeration:**
+- Interface table (IF-MIB): description, speed, MAC, operational status, error counts
+- IP address and routing table (IP-MIB)
+- ARP table
+- Vendor identification via sysObjectID prefix match (Siemens, Schneider, Rockwell,
+  Phoenix Contact, Beckhoff)
+- CVE check: known vulnerable firmware versions for Siemens SCALANCE and Schneider
+
+**Auth:** SNMPv1/v2c use community strings (no encryption). SNMPv3 is not implemented.
 
 ---
 
@@ -367,9 +396,56 @@ It is rarely deployed in the field. Not implemented.
 | Schneider Modbus / FC90 | None | N/A |
 | Mitsubishi SLMP | Optional 4-char password | Not implemented |
 | Omron FINS | None | N/A |
+| SNMP | Community string (v1/v2c), USM (v3) | v1/v2c only |
 | eWON | HTTP Basic Auth (firmware ≥ 13.2s0) | Not implemented |
 | Phoenix Contact | HTTP Basic Auth (patched firmware) | Not implemented |
 | IEC 60870-5-104 | IEC 62351-5 HMAC (rarely deployed) | Not implemented |
+
+---
+
+## Library Usage
+
+scadaver-rs exposes its protocol engines as a Rust library crate (`scadaver_rs`) alongside
+the CLI binary. Add it as a dependency via git URL:
+
+```toml
+[dependencies]
+scadaver_rs = { git = "https://github.com/SawyersPresent/scadaver-rs" }
+```
+
+Example — scan a Rockwell EtherNet/IP device and read a tag:
+
+```rust
+use scadaver_rs::vendors::rockwell::driver;
+
+let device = driver::get_device_info("192.168.1.50", 44818)?;
+println!("{} — {}", device.product_name, device.revision);
+
+let tags = driver::enumerate_tags("192.168.1.50", 44818)?;
+for tag in &tags {
+    let value = driver::read_tag("192.168.1.50", 44818, tag)?;
+    println!("{} = {}", tag.name, driver::decode_value(tag.tag_type, &value));
+}
+```
+
+Public namespaces available:
+
+| Namespace | Protocols |
+|---|---|
+| `scadaver_rs::vendors::schneider` | Modbus TCP, FC90, UDP discovery |
+| `scadaver_rs::vendors::siemens` | S7Comm / ISO-on-TCP |
+| `scadaver_rs::vendors::beckhoff` | ADS/AMS, TwinCAT, CX webcontrol |
+| `scadaver_rs::vendors::mitsubishi` | SLMP / MC Protocol 3E |
+| `scadaver_rs::vendors::omron` | FINS TCP/UDP |
+| `scadaver_rs::vendors::rockwell` | EtherNet/IP + CIP |
+| `scadaver_rs::vendors::enip` | EtherNet/IP enumerations |
+| `scadaver_rs::vendors::ewon` | eWON HTTP exploit + IPCONF scan |
+| `scadaver_rs::vendors::phoenix` | ProConOS binary, WebVisit HMI |
+| `scadaver_rs::vendors::snmp` | SNMPv1/v2c client, OID constants |
+| `scadaver_rs::vendors::iec104` | IEC 60870-5-104 client session |
+| `scadaver_rs::core::modbus` | Raw Modbus TCP client primitives |
+| `scadaver_rs::core::network` | Interface enumeration, broadcast sockets |
+| `scadaver_rs::core::bytes` | Hex/IP utility functions |
 
 ---
 
