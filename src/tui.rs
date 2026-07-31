@@ -808,7 +808,26 @@ fn action_availability(app: &App, exploit: &ExploitDef) -> ActionAvailability {
                     reason: Some("no device selected"),
                 };
             };
-            capability_availability(dev, capability)
+            // For MULTI devices viewed through a vendor_override, resolve the
+            // sub-vendor's nested field map so cap_ flags are visible.
+            let maybe_sub_dev: Option<DeviceRecord> = if dev.vendor == "multi" {
+                app.vendor_override.as_deref().and_then(|v| {
+                    dev.fields
+                        .get(v)
+                        .and_then(Value::as_object)
+                        .map(|sub_map| DeviceRecord {
+                            id: dev.id,
+                            ip: dev.ip.clone(),
+                            vendor: v.to_string(),
+                            last_seen: dev.last_seen,
+                            fields: Value::Object(sub_map.clone()),
+                        })
+                })
+            } else {
+                None
+            };
+            let check_dev = maybe_sub_dev.as_ref().unwrap_or(dev);
+            capability_availability(check_dev, capability)
         }
     }
 }
@@ -2156,7 +2175,7 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
         }
     };
     out(&format!(
-        "[*] {} tags found — reading scalar values...",
+        "[*] {} tags found — reading scalar and array[0] values...",
         tags.len()
     ));
 
@@ -2184,6 +2203,33 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
         })
         .collect();
 
+    // Bulk-read element [0] for 1D non-struct arrays
+    let array1d_tags: Vec<(&str, u16)> = tags
+        .iter()
+        .filter(|t| t.tag_type & 0x8000 == 0 && t.dimensions == 1)
+        .map(|t| (t.name.as_str(), t.tag_type))
+        .collect();
+    let array1d_subscript_names: Vec<String> = array1d_tags
+        .iter()
+        .map(|(name, _)| format!("{name}[0]"))
+        .collect();
+    let array1d_name_refs: Vec<&str> = array1d_subscript_names
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    let array1d_raw = driver::read_tags_bulk(ip, port, &array1d_name_refs);
+    let array1d_map: HashMap<&str, String> = array1d_tags
+        .iter()
+        .zip(array1d_raw.iter())
+        .map(|((name, tag_type), opt)| {
+            let val = match opt {
+                Some(data) => format!("[{}, ...]", driver::decode_value(*tag_type, data)),
+                None => "[array]".to_string(),
+            };
+            (*name, val)
+        })
+        .collect();
+
     let [hdr, sep] = tag_header();
     out(&hdr);
     out(&sep);
@@ -2191,8 +2237,13 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
         let (base, dims) = driver::type_parts(t.tag_type);
         let value = if t.tag_type & 0x8000 != 0 {
             "[struct]".to_string()
-        } else if t.dimensions > 0 {
-            "[array]".to_string()
+        } else if t.dimensions == 1 {
+            array1d_map
+                .get(t.name.as_str())
+                .cloned()
+                .unwrap_or_else(|| "[array]".to_string())
+        } else if t.dimensions > 1 {
+            format!("[{}D array]", t.dimensions)
         } else {
             value_map
                 .get(t.name.as_str())
