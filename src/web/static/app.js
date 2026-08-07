@@ -366,7 +366,7 @@ function scadaApp() {
             try {
                 const r = await fetch('/api/scan', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({
                         vendor: this.scanVendor,
                         timeout: this.scanTimeout,
@@ -393,7 +393,7 @@ function scadaApp() {
             try {
                 const r = await fetch('/api/scan/ip', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({ ip: this.probeIp.trim(), timeout: this.scanTimeout }),
                 });
                 const data = await r.json();
@@ -448,7 +448,7 @@ function scadaApp() {
             try {
                 const r = await fetch('/api/device/tags', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({
                         ip: this.selectedDevice.ip,
                         vendor: this.selectedDevice.vendor,
@@ -475,7 +475,7 @@ function scadaApp() {
             try {
                 const r = await fetch('/api/device/tags', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({
                         ip: this.selectedDevice.ip,
                         vendor: this.selectedDevice.vendor,

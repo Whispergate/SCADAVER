@@ -34,6 +34,7 @@ indicatif = "0.17"
 socket2 = { version = "0.5", features = ["all"] }
 base64 = "0.22"
 rand = "0.8"
+subtle = "2"
 network-interface = "2"
 console = "0.15"
 dirs = "5"

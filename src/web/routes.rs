@@ -134,11 +134,12 @@ fn device_field_str(ip: &str, key: &str) -> Option<String> {
 }
 
 fn require_api_key(headers: &HeaderMap, key: &str) -> Option<(StatusCode, Json<serde_json::Value>)> {
+    use subtle::ConstantTimeEq as _;
     let provided = headers
         .get("x-api-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if provided == key {
+    if provided.as_bytes().ct_eq(key.as_bytes()).into() {
         None
     } else {
         Some((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "missing or invalid X-API-Key header"}))))
@@ -236,9 +237,20 @@ async fn api_delete_device(Path(ip): Path<String>) -> Json<Value> {
 
 // ─── Scan ─────────────────────────────────────────────────────────────────────
 
-async fn api_scan_ip(Json(req): Json<ScanIpReq>) -> Json<Value> {
+async fn api_scan_ip(
+    State(key): State<Arc<String>>,
+    headers: HeaderMap,
+    Json(req): Json<ScanIpReq>,
+) -> Response {
+    if let Some(err) = require_api_key(&headers, &key) {
+        return err.into_response();
+    }
+    api_scan_ip_inner(req).await.into_response()
+}
+
+async fn api_scan_ip_inner(req: ScanIpReq) -> Json<Value> {
     let ip = req.ip.clone();
-    let timeout = req.timeout;
+    let timeout = req.timeout.min(60);
 
     let detected = tokio::task::spawn_blocking(move || {
         crate::core::autodetect::detect_device(&ip, timeout)
@@ -270,9 +282,20 @@ async fn api_scan_ip(Json(req): Json<ScanIpReq>) -> Json<Value> {
     }
 }
 
-async fn api_scan(Json(req): Json<ScanNetworkReq>) -> Json<Value> {
+async fn api_scan(
+    State(key): State<Arc<String>>,
+    headers: HeaderMap,
+    Json(req): Json<ScanNetworkReq>,
+) -> Response {
+    if let Some(err) = require_api_key(&headers, &key) {
+        return err.into_response();
+    }
+    api_scan_inner(req).await.into_response()
+}
+
+async fn api_scan_inner(req: ScanNetworkReq) -> Json<Value> {
     let vendor = req.vendor.clone();
-    let timeout = req.timeout;
+    let timeout = req.timeout.min(60);
     let iface_ip = req.iface_ip.clone();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -397,7 +420,18 @@ fn broadcast_scan(
 
 // ─── Tags ─────────────────────────────────────────────────────────────────────
 
-async fn api_device_tags(Json(req): Json<TagsReq>) -> Json<Value> {
+async fn api_device_tags(
+    State(key): State<Arc<String>>,
+    headers: HeaderMap,
+    Json(req): Json<TagsReq>,
+) -> Response {
+    if let Some(err) = require_api_key(&headers, &key) {
+        return err.into_response();
+    }
+    api_device_tags_inner(req).await.into_response()
+}
+
+async fn api_device_tags_inner(req: TagsReq) -> Json<Value> {
     let ip = req.ip.clone();
     let vendor = req.vendor.clone();
     let cache = req.cache;
@@ -1072,7 +1106,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
             let start: u16 = username.trim().parse()
                 .map_err(|_| anyhow::anyhow!("Invalid start address: '{username}'"))?;
             let mut values: Vec<u16> = Vec::new();
-            for s in password.split_whitespace() {
+            for s in password.split_whitespace().take(100) {
                 values.push(
                     s.parse::<u16>()
                         .map_err(|_| anyhow::anyhow!("Invalid value '{s}': must be 0–65535"))?,
@@ -1249,8 +1283,11 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
 // ─── Port scanner ─────────────────────────────────────────────────────────────
 
 async fn api_portscan(Json(req): Json<PortscanReq>) -> Json<Value> {
+    let timeout = req.timeout.min(60).max(1);
+    let mut extra_ports = req.extra_ports;
+    extra_ports.truncate(100);
     let result = tokio::task::spawn_blocking(move || {
-        crate::core::portscan::scan_ot_ports(&req.ip, req.timeout, &req.extra_ports)
+        crate::core::portscan::scan_ot_ports(&req.ip, timeout, &extra_ports)
     })
     .await;
 
@@ -1285,7 +1322,7 @@ async fn ws_monitor(
         .get("origin")
         .and_then(|v| v.to_str().ok())
         .map(|o| o.starts_with("http://localhost") || o.starts_with("http://127.0.0.1"))
-        .unwrap_or(true); // no Origin header means same-origin (curl / CLI), allow
+        .unwrap_or(false); // no Origin header = non-browser client; deny by default
     if !origin_ok {
         return axum::http::StatusCode::FORBIDDEN.into_response();
     }
@@ -1310,5 +1347,99 @@ async fn monitor_loop(mut socket: WebSocket, ip: String, vendor: String) {
         }
 
         sleep(Duration::from_secs(2)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── require_api_key ────────────────────────────────────────────────────────
+
+    fn make_headers_with_key(key: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-api-key", key.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn require_api_key_correct_returns_none() {
+        let h = make_headers_with_key("abc123");
+        assert!(require_api_key(&h, "abc123").is_none());
+    }
+
+    #[test]
+    fn require_api_key_wrong_returns_401() {
+        let h = make_headers_with_key("wrongkey");
+        let result = require_api_key(&h, "rightkey");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn require_api_key_missing_header_returns_401() {
+        let h = HeaderMap::new();
+        let result = require_api_key(&h, "somekey");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn require_api_key_empty_key_vs_empty_returns_none() {
+        let h = make_headers_with_key("");
+        assert!(require_api_key(&h, "").is_none());
+    }
+
+    // ── parse_bool_value ───────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_bool_false_values() {
+        for s in &["false", "False", "FALSE", "0", "off", "OFF", "Off"] {
+            assert!(!parse_bool_value(s), "{s} should be false");
+        }
+    }
+
+    #[test]
+    fn parse_bool_true_values() {
+        for s in &["true", "1", "on", "yes", "anything", ""] {
+            assert!(parse_bool_value(s), "{s} should be true");
+        }
+    }
+
+    // ── parse_s7_bit_tag ───────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_s7_bit_tag_valid_output() {
+        assert_eq!(parse_s7_bit_tag("Q1.3"), Some(('Q', 1, 3)));
+    }
+
+    #[test]
+    fn parse_s7_bit_tag_valid_merker() {
+        assert_eq!(parse_s7_bit_tag("M0.0"), Some(('M', 0, 0)));
+    }
+
+    #[test]
+    fn parse_s7_bit_tag_max_values() {
+        assert_eq!(parse_s7_bit_tag("Q255.7"), Some(('Q', 255, 7)));
+    }
+
+    #[test]
+    fn parse_s7_bit_tag_missing_dot_returns_none() {
+        assert!(parse_s7_bit_tag("Q1").is_none());
+    }
+
+    #[test]
+    fn parse_s7_bit_tag_empty_returns_none() {
+        assert!(parse_s7_bit_tag("").is_none());
+    }
+
+    #[test]
+    fn parse_s7_bit_tag_no_area_returns_none() {
+        assert!(parse_s7_bit_tag("1.3").is_none());
+    }
+
+    #[test]
+    fn parse_s7_bit_tag_non_numeric_byte_returns_none() {
+        assert!(parse_s7_bit_tag("Qx.3").is_none());
     }
 }

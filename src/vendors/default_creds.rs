@@ -67,3 +67,24 @@ pub const SIEMENS_S7_PASSWORDS: &[&str] = &[
     "ffff",
 ];
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ics_http_creds_has_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for &pair in ICS_HTTP_CREDS {
+            assert!(seen.insert(pair), "duplicate entry: ({:?}, {:?})", pair.0, pair.1);
+        }
+    }
+
+    #[test]
+    fn siemens_passwords_has_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for &pw in SIEMENS_S7_PASSWORDS {
+            assert!(seen.insert(pw), "duplicate password: {pw:?}");
+        }
+    }
+}
+
