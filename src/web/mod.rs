@@ -11,20 +11,30 @@ pub fn start(host: &str, port: u16) -> Result<()> {
     rt.block_on(run(host, port))
 }
 
+fn generate_token() -> String {
+    let bytes: [u8; 16] = rand::random();
+    bytes.iter().fold(String::new(), |mut s, b| {
+        let _ = std::fmt::Write::write_fmt(&mut s, format_args!("{b:02x}"));
+        s
+    })
+}
+
 async fn run(host: &str, port: u16) -> Result<()> {
     let addr: std::net::SocketAddr = format!("{host}:{port}")
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid listen address '{host}:{port}': {e}"))?;
 
-    let app = routes::build_router();
+    let token = generate_token();
+    let app = routes::build_router(token.clone());
     let url = format!("http://{addr}");
-    println!("[*] SCADAver web interface → {url}");
+    println!("[*] SCADAver web interface - {url}/?key={token}");
+    println!("[*] API key: {token}  (required for write/exploit endpoints)");
     println!("[*] Press Ctrl-C to stop.");
 
-    let url_clone = url.clone();
+    let url_with_key = format!("{url}/?key={token}");
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(600));
-        open_browser(&url_clone);
+        open_browser(&url_with_key);
     });
 
     let listener = tokio::net::TcpListener::bind(addr)

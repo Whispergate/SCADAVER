@@ -1,13 +1,14 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query,
+        Path, Query, State,
     },
-    http::header,
+    http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fmt::Write as _;
@@ -103,7 +104,7 @@ fn default_timeout() -> u64 {
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
-pub fn build_router() -> Router {
+pub fn build_router(api_key: String) -> Router {
     Router::new()
         .route("/", get(index_html))
         .route("/static/app.js", get(app_js))
@@ -120,6 +121,19 @@ pub fn build_router() -> Router {
         .route("/api/exploit/*id", post(api_exploit))
         .route("/api/run/portscan", post(api_portscan))
         .route("/ws/monitor/:ip", get(ws_monitor))
+        .with_state(Arc::new(api_key))
+}
+
+fn require_api_key(headers: &HeaderMap, key: &str) -> Option<(StatusCode, Json<serde_json::Value>)> {
+    let provided = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if provided == key {
+        None
+    } else {
+        Some((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "missing or invalid X-API-Key header"}))))
+    }
 }
 
 // ─── Static files ─────────────────────────────────────────────────────────────
@@ -606,7 +620,18 @@ fn read_tags_from_db(ip: &str) -> Value {
 
 // ─── Write tag ────────────────────────────────────────────────────────────────
 
-async fn api_device_write(Json(req): Json<WriteReq>) -> Json<Value> {
+async fn api_device_write(
+    State(key): State<Arc<String>>,
+    headers: HeaderMap,
+    Json(req): Json<WriteReq>,
+) -> Response {
+    if let Some(err) = require_api_key(&headers, &key) {
+        return err.into_response();
+    }
+    api_device_write_inner(req).await.into_response()
+}
+
+async fn api_device_write_inner(req: WriteReq) -> Json<Value> {
     let ip = req.ip.clone();
     let vendor = req.vendor.clone();
     let tag = req.tag.clone();
@@ -809,7 +834,19 @@ async fn api_device_history(Query(q): Query<HistoryQuery>) -> Json<Value> {
 
 // ─── Exploits ─────────────────────────────────────────────────────────────────
 
-async fn api_exploit(Path(id): Path<String>, Json(req): Json<ExploitReq>) -> Json<Value> {
+async fn api_exploit(
+    State(key): State<Arc<String>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<ExploitReq>,
+) -> Response {
+    if let Some(err) = require_api_key(&headers, &key) {
+        return err.into_response();
+    }
+    api_exploit_inner(id, req).await.into_response()
+}
+
+async fn api_exploit_inner(id: String, req: ExploitReq) -> Json<Value> {
     let exploit_id = id.trim_start_matches('/').to_string();
     let ip = req.ip.clone();
     let username = req.username.clone();

@@ -240,6 +240,7 @@ const EXPLOIT_CATALOG = {
 function scadaApp() {
     return {
         // ── State ──────────────────────────────────────────────────────────
+        apiKey: new URLSearchParams(window.location.search).get('key') || '',
         activeTab: 'scanner',
         devices: [],
         selectedDevice: null,
@@ -520,7 +521,7 @@ function scadaApp() {
             try {
                 const r = await fetch('/api/device/write', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({
                         ip: this.selectedDevice.ip,
                         vendor: this.selectedDevice.vendor,
@@ -696,7 +697,7 @@ function scadaApp() {
             try {
                 const r = await fetch(`/api/exploit/${expl.id}`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({
                         ip: this.selectedDevice.ip,
                         username: params.username || '',
