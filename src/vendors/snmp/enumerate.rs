@@ -183,7 +183,7 @@ pub fn check_cves(info: &SystemInfo) -> Vec<CveHit> {
         hits.push(CveHit {
             id: "CVE-1999-0517",
             cvss: "7.5",
-            summary: "Default SNMP community string in use — full read access",
+            summary: "Default SNMP community string in use: full read access",
             ref_url: "https://nvd.nist.gov/vuln/detail/CVE-1999-0517",
         });
     }
@@ -222,7 +222,7 @@ pub fn check_cves(info: &SystemInfo) -> Vec<CveHit> {
         hits.push(CveHit {
             id: "CVE-2013-3634",
             cvss: "7.3",
-            summary: "SCALANCE S602/S612/S623/S627-2M: auth bypass — execute SNMP without valid creds",
+            summary: "SCALANCE S602/S612/S623/S627-2M: auth bypass: execute SNMP without valid creds",
             ref_url: "https://www.cisa.gov/news-events/ics-advisories/icsa-13-149-01",
         });
     }

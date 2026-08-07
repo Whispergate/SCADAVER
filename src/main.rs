@@ -3,6 +3,7 @@ mod creds;
 mod db;
 mod display;
 mod tui;
+mod web;
 
 pub use scadaver_rs::core;
 pub use scadaver_rs::vendors;
@@ -13,6 +14,7 @@ fn main() {
 
     let launch_tui =
         args.command.is_none() || matches!(args.command, Some(cli::Verb::Tui));
+    let launch_web = matches!(args.command, Some(cli::Verb::Web { .. }));
 
     if launch_tui {
         creds::ensure_sample_exists();
@@ -26,6 +28,12 @@ fn main() {
         };
         if let Err(e) = tui::run(&db) {
             eprintln!("Fatal: {e:#}");
+            std::process::exit(1);
+        }
+    } else if launch_web {
+        let Some(cli::Verb::Web { host, port }) = args.command else { unreachable!() };
+        if let Err(e) = web::start(&host, port) {
+            eprintln!("Web server error: {e:#}");
             std::process::exit(1);
         }
     } else if let Err(e) = cli::run(args) {

@@ -54,7 +54,7 @@ pub fn setup_connection(ip: &str, port: u16, timeout_secs: u64) -> Option<TcpStr
             continue; // Wrong TSAP
         }
 
-        // S7Comm Setup — randomize PDU reference to avoid fixed-invoke-ID fingerprint
+        // S7Comm Setup: randomize PDU reference to avoid fixed-invoke-ID fingerprint
         let invoke = rand::random::<u16>();
         let s7_pkt = format!("0300001902f08032010000{invoke:04x}00080000f0000001000101e0");
         let Some(s7_resp) = send_recv(&mut stream, &hex_decode(&s7_pkt)) else { continue };
@@ -148,7 +148,7 @@ pub fn read_all_data(
         let pkt_str = base.replace("{area}", area);
         let pkt = hex_decode(&pkt_str);
         let Some(resp) = send_recv(&mut stream, &pkt) else { continue };
-        result.insert(label.to_string(), parse_coil_data(&hex_encode(&resp), label));
+        result.insert((*label).to_string(), parse_coil_data(&hex_encode(&resp), label));
     }
 
     result
@@ -406,7 +406,7 @@ pub fn get_device_snapshot(
 /// Query the CPU operating state via SZL 0x0424.
 ///
 /// Tries all four COTP TSAPs (S7-1200/1500/300/400) before giving up,
-/// so this works across the full S7 family — not just slot-0 CPUs.
+/// so this works across the full S7 family: not just slot-0 CPUs.
 pub fn get_cpu_state(ip: &str, port: u16, timeout_secs: u64, password: Option<&str>) -> String {
     let Some(mut stream) = connect_authenticated(ip, port, timeout_secs, password) else {
         return "Unknown".to_string();
@@ -431,7 +431,7 @@ pub fn change_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> bool {
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)));
 
-    // COTP CR for state change — validate Connection Confirm
+    // COTP CR for state change: validate Connection Confirm
     let Some(cotp_resp) = send_recv(
         &mut stream,
         &hex_decode("03000016 11e00000002500c1020600c2020600c0010a"),
@@ -544,14 +544,14 @@ pub fn connect_authenticated(
 }
 
 /// Returns true if the device accepts a COTP+S7Comm session but rejects an
-/// unauthenticated SZL read with a non-zero error class — indicating that
+/// unauthenticated SZL read with a non-zero error class: indicating that
 /// password protection is enabled on this CPU.
 pub fn probe_auth_required(ip: &str, port: u16, timeout_secs: u64) -> bool {
     let Some(mut stream) = setup_connection(ip, port, timeout_secs) else {
-        return false; // unreachable — auth is not the blocker
+        return false; // unreachable: auth is not the blocker
     };
     match read_szl(&mut stream, 0x0011, 0x0000) {
-        None => false, // no response (timeout/dead socket) — not an auth rejection
+        None => false, // no response (timeout/dead socket): not an auth rejection
         Some(resp) => resp.len() >= 19 && resp[17] != 0x00,
     }
 }
@@ -584,19 +584,88 @@ fn bits_to_hex_byte(bits: &str) -> String {
     bits_to_hex_byte(bits)
 }
 
+/// Write a single output bit (Q area): read-modify-write on Q byte `byte_idx`.
+pub fn write_output_bit(
+    ip: &str,
+    byte_idx: u8,
+    bit_idx: u8,
+    on: bool,
+    port: u16,
+    timeout_secs: u64,
+    password: Option<&str>,
+) -> anyhow::Result<()> {
+    let data = read_all_data(ip, port, timeout_secs, password);
+    let bits_map = data
+        .get("outputs")
+        .and_then(|v| v.as_ref())
+        .ok_or_else(|| anyhow::anyhow!("Failed to read S7 outputs for bit-write"))?;
+    let binary_str = build_modified_byte(bits_map, byte_idx, bit_idx, on);
+    if set_outputs(ip, &binary_str, port, timeout_secs, password) {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("S7 set_outputs write failed"))
+    }
+}
+
+/// Write a single merker bit (M area): read-modify-write on M byte `byte_idx`.
+pub fn write_merker_bit(
+    ip: &str,
+    byte_idx: u8,
+    bit_idx: u8,
+    on: bool,
+    port: u16,
+    timeout_secs: u64,
+    password: Option<&str>,
+) -> anyhow::Result<()> {
+    let data = read_all_data(ip, port, timeout_secs, password);
+    let bits_map = data
+        .get("merkers")
+        .and_then(|v| v.as_ref())
+        .ok_or_else(|| anyhow::anyhow!("Failed to read S7 merkers for bit-write"))?;
+    let binary_str = build_modified_byte(bits_map, byte_idx, bit_idx, on);
+    if set_merkers(ip, &binary_str, u32::from(byte_idx), port, timeout_secs, password) {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("S7 set_merkers write failed"))
+    }
+}
+
+/// Build an 8-char binary string (position i = bit i, LSB-first matching `bits_to_hex_byte`)
+/// for byte `byte_idx` in the S7 bit map, with `bit_idx` set to `on`.
+fn build_modified_byte(
+    bits_map: &HashMap<String, u8>,
+    byte_idx: u8,
+    bit_idx: u8,
+    on: bool,
+) -> String {
+    (0u8..8)
+        .map(|bit| {
+            let key = format!("{byte_idx}.{bit}");
+            let current = bits_map.get(&key).copied().unwrap_or(0);
+            if bit == bit_idx {
+                if on { '1' } else { '0' }
+            } else if current != 0 {
+                '1'
+            } else {
+                '0'
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn set_merkers_offset_overflow_returns_false() {
-        // Guard fires before any network call — no live PLC needed.
+        // Guard fires before any network call: no live PLC needed.
         assert!(!set_merkers("127.0.0.1", "11111111", 0x20_0000, 102, 1, None));
     }
 
     #[test]
     fn write_data_block_too_large_is_rejected() {
-        // Guard is now before connect_authenticated — no live PLC needed.
+        // Guard is now before connect_authenticated: no live PLC needed.
         let big = vec![0u8; 8192];
         let err = write_data_block("127.0.0.1", 1, 0, &big, 102, 1, None).unwrap_err();
         assert!(

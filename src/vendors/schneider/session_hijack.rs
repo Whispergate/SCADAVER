@@ -16,7 +16,10 @@ pub struct SchneiderDeviceInfo {
     pub state: String,
 }
 
-/// Retrieve the session cookie from the FwLog.txt (CVE-2017-6026). Pass `port = 0` for default (80).
+/// Retrieve a legacy web-session value from `FwLog.txt`.
+///
+/// This workflow is not currently mapped to a verified advisory. Pass `port = 0` for the
+/// implementation's default HTTP port (80), and use only against an authorized lab fixture.
 pub fn get_session_cookie(target_ip: &str, port: u16) -> Option<SchneiderSession> {
     let effective_port = if port == 0 { 80 } else { port };
     let url = format!("http://{target_ip}:{effective_port}/usr/Syslog/FwLog.txt");

@@ -34,7 +34,21 @@ class RunAllTests(unittest.TestCase):
 
     def test_smoke_cases_cover_current_simulators(self) -> None:
         names = {case.simulator for case in smoke.build_cases("127.0.0.1", run_all.PROFILES["high"])}
-        self.assertEqual({"modbus", "slmp", "beckhoff", "siemens", "ewon"}, names)
+        self.assertEqual(
+            {
+                "modbus",
+                "slmp",
+                "beckhoff",
+                "siemens",
+                "ewon",
+                "snmp",
+                "rockwell",
+                "fins",
+                "iec104",
+                "phoenix",
+            },
+            names,
+        )
 
 
 if __name__ == "__main__":

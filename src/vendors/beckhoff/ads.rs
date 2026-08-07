@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn decode_int_le_odd_width_returns_hex_dump() {
-        // n=3 is not 2, 4, or 8 — falls through to `_` arm which must hex-dump, not panic.
+        // n=3 is not 2, 4, or 8: falls through to `_` arm which must hex-dump, not panic.
         let result = decode_int_le(&[0xAA, 0xBB, 0xCC], 3);
         assert!(result.contains("aa") || result.contains("AA") || result.contains("aabbcc"),
             "expected hex dump, got: {result}");
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn decode_int_le_short_data_returns_hex_dump() {
-        // bytes.len() < n — the early-return guard fires before the match.
+        // bytes.len() < n: the early-return guard fires before the match.
         let result = decode_int_le(&[0x01, 0x00, 0x00], 8);
         assert!(!result.starts_with('-'), "expected hex dump for short data, got: {result}");
     }

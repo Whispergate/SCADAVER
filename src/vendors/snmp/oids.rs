@@ -38,7 +38,7 @@ pub const APC_RUNTIME_MINS: &str = "1.3.6.1.4.1.318.1.1.1.2.2.3.0";
 pub const APC_INPUT_VOLTAGE: &str = "1.3.6.1.4.1.318.1.1.1.3.2.1.0";
 pub const APC_OUTPUT_LOAD_PCT: &str = "1.3.6.1.4.1.318.1.1.1.4.2.3.0";
 pub const APC_OUTPUT_STATUS: &str = "1.3.6.1.4.1.318.1.1.1.4.1.1.0";
-// SET to 2 (graceful off) to shut down connected equipment via UPS — highly destructive
+// SET to 2 (graceful off) to shut down connected equipment via UPS: highly destructive
 pub const APC_CMD_GRACEFUL_OFF: &str = "1.3.6.1.4.1.318.1.1.1.5.2.3.0";
 
 /// Resolve sysObjectID prefix to an ICS vendor slug.

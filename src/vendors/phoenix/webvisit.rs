@@ -56,10 +56,6 @@ pub fn retrieve_passwords(target_ip: &str, port: u16) -> Result<Vec<PasswordEntr
     ];
     let split_marker = b"userLevel\x05\x06\x03\x00\x01";
 
-    for chunk in teq_body.split(|_| false) {
-        let _ = chunk; // unused
-    }
-
     // Manual split on the marker
     let chunks = split_bytes(&teq_body, split_marker);
     for chunk in chunks.iter().skip(1) {

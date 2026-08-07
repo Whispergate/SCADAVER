@@ -68,7 +68,7 @@ fn negotiate_address(stream: &mut TcpStream) -> Result<u8> {
 }
 
 fn fins_header(da1: u8, sid: u8) -> [u8; 10] {
-    // SA1: random non-zero node — avoids the fixed-0x63 scanner fingerprint
+    // SA1: random non-zero node: avoids the fixed-0x63 scanner fingerprint
     let sa1 = rand::random::<u8>() | 1;
     [
         0x80, // ICF: command, not split, response required

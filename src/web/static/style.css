@@ -1,0 +1,39 @@
+/* SCADAver custom styles. Tailwind CDN handles the rest. */
+
+/* Flash animation for changed monitor values */
+@keyframes flash-yellow {
+    0%   { background-color: rgba(234, 179, 8, 0.65); }
+    20%  { background-color: rgba(234, 179, 8, 0.55); }
+    100% { background-color: transparent; }
+}
+.value-changed {
+    animation: flash-yellow 2s ease-out;
+}
+
+/* Monospace output blocks */
+.output-box {
+    font-family: 'Courier New', Courier, monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* Vendor badge colours */
+.badge-siemens    { background-color: #1a5fb4; }
+.badge-beckhoff   { background-color: #c94422; }
+.badge-rockwell   { background-color: #8b1a1a; }
+.badge-schneider  { background-color: #3cb371; }
+.badge-modicon    { background-color: #2e8b57; }
+.badge-mitsubishi { background-color: #c0392b; }
+.badge-ewon       { background-color: #6a5acd; }
+.badge-phoenix    { background-color: #d97706; }
+.badge-enip       { background-color: #0891b2; }
+.badge-omron      { background-color: #9d174d; }
+.badge-iec104     { background-color: #374151; }
+.badge-snmp       { background-color: #374151; }
+.badge-unknown    { background-color: #374151; }
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #1e293b; }
+::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }

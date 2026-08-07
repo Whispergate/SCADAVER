@@ -15,7 +15,7 @@ static ALL: OnceLock<Vec<Reference>> = OnceLock::new();
 pub fn all() -> &'static [Reference] {
     ALL.get_or_init(|| {
         serde_json::from_str(include_str!("data/references.json"))
-            .expect("references.json malformed — re-run scripts/fetch_refs.py")
+            .expect("references.json malformed: re-run scripts/fetch_refs.py")
     })
 }
 

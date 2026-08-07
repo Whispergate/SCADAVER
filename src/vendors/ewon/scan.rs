@@ -232,6 +232,29 @@ pub fn scan_ip(ip: &str, timeout: u64, silent: bool) -> Result<Vec<EwonDevice>> 
     Ok(devices)
 }
 
+/// Read live tag values from an eWON Flexy via the REST API (`GET /api/tags/`).
+/// Returns a list of `(name, value_string)` pairs. Pass `port = 0` for default (80).
+pub fn read_tag_values(ip: &str, port: u16) -> Result<Vec<(String, String)>> {
+    let effective_port = if port == 0 { 80 } else { port };
+    let url = format!("http://{ip}:{effective_port}/api/tags/");
+    let body = ureq::get(&url)
+        .timeout(Duration::from_secs(5))
+        .call()?
+        .into_string()?;
+    let v: serde_json::Value = serde_json::from_str(&body)?;
+    let mut tags = Vec::new();
+    if let Some(arr) = v.get("body").and_then(|b| b.as_array()) {
+        for item in arr {
+            let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("?").to_string();
+            let value = item.get("value").map_or_else(String::new, |vv| {
+                vv.as_str().map_or_else(|| vv.to_string(), str::to_string)
+            });
+            tags.push((name, value));
+        }
+    }
+    Ok(tags)
+}
+
 fn print_device(dev: &EwonDevice) {
     if dev.response_type == "device_info" {
         println!(

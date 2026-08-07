@@ -1,5 +1,5 @@
 // Integration tests for the scadaver_rs public library API.
-// Each test exercises the public surface as an external crate would —
+// Each test exercises the public surface as an external crate would:
 // using scadaver_rs:: paths, not crate:: paths.
 
 use scadaver_rs::core::autodetect::{DeviceInfo, ProbeInfo, SweepOutcome};
@@ -208,39 +208,39 @@ fn ewon_user_struct_fields_accessible() {
 
 #[test]
 fn driver_decode_dint_1337() {
-    // cip_data layout: [0, 0, <4 value bytes LE>]  — first 2 bytes are the type-word echo
+    // cip_data layout: [0, 0, <4 value bytes LE>]: first 2 bytes are the type-word echo
     let mut data = vec![0u8, 0];
     data.extend_from_slice(&1337_i32.to_le_bytes());
-    assert_eq!(driver::decode_value(0xC4, &data), "1337");
+    assert_eq!(driver::decode_value(0xC4, &data, None), "1337");
 }
 
 #[test]
 fn driver_decode_dint_max() {
     let mut data = vec![0u8, 0];
     data.extend_from_slice(&i32::MAX.to_le_bytes());
-    assert_eq!(driver::decode_value(0xC4, &data), "2147483647");
+    assert_eq!(driver::decode_value(0xC4, &data, None), "2147483647");
 }
 
 #[test]
 fn driver_decode_real_one() {
     // 1.0_f32 LE bytes = [0x00, 0x00, 0x80, 0x3F]
-    assert_eq!(driver::decode_value(0xCA, &[0, 0, 0x00, 0x00, 0x80, 0x3F]), "1");
+    assert_eq!(driver::decode_value(0xCA, &[0, 0, 0x00, 0x00, 0x80, 0x3F], None), "1");
 }
 
 #[test]
 fn driver_decode_bool_true() {
-    assert_eq!(driver::decode_value(0xC1, &[0, 0, 1]), "true  (1)");
+    assert_eq!(driver::decode_value(0xC1, &[0, 0, 1], None), "true  (1)");
 }
 
 #[test]
 fn driver_decode_bool_false() {
-    assert_eq!(driver::decode_value(0xC1, &[0, 0, 0]), "false (0)");
+    assert_eq!(driver::decode_value(0xC1, &[0, 0, 0], None), "false (0)");
 }
 
 #[test]
 fn driver_decode_too_short_returns_dash() {
     // Fewer than 2 bytes → "-" before any type dispatch
-    assert_eq!(driver::decode_value(0xC4, &[]), "-");
+    assert_eq!(driver::decode_value(0xC4, &[], None), "-");
 }
 
 #[test]
@@ -282,6 +282,181 @@ fn driver_logix_device_struct_fields_accessible() {
     };
     assert_eq!(dev.vendor, "Rockwell Automation/Allen-Bradley");
     assert_eq!(dev.product_code, 55);
+}
+
+// ── rockwell::driver — UDT struct decoding simulations ───────────────────────
+//
+// These tests build a TemplateMap in-process and verify that decode_value
+// correctly renders named fields from raw CIP struct bytes.  They simulate
+// the data that download_template produces from a live PLC so that the
+// full decode path can be validated without network access.
+
+fn make_lit_template() -> driver::TemplateMap {
+    // Simulates a minimal PID / Analog-Input UDT with three REAL fields:
+    //   offset 0  → PV   (process value)
+    //   offset 4  → SP   (setpoint)
+    //   offset 8  → OUT  (output)
+    let fields = vec![
+        driver::TemplateField { name: "PV".into(),  cip_type: 0xCA, type_info: 1, offset: 0  },
+        driver::TemplateField { name: "SP".into(),  cip_type: 0xCA, type_info: 1, offset: 4  },
+        driver::TemplateField { name: "OUT".into(), cip_type: 0xCA, type_info: 1, offset: 8  },
+    ];
+    let template_id: u16 = 0x08B; // matches tag_type & 0x0FFF for tag_type = 0x808B
+    let mut map = driver::TemplateMap::new();
+    map.insert(template_id, driver::TemplateDef::from_fields(fields));
+    map
+}
+
+#[test]
+fn driver_decode_struct_real_fields_renders_named_values() {
+    // Build raw bytes: 3 × f32 LE — PV=6.40, SP=5.00, OUT=0.75
+    let mut raw = Vec::new();
+    raw.extend_from_slice(&6.40_f32.to_le_bytes());
+    raw.extend_from_slice(&5.00_f32.to_le_bytes());
+    raw.extend_from_slice(&0.75_f32.to_le_bytes());
+
+    // cip_data = [type_lo, type_hi, ...raw_bytes...]
+    let tag_type: u16 = 0x808B; // bit 15 set → struct; template_id = 0x08B
+    let mut cip_data = vec![(tag_type & 0xFF) as u8, (tag_type >> 8) as u8];
+    cip_data.extend_from_slice(&raw);
+
+    let map = make_lit_template();
+    let out = driver::decode_value(tag_type, &cip_data, Some(&map));
+
+    assert!(out.starts_with('{'), "expected struct output, got: {out}");
+    assert!(out.contains("PV:"),  "PV missing from: {out}");
+    assert!(out.contains("SP:"),  "SP missing from: {out}");
+    assert!(out.contains("OUT:"), "OUT missing from: {out}");
+    assert!(out.contains("6.4"),  "PV value wrong in: {out}");
+    assert!(out.contains('5'),    "SP value wrong in: {out}");
+}
+
+#[test]
+fn driver_decode_struct_no_template_falls_back_to_hex_display() {
+    // Without a template the output should show STRUCT(0xXXX)[N bytes]
+    let tag_type: u16 = 0x808B;
+    let raw = vec![0u8; 12];
+    let mut cip_data = vec![(tag_type & 0xFF) as u8, (tag_type >> 8) as u8];
+    cip_data.extend_from_slice(&raw);
+
+    let out = driver::decode_value(tag_type, &cip_data, None);
+    assert!(out.starts_with("STRUCT("), "expected STRUCT fallback, got: {out}");
+    assert!(out.contains("0x08B"), "template_id missing from: {out}");
+    assert!(out.contains("12 bytes"), "byte count missing from: {out}");
+}
+
+#[test]
+fn driver_decode_struct_mixed_types_dint_bool_real() {
+    // UDT with DINT @ 0, BOOL @ 4 bit 0, REAL @ 8.
+    // For a BOOL member the descriptor's type_info word is the bit position, not a count.
+    let template_id: u16 = 0x0AB;
+    let fields = vec![
+        driver::TemplateField { name: "Count".into(), cip_type: 0xC4, type_info: 1, offset: 0 },
+        driver::TemplateField { name: "Active".into(), cip_type: 0xC1, type_info: 0, offset: 4 },
+        driver::TemplateField { name: "Rate".into(),  cip_type: 0xCA, type_info: 1, offset: 8 },
+    ];
+    let mut map = driver::TemplateMap::new();
+    map.insert(template_id, driver::TemplateDef::from_fields(fields));
+
+    let mut raw = Vec::new();
+    raw.extend_from_slice(&42_i32.to_le_bytes()); // Count = 42
+    raw.push(1);                                    // Active = true
+    raw.extend_from_slice(&[0; 3]);                // padding to reach offset 8
+    raw.extend_from_slice(&std::f32::consts::PI.to_le_bytes()); // Rate ≈ 3.14
+
+    let tag_type: u16 = 0x80AB;
+    let mut cip_data = vec![(tag_type & 0xFF) as u8, (tag_type >> 8) as u8];
+    cip_data.extend_from_slice(&raw);
+
+    let out = driver::decode_value(tag_type, &cip_data, Some(&map));
+    assert!(out.contains("Count: 42"),       "Count wrong in: {out}");
+    assert!(out.contains("Active: true"),    "Active wrong in: {out}");
+    assert!(out.contains("Rate:"),           "Rate missing from: {out}");
+    assert!(out.contains("3.1"),             "Rate value wrong in: {out}");
+}
+
+#[test]
+fn driver_decode_struct_truncates_after_eight_fields() {
+    // Nine fields → show 8, then "... (1 more fields)"
+    let template_id: u16 = 0x0CD;
+    let fields: Vec<driver::TemplateField> = (0..9).map(|i| driver::TemplateField {
+        name: format!("F{i}"),
+        cip_type: 0xC4,
+        type_info: 1,
+        offset: u32::try_from(i * 4).unwrap(),
+    }).collect();
+    let mut map = driver::TemplateMap::new();
+    map.insert(template_id, driver::TemplateDef::from_fields(fields));
+
+    let mut raw = Vec::new();
+    for i in 0_i32..9 { raw.extend_from_slice(&i.to_le_bytes()); }
+
+    let tag_type: u16 = 0x80CD;
+    let mut cip_data = vec![(tag_type & 0xFF) as u8, (tag_type >> 8) as u8];
+    cip_data.extend_from_slice(&raw);
+
+    let out = driver::decode_value(tag_type, &cip_data, Some(&map));
+    assert!(out.contains("1 more field"), "truncation marker missing from: {out}");
+    assert!(!out.contains("F8:"),         "9th field should be hidden: {out}");
+}
+
+#[test]
+fn driver_decode_struct_field_offset_beyond_data_skipped() {
+    // Field whose offset exceeds the raw data length is silently skipped
+    let template_id: u16 = 0x0EF;
+    let fields = vec![
+        driver::TemplateField { name: "Present".into(), cip_type: 0xC4, type_info: 1, offset: 0   },
+        driver::TemplateField { name: "Missing".into(), cip_type: 0xC4, type_info: 1, offset: 100 },
+    ];
+    let mut map = driver::TemplateMap::new();
+    map.insert(template_id, driver::TemplateDef::from_fields(fields));
+
+    let raw = [5_i32.to_le_bytes()].concat();
+    let tag_type: u16 = 0x80EF;
+    let mut cip_data = vec![(tag_type & 0xFF) as u8, (tag_type >> 8) as u8];
+    cip_data.extend_from_slice(&raw);
+
+    let out = driver::decode_value(tag_type, &cip_data, Some(&map));
+    assert!(out.contains("Present: 5"), "visible field missing from: {out}");
+    assert!(!out.contains("Missing"),   "out-of-bounds field should be absent: {out}");
+}
+
+#[test]
+fn driver_decode_struct_nested_udt_renders_outer_and_inner() {
+    // Outer UDT contains one REAL and one inner UDT (template 0x0BB)
+    // Inner UDT has two REAL fields: Lo and Hi
+    let inner_id: u16 = 0x0BB;
+    let outer_id: u16 = 0x0CC;
+
+    let inner_fields = vec![
+        driver::TemplateField { name: "Lo".into(), cip_type: 0xCA, type_info: 1, offset: 0 },
+        driver::TemplateField { name: "Hi".into(), cip_type: 0xCA, type_info: 1, offset: 4 },
+    ];
+    // Outer field 1: REAL @ 0 (tag_type 0xCA)
+    // Outer field 2: nested UDT @ 4 (tag_type 0x80BB — bit 15 set, template_id = inner_id)
+    let outer_fields = vec![
+        driver::TemplateField { name: "Eng".into(), cip_type: 0xCA,          type_info: 1, offset: 0 },
+        driver::TemplateField { name: "Lim".into(), cip_type: 0x80BB | inner_id, type_info: 1, offset: 4 },
+    ];
+
+    let mut map = driver::TemplateMap::new();
+    map.insert(inner_id, driver::TemplateDef::from_fields(inner_fields));
+    map.insert(outer_id, driver::TemplateDef::from_fields(outer_fields));
+
+    let mut raw = Vec::new();
+    raw.extend_from_slice(&1.5_f32.to_le_bytes()); // Eng = 1.5
+    raw.extend_from_slice(&0.0_f32.to_le_bytes()); // Lim.Lo = 0.0
+    raw.extend_from_slice(&10.0_f32.to_le_bytes()); // Lim.Hi = 10.0
+
+    let tag_type: u16 = 0x80CC;
+    let mut cip_data = vec![(tag_type & 0xFF) as u8, (tag_type >> 8) as u8];
+    cip_data.extend_from_slice(&raw);
+
+    let out = driver::decode_value(tag_type, &cip_data, Some(&map));
+    assert!(out.contains("Eng:"), "Eng field missing from: {out}");
+    assert!(out.contains("Lim:"), "Lim field missing from: {out}");
+    // Inner struct nested inside — either decoded or shown as STRUCT(...)
+    assert!(out.starts_with('{'), "outer struct format wrong: {out}");
 }
 
 // ── beckhoff::ads ─────────────────────────────────────────────────────────────

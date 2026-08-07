@@ -57,7 +57,7 @@ pub fn select_interface(interfaces: &[NetworkInterface]) -> Result<NetworkInterf
 
     let items: Vec<String> = interfaces
         .iter()
-        .map(|i| format!("{} — {}/{}", i.name, i.ip, i.netmask))
+        .map(|i| format!("{}: {}/{}", i.name, i.ip, i.netmask))
         .collect();
 
     let idx = Select::with_theme(&ColorfulTheme::default())

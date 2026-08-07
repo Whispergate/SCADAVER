@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SCADAver: ICS Red Team Tool</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            slate: { 950: '#020617' }
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="/static/style.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 h-full flex flex-col" x-data="scadaApp()" x-init="init()">
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header class="flex items-center justify-between px-5 py-3 bg-slate-950 border-b border-slate-700 shrink-0">
+    <div class="flex items-center gap-3">
+      <span class="text-cyan-400 font-bold text-xl tracking-widest font-mono">SCADAver</span>
+      <span class="text-slate-500 text-xs">ICS Red Team Tool, Rust Edition</span>
+    </div>
+    <div x-show="selectedDevice" class="text-sm text-slate-400 font-mono">
+      <span class="text-cyan-400" x-text="selectedDevice?.ip"></span>
+      &nbsp;·&nbsp;
+      <span class="uppercase text-xs px-2 py-0.5 rounded text-white"
+            :class="'badge-' + (selectedDevice?.vendor || 'unknown')"
+            x-text="selectedDevice?.vendor || 'unknown'"></span>
+    </div>
+  </header>
+
+  <!-- ── Body ───────────────────────────────────────────────────────────── -->
+  <div class="flex flex-1 overflow-hidden">
+
+    <!-- ── Sidebar ─────────────────────────────────────────────────────── -->
+    <aside class="w-60 bg-slate-800 flex flex-col border-r border-slate-700 shrink-0">
+      <div class="px-3 pt-3 pb-2 text-xs text-slate-400 uppercase tracking-wider font-semibold">
+        Devices
+      </div>
+
+      <!-- Device list -->
+      <div class="flex-1 overflow-y-auto">
+        <template x-if="devices.length === 0">
+          <p class="px-3 py-4 text-xs text-slate-500 italic">No devices yet. Scan the network or probe an IP.</p>
+        </template>
+        <template x-for="dev in devices" :key="dev.ip">
+          <div class="group flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-700 border-b border-slate-700/50"
+               :class="selectedDevice?.ip === dev.ip ? 'bg-slate-700' : ''"
+               @click="selectDevice(dev)">
+            <span class="w-2 h-2 rounded-full shrink-0"
+                  :class="selectedDevice?.ip === dev.ip ? 'bg-cyan-400' : 'bg-slate-500'"></span>
+            <div class="min-w-0 flex-1">
+              <div class="font-mono text-sm truncate" x-text="dev.ip"></div>
+              <div class="text-xs text-slate-400 uppercase" x-text="dev.vendor"></div>
+            </div>
+            <button class="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 text-xs px-1"
+                    title="Remove"
+                    @click.stop="removeDevice(dev.ip)">✕</button>
+          </div>
+        </template>
+      </div>
+
+      <!-- Probe IP -->
+      <div class="border-t border-slate-700 p-3">
+        <p class="text-xs text-slate-400 mb-1">Probe IP</p>
+        <div class="flex gap-1">
+          <input type="text" placeholder="192.168.1.10"
+                 class="flex-1 bg-slate-900 text-slate-100 text-xs px-2 py-1 rounded border border-slate-600 focus:border-cyan-500 outline-none font-mono"
+                 x-model="probeIp"
+                 @keydown.enter="probeIpTarget()">
+          <button class="bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white text-xs px-2 py-1 rounded"
+                  :disabled="probing || !probeIp.trim()"
+                  @click="probeIpTarget()">
+            <span x-show="!probing">Go</span>
+            <span x-show="probing">…</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ── Main panel ──────────────────────────────────────────────────── -->
+    <main class="flex-1 flex flex-col overflow-hidden">
+
+      <!-- Tab bar -->
+      <div class="flex border-b border-slate-700 bg-slate-800/50 shrink-0">
+        <template x-for="tab in ['scanner','identity','tags','monitor','exploits']" :key="tab">
+          <button class="px-5 py-2.5 text-sm capitalize border-b-2 transition-colors"
+                  :class="activeTab === tab
+                    ? 'border-cyan-400 text-cyan-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'"
+                  @click="activeTab = tab">
+            <span x-text="tab"></span>
+          </button>
+        </template>
+      </div>
+
+      <!-- Tab content -->
+      <div class="flex-1 overflow-y-auto p-5">
+
+        <!-- ── SCANNER ────────────────────────────────────────────────── -->
+        <div x-show="activeTab === 'scanner'" x-cloak>
+          <h2 class="text-lg font-semibold mb-4 text-slate-200">Network Scanner</h2>
+
+          <div class="flex flex-wrap gap-4 mb-5">
+            <!-- Interface -->
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-slate-400">Interface</label>
+              <select class="bg-slate-800 border border-slate-600 text-slate-100 text-sm px-3 py-1.5 rounded"
+                      x-model="selectedIface">
+                <template x-for="iface in interfaces" :key="iface.ip">
+                  <option :value="iface.ip" x-text="`${iface.name} (${iface.ip})`"></option>
+                </template>
+              </select>
+            </div>
+
+            <!-- Vendor -->
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-slate-400">Vendor</label>
+              <select class="bg-slate-800 border border-slate-600 text-slate-100 text-sm px-3 py-1.5 rounded"
+                      x-model="scanVendor">
+                <option value="all">All</option>
+                <option value="beckhoff">Beckhoff</option>
+                <option value="enip">EtherNet/IP</option>
+                <option value="ewon">eWON</option>
+                <option value="schneider">Schneider</option>
+                <option value="mitsubishi">Mitsubishi</option>
+              </select>
+            </div>
+
+            <!-- Timeout -->
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-slate-400">Timeout (s): <span x-text="scanTimeout"></span></label>
+              <input type="range" min="1" max="15" step="1"
+                     x-model.number="scanTimeout"
+                     class="w-32 accent-cyan-500">
+            </div>
+
+            <!-- Scan button -->
+            <div class="flex items-end">
+              <button class="bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white px-5 py-1.5 rounded text-sm font-semibold"
+                      :disabled="scanning"
+                      @click="scanNetwork()">
+                <span x-show="!scanning">Scan Network</span>
+                <span x-show="scanning">Scanning…</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Results table -->
+          <template x-if="scanResults.length > 0">
+            <div>
+              <p class="text-xs text-slate-400 mb-2" x-text="`${scanResults.length} device(s) found`"></p>
+              <table class="w-full text-sm border-collapse">
+                <thead>
+                  <tr class="text-left text-xs text-slate-400 border-b border-slate-700">
+                    <th class="pb-1 pr-4">IP</th>
+                    <th class="pb-1 pr-4">Vendor</th>
+                    <th class="pb-1 pr-4">Details</th>
+                    <th class="pb-1"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="dev in scanResults" :key="dev.ip">
+                    <tr class="border-b border-slate-700/50 hover:bg-slate-800/50">
+                      <td class="py-1.5 pr-4 font-mono text-cyan-300" x-text="dev.ip"></td>
+                      <td class="py-1.5 pr-4">
+                        <span class="uppercase text-xs px-2 py-0.5 rounded text-white"
+                              :class="'badge-' + (dev.vendor || 'unknown')"
+                              x-text="dev.vendor || 'unknown'"></span>
+                      </td>
+                      <td class="py-1.5 pr-4 text-slate-300 text-xs"
+                          x-text="dev.product_name || dev.name || dev.plc_type || ''"></td>
+                      <td class="py-1.5">
+                        <button class="text-xs text-cyan-400 hover:text-cyan-300"
+                                @click="addScanResult(dev)">+ Add</button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+
+          <template x-if="scanResults.length === 0 && !scanning">
+            <p class="text-sm text-slate-500 italic mt-4">No results yet. Click "Scan Network" to discover devices.</p>
+          </template>
+
+          <!-- ── Port Scanner (per-device) ─────────────────────────────── -->
+          <template x-if="selectedDevice">
+            <div class="mt-6 border-t border-slate-700 pt-5">
+              <div class="flex items-center gap-3 mb-3">
+                <h3 class="text-sm font-semibold text-slate-300">OT Port Scan</h3>
+                <span class="text-xs text-slate-500">Target:
+                  <span class="font-mono text-cyan-400" x-text="selectedDevice.ip"></span>
+                </span>
+                <button class="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white text-xs px-3 py-1 rounded"
+                        :disabled="portScanning"
+                        @click="scanPorts()">
+                  <span x-show="!portScanning">Scan Ports</span>
+                  <span x-show="portScanning">Scanning…</span>
+                </button>
+              </div>
+              <p class="text-xs text-slate-500 mb-3">
+                TCP connect scan: S7comm (102), Modbus (502), IEC-104 (2404), OPC-UA (4840),
+                EtherNet/IP (44818), Omron-FINS (9600), ProfiNet (20547), BACnet (47808),
+                HTTP/S (80/443/8080), SSH (22), Telnet (23), FTP (21).
+              </p>
+              <template x-if="portScanResults.length > 0">
+                <div class="flex flex-wrap gap-2">
+                  <template x-for="p in portScanResults" :key="p.port">
+                    <div class="flex items-center gap-1.5 bg-slate-800 border border-slate-600 rounded px-2.5 py-1">
+                      <span class="text-green-400 font-mono text-xs font-semibold" x-text="p.port"></span>
+                      <span class="text-slate-400 text-xs" x-text="p.service"></span>
+                      <template x-if="p.banner">
+                        <span class="text-slate-600 text-xs truncate max-w-xs" :title="p.banner" x-text="p.banner.substring(0,32)"></span>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+              <template x-if="portScanResults.length === 0 && !portScanning">
+                <p class="text-xs text-slate-600 italic">No results yet: click "Scan Ports" to probe open ports.</p>
+              </template>
+            </div>
+          </template>
+        </div>
+
+        <!-- ── IDENTITY ──────────────────────────────────────────────── -->
+        <div x-show="activeTab === 'identity'" x-cloak>
+          <template x-if="!selectedDevice">
+            <p class="text-slate-500 italic text-sm">Select a device from the sidebar to view its identity.</p>
+          </template>
+
+          <template x-if="selectedDevice">
+            <div>
+              <div class="flex items-center gap-3 mb-4">
+                <h2 class="text-lg font-semibold text-slate-200">
+                  Identity: <span class="text-cyan-400 font-mono text-base" x-text="selectedDevice.ip"></span>
+                </h2>
+                <span class="text-xs uppercase px-2 py-0.5 rounded text-white"
+                      :class="'badge-' + (selectedDevice.vendor || 'unknown')"
+                      x-text="selectedDevice.vendor"></span>
+              </div>
+
+              <template x-if="identityList().length === 0">
+                <p class="text-slate-500 italic text-sm">No identity data stored for this device.</p>
+              </template>
+
+              <template x-if="identityList().length > 0">
+                <table class="w-full text-sm border-collapse">
+                  <thead>
+                    <tr class="text-left text-xs text-slate-400 border-b border-slate-700">
+                      <th class="pb-1 pr-6">Field</th>
+                      <th class="pb-1">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="item in identityList()" :key="item.key">
+                      <tr class="border-b border-slate-700/50 hover:bg-slate-800/50">
+                        <td class="py-1.5 pr-6 font-mono text-slate-400 text-xs" x-text="item.key"></td>
+                        <td class="py-1.5 font-mono text-cyan-300 text-xs" x-text="item.value"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </template>
+            </div>
+          </template>
+        </div>
+
+        <!-- ── TAGS ───────────────────────────────────────────────────── -->
+        <div x-show="activeTab === 'tags'" x-cloak x-init="$watch('activeTab', v => { if (v === 'tags' && selectedDevice && Object.keys(tags).length === 0) loadTagsCached(); })">
+          <template x-if="!selectedDevice">
+            <p class="text-slate-500 italic text-sm">Select a device from the sidebar to view its tags.</p>
+          </template>
+
+          <template x-if="selectedDevice">
+            <div>
+              <div class="flex items-center gap-3 mb-4">
+                <h2 class="text-lg font-semibold text-slate-200">
+                  Tags: <span class="text-cyan-400 font-mono text-base" x-text="selectedDevice.ip"></span>
+                </h2>
+                <button class="text-xs bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded disabled:opacity-50"
+                        :disabled="tagsLoading"
+                        @click="loadTags()">
+                  <span x-show="!tagsLoading">Re-pull (live)</span>
+                  <span x-show="tagsLoading">Loading…</span>
+                </button>
+              </div>
+
+              <template x-if="tagsError">
+                <div class="bg-red-900/40 border border-red-700 text-red-300 text-sm px-4 py-2 rounded mb-4"
+                     x-text="tagsError"></div>
+              </template>
+
+              <template x-if="tagList().length === 0 && !tagsLoading && !tagsError">
+                <p class="text-slate-500 italic text-sm">No stored data. Click "Re-pull (live)" to probe the device.</p>
+              </template>
+
+              <template x-if="tagList().length > 0">
+                <table class="w-full text-sm border-collapse">
+                  <thead>
+                    <tr class="text-left text-xs text-slate-400 border-b border-slate-700">
+                      <th class="pb-1 pr-6">Tag / Address</th>
+                      <th class="pb-1">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="t in tagList()" :key="t.key">
+                      <tr class="border-b border-slate-700/50 hover:bg-slate-800/50 align-top">
+                        <td class="py-1.5 pr-6 font-mono text-slate-300 text-xs pt-2" x-text="t.key"></td>
+                        <td class="py-1.5">
+                          <!-- UDT tags: one editable row per member, always shown -->
+                          <template x-if="t.fields !== null">
+                            <div>
+                              <div class="text-slate-600 text-xs font-mono mb-1"
+                                   x-text="`${t.type} — ${t.fields.length} field${t.fields.length === 1 ? '' : 's'}`"></div>
+                              <template x-if="t.fields.length === 0">
+                                <div class="text-slate-500 text-xs italic">
+                                  Template not available &mdash; click
+                                  <span class="text-cyan-500 cursor-pointer hover:underline not-italic" @click="loadTags()">Re-pull (live)</span>
+                                  to download the UDT definition.
+                                </div>
+                              </template>
+                              <div class="ml-1 border-l border-slate-700/60 pl-3 space-y-0.5">
+                                <template x-for="f in t.fields" :key="f.path">
+                                  <div class="flex items-baseline gap-2">
+                                    <span class="font-mono text-xs text-slate-500 shrink-0" x-text="f.path + ':'"></span>
+                                    <template x-if="editingTag === fieldKey(t.key, f)">
+                                      <span class="flex items-center gap-2">
+                                        <input type="text" class="bg-slate-900 border border-cyan-600 text-slate-100 text-xs px-2 py-0.5 rounded font-mono w-32"
+                                               x-model="editValue"
+                                               @keydown.enter="commitEdit(t.key, f)"
+                                               @keydown.escape="cancelEdit()"
+                                               x-init="$nextTick(() => $el.focus())">
+                                        <button class="text-xs text-green-400 hover:text-green-300 disabled:opacity-50"
+                                                :disabled="writingTag"
+                                                @click="commitEdit(t.key, f)">✓</button>
+                                        <button class="text-xs text-slate-500 hover:text-slate-300"
+                                                @click="cancelEdit()">✕</button>
+                                        <span class="text-xs text-slate-600 font-mono" x-text="f.type_name"></span>
+                                      </span>
+                                    </template>
+                                    <template x-if="editingTag !== fieldKey(t.key, f)">
+                                      <span class="font-mono text-xs"
+                                            :class="f.writable ? 'text-cyan-300 cursor-pointer hover:underline' : 'text-slate-400'"
+                                            x-text="f.value"
+                                            @dblclick="f.writable && startEdit(fieldKey(t.key, f), f.value)"
+                                            :title="f.writable ? `Double-click to edit (${f.type_name})` : `${f.type_name} — not a writable scalar`"></span>
+                                    </template>
+                                  </div>
+                                </template>
+                              </div>
+                            </div>
+                          </template>
+                          <!-- Scalar tags -->
+                          <template x-if="t.fields === null">
+                            <div>
+                              <template x-if="editingTag === t.key">
+                                <div class="flex items-center gap-2">
+                                  <input type="text" class="bg-slate-900 border border-cyan-600 text-slate-100 text-xs px-2 py-0.5 rounded font-mono w-32"
+                                         x-model="editValue"
+                                         @keydown.enter="commitEdit(t.key, null)"
+                                         @keydown.escape="cancelEdit()"
+                                         x-init="$nextTick(() => $el.focus())">
+                                  <button class="text-xs text-green-400 hover:text-green-300 disabled:opacity-50"
+                                          :disabled="writingTag"
+                                          @click="commitEdit(t.key, null)">✓</button>
+                                  <button class="text-xs text-slate-500 hover:text-slate-300"
+                                          @click="cancelEdit()">✕</button>
+                                  <span class="text-xs text-slate-600 font-mono" x-text="t.type"></span>
+                                </div>
+                              </template>
+                              <template x-if="editingTag !== t.key">
+                                <span class="font-mono"
+                                      :class="t.writable ? 'text-cyan-300 cursor-pointer hover:underline' : 'text-slate-400'"
+                                      x-text="t.value"
+                                      @dblclick="t.writable && startEdit(t.key, t.value)"
+                                      :title="t.writable ? `Double-click to edit (${t.type})` : `${t.type} — not a writable scalar`"></span>
+                              </template>
+                            </div>
+                          </template>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </template>
+              <p class="text-xs text-slate-600 mt-3">Tip: double-click any value to edit it and write it to the device. UDT members are written individually by their member path.</p>
+            </div>
+          </template>
+        </div>
+
+        <!-- ── MONITOR ────────────────────────────────────────────────── -->
+        <div x-show="activeTab === 'monitor'" x-cloak>
+          <template x-if="!selectedDevice">
+            <p class="text-slate-500 italic text-sm">Select a device from the sidebar to start monitoring.</p>
+          </template>
+
+          <template x-if="selectedDevice">
+            <div>
+              <div class="flex items-center gap-3 mb-4">
+                <h2 class="text-lg font-semibold text-slate-200">
+                  Live Monitor: <span class="text-cyan-400 font-mono text-base" x-text="selectedDevice.ip"></span>
+                </h2>
+                <button x-show="!monitorRunning"
+                        class="text-xs bg-green-800 hover:bg-green-700 px-3 py-1 rounded"
+                        @click="connectMonitor()">Connect</button>
+                <button x-show="monitorRunning"
+                        class="text-xs bg-red-800 hover:bg-red-700 px-3 py-1 rounded"
+                        @click="disconnectMonitor()">Disconnect</button>
+                <span x-show="monitorRunning" class="text-xs text-green-400">● Live (2s poll)</span>
+              </div>
+
+              <template x-if="monitorError">
+                <div class="bg-red-900/40 border border-red-700 text-red-300 text-sm px-4 py-2 rounded mb-4"
+                     x-text="monitorError"></div>
+              </template>
+
+              <template x-if="monitorList().length === 0 && !monitorRunning">
+                <p class="text-slate-500 italic text-sm">No data yet. Click Connect to start live polling.</p>
+              </template>
+              <template x-if="monitorList().length === 0 && monitorRunning">
+                <p class="text-slate-400 italic text-sm">Connected, waiting for data...</p>
+              </template>
+
+              <template x-if="monitorList().length > 0">
+                <table class="w-full text-sm border-collapse">
+                  <thead>
+                    <tr class="text-left text-xs text-slate-400 border-b border-slate-700">
+                      <th class="pb-1 pr-6">Tag</th>
+                      <th class="pb-1">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="t in monitorList()" :key="t.key">
+                      <tr class="border-b border-slate-700/50">
+                        <td class="py-1.5 pr-6 font-mono text-slate-300 text-xs" x-text="t.key"></td>
+                        <td class="py-1.5 font-mono text-cyan-300 text-xs"
+                            :id="monitorCellId(t.key)"
+                            :title="t.value.length > 28 ? t.value : ''"
+                            x-text="t.value.length > 28 ? t.value.substring(0, 26) + '…' : t.value"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </template>
+            </div>
+          </template>
+        </div>
+
+        <!-- ── EXPLOITS ───────────────────────────────────────────────── -->
+        <div x-show="activeTab === 'exploits'" x-cloak>
+          <template x-if="!selectedDevice">
+            <p class="text-slate-500 italic text-sm">Select a device from the sidebar to view available exploits.</p>
+          </template>
+
+          <template x-if="selectedDevice">
+            <div>
+              <h2 class="text-lg font-semibold mb-1 text-slate-200">Exploits</h2>
+              <p class="text-xs text-slate-500 mb-5">
+                Target: <span class="text-cyan-400 font-mono" x-text="selectedDevice.ip"></span>
+                &nbsp;·&nbsp;
+                <span class="uppercase" x-text="selectedDevice.vendor"></span>
+              </p>
+
+              <template x-if="availableExploits().length === 0">
+                <p class="text-slate-500 italic text-sm">No exploits defined for this vendor.</p>
+              </template>
+
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <template x-for="expl in availableExploits()" :key="expl.id">
+                  <div class="bg-slate-800 border border-slate-700 rounded-lg p-4" x-init="initExploitParams(expl.id)">
+                    <div class="flex items-start justify-between mb-2">
+                      <h3 class="font-semibold text-slate-200" x-text="expl.name"></h3>
+                      <template x-if="expl.destructive">
+                        <span class="text-xs text-red-400 border border-red-800 px-1.5 py-0.5 rounded">Destructive</span>
+                      </template>
+                    </div>
+                    <p class="text-xs text-slate-400 mb-3" x-text="expl.desc"></p>
+
+                    <!-- Dynamic param fields -->
+                    <template x-for="param in expl.params" :key="param.name">
+                      <div class="mb-2">
+                        <label class="text-xs text-slate-400" x-text="param.label"></label>
+                        <input type="text"
+                               class="mt-0.5 w-full bg-slate-900 border border-slate-600 text-slate-100 text-xs px-2 py-1 rounded font-mono"
+                               :placeholder="param.label"
+                               x-model="exploitParams[expl.id][param.name]">
+                      </div>
+                    </template>
+
+                    <button class="mt-1 w-full bg-red-900 hover:bg-red-800 disabled:opacity-50 text-white text-xs py-1.5 rounded font-semibold"
+                            :disabled="exploitRunning[expl.id]"
+                            @click="runExploit(expl)">
+                      <span x-show="!exploitRunning[expl.id]">Run</span>
+                      <span x-show="exploitRunning[expl.id]">Running…</span>
+                    </button>
+
+                    <!-- Output -->
+                    <template x-if="exploitResults[expl.id]">
+                      <pre class="output-box mt-3 bg-slate-950 text-green-300 text-xs p-3 rounded max-h-40 overflow-y-auto"
+                           x-text="exploitResults[expl.id]"></pre>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+
+      </div><!-- /tab content -->
+    </main>
+  </div>
+
+  <!-- ── Toast notification ──────────────────────────────────────────────── -->
+  <div x-show="toast" x-transition
+       class="fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded shadow-lg text-sm max-w-sm"
+       :class="{
+         'bg-green-800 text-green-100': toast?.type === 'success',
+         'bg-red-800 text-red-100':     toast?.type === 'error',
+         'bg-slate-700 text-slate-100': toast?.type === 'info',
+       }"
+       x-text="toast?.msg">
+  </div>
+
+  <!-- ── Confirm modal ───────────────────────────────────────────────────── -->
+  <div x-show="confirmVisible" x-transition
+       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+       @click.self="confirmNo()"
+       @keydown.window.escape="if (confirmVisible) confirmNo()">
+    <div class="bg-slate-800 border border-slate-600 rounded-lg p-6 max-w-sm w-full mx-4 shadow-xl">
+      <h3 class="font-semibold text-slate-100 mb-2">Confirm Action</h3>
+      <p class="text-sm text-slate-300 mb-5 whitespace-pre-line" x-text="confirmMessage"></p>
+      <div class="flex justify-end gap-3">
+        <button class="px-4 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 rounded"
+                @click="confirmNo()">Cancel</button>
+        <button class="px-4 py-1.5 text-sm bg-red-700 hover:bg-red-600 text-white rounded font-semibold"
+                @click="confirmYes()">Proceed</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -302,7 +302,7 @@ fn read_words(
     );
     let words = reply
         .data
-        .get(1..1 + byte_count)
+        .get(1..=byte_count)
         .context("register response truncated")?;
 
     let mut registers = Vec::with_capacity(byte_count / 2);
@@ -339,7 +339,7 @@ fn read_bits(
     );
     let bytes = reply
         .data
-        .get(1..1 + byte_count)
+        .get(1..=byte_count)
         .context("bit response truncated")?;
 
     let mut registers = Vec::with_capacity(usize::from(count));
@@ -565,5 +565,53 @@ mod tests {
         handle.join().unwrap();
         assert_eq!(reply.unit_id, 0x01);
         assert_eq!(reply.data, vec![0x02]);
+    }
+
+    #[test]
+    fn write_single_coil_sends_correct_fc5_frame() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut req = [0u8; 12];
+            stream.read_exact(&mut req).unwrap();
+            // Protocol ID must be 0x0000, length 6, unit_id 1.
+            assert_eq!(&req[2..6], &[0x00, 0x00, 0x00, 0x06]);
+            assert_eq!(req[6], 0x01);
+            // FC = 0x05, address = 5, value = 0xFF00 (ON)
+            assert_eq!(&req[7..12], &[0x05, 0x00, 0x05, 0xFF, 0x00]);
+            // FC5 response echoes the request payload.
+            stream
+                .write_all(&modbus_response(&req, 0x01, 0x05, &[0x00, 0x05, 0xFF, 0x00]))
+                .unwrap();
+        });
+
+        write_single_coil("127.0.0.1", port, 5, true).unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn write_single_register_sends_correct_fc6_frame() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut req = [0u8; 12];
+            stream.read_exact(&mut req).unwrap();
+            // Protocol ID must be 0x0000, length 6, unit_id 1.
+            assert_eq!(&req[2..6], &[0x00, 0x00, 0x00, 0x06]);
+            assert_eq!(req[6], 0x01);
+            // FC = 0x06, address = 3, value = 0x1234
+            assert_eq!(&req[7..12], &[0x06, 0x00, 0x03, 0x12, 0x34]);
+            // FC6 response echoes the request payload.
+            stream
+                .write_all(&modbus_response(&req, 0x01, 0x06, &[0x00, 0x03, 0x12, 0x34]))
+                .unwrap();
+        });
+
+        write_single_register("127.0.0.1", port, 3, 0x1234).unwrap();
+        handle.join().unwrap();
     }
 }

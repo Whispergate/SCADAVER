@@ -187,6 +187,12 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_device_by_ip(&self, ip: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM devices WHERE ip = ?1", params![ip])?;
+        Ok(())
+    }
+
     /// Upsert a batch of tags for a device. Returns the diff vs the previous snapshot.
     pub fn upsert_tags(&self, ip: &str, tags: &[(i64, &str, i64)]) -> Result<TagDiff> {
         let now = now_unix();

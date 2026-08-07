@@ -1,4 +1,9 @@
 pub mod autodetect;
 pub mod bytes;
+pub mod httpcreds;
 pub mod modbus;
+pub mod modbus_fdi;
+pub mod modbus_server;
 pub mod network;
+pub mod portscan;
+pub mod shellshock;

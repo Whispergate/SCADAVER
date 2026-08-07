@@ -936,7 +936,7 @@ mod tests {
 
     #[test]
     fn discovery_frame_name_len_exceeds_buffer_returns_none() {
-        // name_len=200 but the frame is only 28 bytes — must return None, not panic on OOB slice.
+        // name_len=200 but the frame is only 28 bytes: must return None, not panic on OOB slice.
         let mut frame = vec![0u8; 28];
         frame[12..18].copy_from_slice(&[1, 2, 3, 4, 5, 6]);
         frame[26] = 200;

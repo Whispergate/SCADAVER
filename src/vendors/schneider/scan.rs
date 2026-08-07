@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn parse_response_53_bytes_populates_firmware_and_name() {
         let mut data = vec![0u8; 54];
-        // firmware: reversed — data[51].data[50].data[49].data[48]
+        // firmware: reversed: data[51].data[50].data[49].data[48]
         data[48] = 4;
         data[49] = 3;
         data[50] = 2;

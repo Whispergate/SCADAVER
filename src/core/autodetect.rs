@@ -27,7 +27,7 @@ pub struct DeviceInfo {
     pub fields: HashMap<String, serde_json::Value>,
 }
 
-/// Vendor detection priority — lower number = higher confidence.
+/// Vendor detection priority: lower number = higher confidence.
 fn vendor_priority(vendor: &str) -> u8 {
     match vendor {
         "modicon" => 0,
@@ -136,7 +136,7 @@ fn probe_siemens(ip: &str) -> Option<DeviceInfo> {
     TcpStream::connect_timeout(&format!("{ip}:102").parse().ok()?, Duration::from_secs(3)).ok()?;
 
     // S7-1500 with S7comm+ or access protection: setup_connection succeeds on the first
-    // TSAP (c2020101) but SZL reads may return "Unknown" — still identify the device.
+    // TSAP (c2020101) but SZL reads may return "Unknown": still identify the device.
     let (hardware, firmware, cpu_state) = s7comm::get_device_snapshot(ip, 102, 2);
 
     let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
@@ -322,90 +322,6 @@ fn schneider_fc90_family(name: &str) -> &'static str {
     } else {
         "unknown"
     }
-}
-
-#[allow(dead_code)]
-fn probe_modicon(ip: &str) -> Option<DeviceInfo> {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-
-    let mut stream =
-        TcpStream::connect_timeout(&format!("{ip}:502").parse().ok()?, Duration::from_secs(5))
-            .ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
-
-    // Modbus TCP Read Device Identification (FC 0x2B, MEI 0x0E, basic stream)
-    let req = hex::decode("000100000006012b0e0100").unwrap_or_default();
-    stream.write_all(&req).ok()?;
-
-    // Read MBAP header (6 bytes): txn_id(2) + protocol_id(2) + length(2)
-    let mut mbap = [0u8; 6];
-    stream.read_exact(&mut mbap).ok()?;
-    if mbap[2..4] != [0x00, 0x00] {
-        return None; // not Modbus
-    }
-    let pdu_len = u16::from_be_bytes([mbap[4], mbap[5]]) as usize;
-    if pdu_len < 2 {
-        return None;
-    }
-    let mut pdu = vec![0u8; pdu_len];
-    stream.read_exact(&mut pdu).ok()?;
-    // pdu[0] = unit_id, pdu[1] = function_code
-    if pdu.len() < 2 || pdu[1] != 0x2B {
-        return None;
-    }
-
-    let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
-    fields.insert("protocol".into(), "Modbus TCP".into());
-    fields.insert("port".into(), 502i64.into());
-
-    // pdu: unit_id(1) + fc(1) + mei_type(1) + dev_id_code(1) + conformity(1) +
-    //      more_follows(1) + next_obj_id(1) + obj_count(1) + [obj_id obj_len value...]*
-    if pdu.len() > 8 {
-        let obj_count = pdu[7] as usize;
-        let mut pos = 8usize;
-        for _ in 0..obj_count.min(10) {
-            if pos + 2 > pdu.len() {
-                break;
-            }
-            let obj_id = pdu[pos];
-            let obj_len = pdu[pos + 1] as usize;
-            if pos + 2 + obj_len > pdu.len() {
-                break;
-            }
-            let val = String::from_utf8_lossy(&pdu[pos + 2..pos + 2 + obj_len]).to_string();
-            pos += 2 + obj_len;
-            match obj_id {
-                0x00 => {
-                    fields.insert("manufacturer".into(), val.into());
-                }
-                0x01 => {
-                    fields.insert("product_name".into(), val.into());
-                }
-                0x02 => {
-                    fields.insert("version".into(), val.into());
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Schneider Electric devices respond to Modbus Device ID — map vendor accordingly
-    let vendor = if fields
-        .get("manufacturer")
-        .and_then(|v| v.as_str())
-        .is_some_and(|s| s.to_ascii_lowercase().contains("schneider"))
-    {
-        "schneider"
-    } else {
-        "modicon"
-    };
-
-    Some(DeviceInfo {
-        vendor: vendor.into(),
-        ip: ip.into(),
-        fields,
-    })
 }
 
 fn probe_phoenix(ip: &str) -> Option<DeviceInfo> {
@@ -594,16 +510,3 @@ pub fn probe_all(ip: &str, timeout_secs: u64) -> Vec<DeviceInfo> {
         .collect()
 }
 
-// Keep hex module available for decode
-#[allow(dead_code)]
-mod hex {
-    pub fn decode(s: &str) -> Result<Vec<u8>, ()> {
-        if !s.len().is_multiple_of(2) {
-            return Err(());
-        }
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ()))
-            .collect()
-    }
-}

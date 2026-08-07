@@ -28,9 +28,9 @@ pub fn load() -> CredConfig {
         .unwrap_or_default()
 }
 
-const SAMPLE_TOML: &str = r#"# SCADAver credential lists — loaded at runtime, no recompile needed.
+const SAMPLE_TOML: &str = r#"# SCADAver credential lists: loaded at runtime, no recompile needed.
 # Operator entries are tried BEFORE the compiled-in defaults.
-# Edit this file, then re-run "Try Default Passwords" — no restart required.
+# Edit this file, then re-run "Try Default Passwords": no restart required.
 
 [siemens]
 # S7Comm password-only (no username). Add known/leaked passwords first.
