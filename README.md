@@ -9,6 +9,7 @@
 Discovers, enumerates, and exploits devices across twelve industrial control protocols.
 Single binary with a terminal UI, bloodyAD-style CLI, and REST web interface.
 
+
 ---
 
 ## Features
@@ -334,3 +335,7 @@ research, and CTF competitions only. Unauthorized use against systems you do not
 or have explicit written permission to test is illegal in most jurisdictions.
 
 The authors assume no liability for misuse.
+
+
+# Authors:
+- [Sawyer (Saif Yaseen)](https://github.com/SawyersPresent)
