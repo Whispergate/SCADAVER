@@ -17,9 +17,7 @@ pub fn serve(port: u16, reg_value: u16, coil_on: bool) -> Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", port))
         .with_context(|| format!("Failed to bind Modbus server on port {port}"))?;
     let coil_byte: u8 = u8::from(coil_on);
-    println!(
-        "[*] Rogue Modbus server on 0.0.0.0:{port}: FC3 returns {reg_value}, FC1 returns {coil_byte}"
-    );
+    println!("[*] Rogue Modbus server on 0.0.0.0:{port}: FC3={reg_value} FC1={coil_byte}");
     println!("[*] Press Ctrl-C to stop.");
 
     for stream in listener.incoming() {
@@ -28,11 +26,11 @@ pub fn serve(port: u16, reg_value: u16, coil_on: bool) -> Result<()> {
                 let peer = conn.peer_addr().map(|a| a.to_string()).unwrap_or_default();
                 std::thread::spawn(move || {
                     if let Err(e) = handle_client(conn, reg_value, coil_on) {
-                        eprintln!("[!] Client {peer}: {e}");
+                        println!("[!] Client {peer}: {e}");
                     }
                 });
             }
-            Err(e) => eprintln!("[!] Accept error: {e}"),
+            Err(e) => println!("[!] Accept error: {e}"),
         }
     }
     Ok(())

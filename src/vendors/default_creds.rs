@@ -21,16 +21,13 @@ pub const ICS_HTTP_CREDS: &[(&str, &str)] = &[
     ("admin", "1234"),
     ("admin", "admin123"),
     ("supervisor", "supervisor"),
-    // Phoenix Contact WebVisit factory default
+    // Phoenix Contact WebVisit / Schneider M340 / Unity Pro factory default
     ("USER", "USER"),
     ("USER", ""),
+    ("ADMIN", "ADMIN"),
     // eWON factory default
     ("admin", "private"),
-    // Schneider M340 / Unity Pro default
-    ("USER", "USER"),
-    ("ADMIN", "ADMIN"),
     // Siemens SINEMA / S7-1200 web server
-    ("admin", "admin"),
     ("service", "service"),
     // Beckhoff WebControl
     ("Administrator", ""),

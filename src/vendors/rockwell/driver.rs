@@ -369,12 +369,12 @@ pub fn cip_status_name(status: u8) -> &'static str {
         0x1C => "missing attribute list entry data",
         0x1D => "invalid attribute value list",
         0x1E => "embedded service error",
-        0x1F => "vendor specific error",
+        0x1F => "connection related failure",
         0x20 => "invalid parameter",
         0x21 => "write-once value or medium already written",
         0x22 => "invalid reply received",
-        0x23 => "buffer overflow",
-        0x24 => "invalid message format",
+        0x23 => "cst not coordinated",
+        0x24 => "connection scheduling error",
         0x25 => "key failure in path",
         0x26 => "path size invalid",
         0x27 => "unexpected attribute in list",
@@ -504,10 +504,10 @@ fn parse_template_attributes(data: &[u8]) -> Result<TemplateInfo> {
 
 /// Number of bytes the controller does not return from the template definition.
 ///
-/// pycomm3 uses 21; the Rockwell data-access manual is cited as 23. The fragment loop
-/// below is driven by CIP status rather than this figure, so a small error only changes
-/// how many round trips happen — the controller reports 0x00 when it has sent everything.
-const TEMPLATE_DEF_OVERHEAD: u32 = 23;
+/// pycomm3 uses 21 against production Logix controllers; pylogix uses 23. Using 21 is
+/// correct: the `remaining == 0` exit fires 2 bytes early when 23 is used, silently
+/// dropping the last 2 bytes of the string table on multi-packet templates.
+const TEMPLATE_DEF_OVERHEAD: u32 = 21;
 
 /// Read a Template Object definition via service 0x4C (Template Read).
 ///

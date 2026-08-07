@@ -46,13 +46,10 @@ pub fn scan_ot_ports(ip: &str, timeout_secs: u64, extra_ports: &[u16]) -> Vec<Po
 }
 
 fn probe_port(ip: &str, port: u16, timeout: Duration) -> PortResult {
-    let addr = format!("{ip}:{port}");
-    match TcpStream::connect_timeout(
-        &addr
-            .parse()
-            .unwrap_or_else(|_| "0.0.0.0:0".parse().expect("fallback addr")),
-        timeout,
-    ) {
+    let Ok(ip_addr) = ip.parse::<std::net::IpAddr>() else {
+        return PortResult { port, open: false, service: service_name(port), banner: None };
+    };
+    match TcpStream::connect_timeout(&std::net::SocketAddr::new(ip_addr, port), timeout) {
         Err(_) => PortResult { port, open: false, service: service_name(port), banner: None },
         Ok(mut stream) => {
             stream

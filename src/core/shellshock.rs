@@ -73,7 +73,7 @@ fn probe_path(agent: &ureq::Agent, base: &str, path: &str) -> ShellshockResult {
             ShellshockResult {
                 path: path.to_string(),
                 vulnerable: false,
-                evidence: format!("HTTP {}: no marker", body.len()),
+                evidence: format!("no marker in {}B response", body.len()),
             }
         }
         Err(ureq::Error::Status(code, _)) => ShellshockResult {

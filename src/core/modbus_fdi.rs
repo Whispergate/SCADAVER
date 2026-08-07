@@ -47,10 +47,10 @@ pub fn fdi_loop(
                         format!("Coil[{address}] = {s}")
                     }
                 };
-                eprintln!("[{writes:>4}] FDI write OK: {label}");
+                println!("[{writes:>4}] FDI write OK: {label}");
             }
             Err(e) => {
-                eprintln!("[{writes:>4}] FDI write FAILED: {e}");
+                println!("[{writes:>4}] FDI write FAILED: {e}");
             }
         }
 

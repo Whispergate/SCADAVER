@@ -309,9 +309,10 @@ fn broadcast_scan(
     if scan_enip {
         if let Ok(devs) = crate::vendors::enip::scan::scan(&iface, timeout, true) {
             for d in devs {
-                let v = if ["1", "5", "77"]
-                    .contains(&d.vendor_id.trim_start_matches("0x"))
-                {
+                let v = if matches!(
+                    u16::from_str_radix(&d.vendor_id, 16).unwrap_or(0),
+                    1 | 5 | 77
+                ) {
                     "rockwell"
                 } else {
                     "enip"
@@ -1211,9 +1212,18 @@ async fn api_portscan(Json(req): Json<PortscanReq>) -> Json<Value> {
 
 async fn ws_monitor(
     ws: WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
     Path(ip): Path<String>,
     Query(q): Query<MonitorQuery>,
 ) -> Response {
+    let origin_ok = headers
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .map(|o| o.starts_with("http://localhost") || o.starts_with("http://127.0.0.1"))
+        .unwrap_or(true); // no Origin header means same-origin (curl / CLI), allow
+    if !origin_ok {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    }
     ws.on_upgrade(move |socket| monitor_loop(socket, ip, q.vendor))
 }
 
