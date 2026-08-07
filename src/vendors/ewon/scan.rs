@@ -233,14 +233,19 @@ pub fn scan_ip(ip: &str, timeout: u64, silent: bool) -> Result<Vec<EwonDevice>> 
 }
 
 /// Read live tag values from an eWON Flexy via the REST API (`GET /api/tags/`).
+///
 /// Returns a list of `(name, value_string)` pairs. Pass `port = 0` for default (80).
-pub fn read_tag_values(ip: &str, port: u16) -> Result<Vec<(String, String)>> {
+/// Pass `creds = Some(("username", "password"))` to authenticate via HTTP Basic Auth.
+pub fn read_tag_values(ip: &str, port: u16, creds: Option<(&str, &str)>) -> Result<Vec<(String, String)>> {
+    use base64::Engine as _;
     let effective_port = if port == 0 { 80 } else { port };
     let url = format!("http://{ip}:{effective_port}/api/tags/");
-    let body = ureq::get(&url)
-        .timeout(Duration::from_secs(5))
-        .call()?
-        .into_string()?;
+    let mut req = ureq::get(&url).timeout(Duration::from_secs(5));
+    if let Some((user, pass)) = creds {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
+        req = req.set("Authorization", &format!("Basic {encoded}"));
+    }
+    let body = req.call()?.into_string()?;
     let v: serde_json::Value = serde_json::from_str(&body)?;
     let mut tags = Vec::new();
     if let Some(arr) = v.get("body").and_then(|b| b.as_array()) {

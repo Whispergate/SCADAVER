@@ -1915,14 +1915,25 @@ fn exploit_beckhoff_adduser(ip: &str, port: u16, input: &str, out: &impl Fn(&str
     }
 }
 
+/// Look up a single string field from the stored device record. Used to retrieve
+/// per-device credentials (passwords, community strings) without threading them
+/// through every caller.
+fn device_field_str(ip: &str, key: &str) -> Option<String> {
+    let db = crate::db::Database::open(&crate::db::Database::default_path()).ok()?;
+    let devices = db.load_devices().ok()?;
+    let dev = devices.into_iter().find(|d| d.ip == ip)?;
+    dev.fields[key].as_str().map(str::to_string)
+}
+
 fn exploit_siemens_cpu(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
+    let password = device_field_str(ip, "password");
     out(&format!("[*] Reading CPU state from {ip}:{port}..."));
-    let state = s7comm::get_cpu_state(ip, port, 5, None);
+    let state = s7comm::get_cpu_state(ip, port, 5, password.as_deref());
     if state == "Unknown" {
         if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied: retry via CLI with --password");
+            out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
         } else {
             out("[-] Could not read CPU state");
         }
@@ -1934,8 +1945,9 @@ fn exploit_siemens_cpu(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
 fn exploit_siemens_io(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
+    let password = device_field_str(ip, "password");
     out(&format!("[*] Reading I/O from {ip}:{port}..."));
-    let data = s7comm::read_all_data(ip, port, 5, None);
+    let data = s7comm::read_all_data(ip, port, 5, password.as_deref());
     let [hdr, sep] = io_header();
     let mut all_addrs: Vec<String> = Vec::new();
     let mut all_vals: Vec<String> = Vec::new();
@@ -1977,7 +1989,7 @@ fn exploit_siemens_io(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
 
     if !has_any {
         if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied: retry via CLI with --password");
+            out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
         } else {
             out("[-] No I/O data received");
         }
@@ -1994,14 +2006,15 @@ fn exploit_siemens_io(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
 fn exploit_siemens_toggle(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
+    let password = device_field_str(ip, "password");
     out(&format!("[*] Toggling CPU state on {ip}:{port}..."));
     if s7comm::change_cpu_state(ip, port, 5) {
         out(&format!(
             "[+] New state: {}",
-            s7comm::get_cpu_state(ip, port, 5, None)
+            s7comm::get_cpu_state(ip, port, 5, password.as_deref())
         ));
     } else if s7comm::probe_auth_required(ip, port, 5) {
-        out("[-] Access denied: retry via CLI with --password");
+        out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
     } else {
         out("[-] Failed to toggle CPU state");
     }
@@ -2662,12 +2675,13 @@ fn exploit_beckhoff_symbols(ip: &str, port: u16, out: &impl Fn(&str)) {
 fn exploit_siemens_set_outputs(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
+    let password = device_field_str(ip, "password");
     let args = input.trim();
     out(&format!("[*] Writing outputs '{args}' to {ip}:{port}..."));
-    if s7comm::set_outputs(ip, args, port, 5, None) {
+    if s7comm::set_outputs(ip, args, port, 5, password.as_deref()) {
         out("[+] Outputs written");
     } else if s7comm::probe_auth_required(ip, port, 5) {
-        out("[-] Access denied: retry via CLI with --password");
+        out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
     } else {
         out("[-] Write failed");
     }
@@ -2676,16 +2690,17 @@ fn exploit_siemens_set_outputs(ip: &str, port: u16, input: &str, out: &impl Fn(&
 fn exploit_siemens_set_merkers(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
+    let password = device_field_str(ip, "password");
     let args = input.trim();
     let (bits, offset_s) = args.split_once(':').unwrap_or((args, "0"));
     let offset = offset_s.trim().parse::<u32>().unwrap_or(0);
     out(&format!(
         "[*] Writing merkers '{bits}' at offset {offset} to {ip}:{port}..."
     ));
-    if s7comm::set_merkers(ip, bits, offset, port, 5, None) {
+    if s7comm::set_merkers(ip, bits, offset, port, 5, password.as_deref()) {
         out("[+] Merkers written");
     } else if s7comm::probe_auth_required(ip, port, 5) {
-        out("[-] Access denied: retry via CLI with --password");
+        out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
     } else {
         out("[-] Write failed");
     }
@@ -2694,13 +2709,14 @@ fn exploit_siemens_set_merkers(ip: &str, port: u16, input: &str, out: &impl Fn(&
 fn exploit_siemens_list_dbs(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
+    let password = device_field_str(ip, "password");
     out(&format!(
         "[*] Scanning DB1..200 on {ip}:{port} (may take a moment)..."
     ));
-    let blocks = s7comm::list_data_blocks(ip, port, 5, None);
+    let blocks = s7comm::list_data_blocks(ip, port, 5, password.as_deref());
     if blocks.is_empty() {
         if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied: retry via CLI with --password");
+            out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
         } else {
             out("[-] No readable data blocks found");
         }
@@ -2717,6 +2733,7 @@ fn exploit_siemens_list_dbs(ip: &str, port: u16, _input: &str, out: &impl Fn(&st
 fn exploit_siemens_read_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
+    let password = device_field_str(ip, "password");
     let parts: Vec<&str> = input.trim().splitn(3, ':').collect();
     let db_str = parts.first().copied().unwrap_or("DB1");
     let db_num = db_str
@@ -2735,7 +2752,7 @@ fn exploit_siemens_read_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)
     out(&format!(
         "[*] Reading DB{db_num} offset={offset} len={length} from {ip}:{port}..."
     ));
-    match s7comm::read_data_block(ip, db_num, offset, length, port, 5, None) {
+    match s7comm::read_data_block(ip, db_num, offset, length, port, 5, password.as_deref()) {
         Ok(data) => {
             for line in hex_dump_lines(&data, offset) {
                 out(&line);
@@ -2744,7 +2761,7 @@ fn exploit_siemens_read_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)
         }
         Err(e) => {
             if s7comm::probe_auth_required(ip, port, 5) {
-                out("[-] Access denied: retry via CLI with --password");
+                out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
             } else {
                 out(&format!("[-] {e}"));
             }
@@ -3908,6 +3925,7 @@ fn exploit_slmp_write_m(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 fn exploit_siemens_write_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
+    let password = device_field_str(ip, "password");
     let parts: Vec<&str> = input.trim().splitn(3, ':').collect();
     let db_str = parts.first().copied().unwrap_or("DB1");
     let db_num = db_str
@@ -3932,12 +3950,12 @@ fn exploit_siemens_write_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str
         "[*] Writing {} byte(s) to DB{db_num}:{offset} on {ip}:{port}...",
         data.len()
     ));
-    match s7comm::write_data_block(ip, db_num, offset, &data, port, 5, None) {
+    match s7comm::write_data_block(ip, db_num, offset, &data, port, 5, password.as_deref()) {
         Ok(true) => out("[+] DB write acknowledged"),
         Ok(false) => out("[!] Write sent: PLC did not acknowledge"),
         Err(e) => {
             if s7comm::probe_auth_required(ip, port, 5) {
-                out("[-] Access denied: retry via CLI with --password");
+                out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
             } else {
                 out(&format!("[-] {e}"));
             }

@@ -124,6 +124,15 @@ pub fn build_router(api_key: String) -> Router {
         .with_state(Arc::new(api_key))
 }
 
+/// Look up a single string field from the stored device record for `ip`.
+/// Returns `None` if the device is not in the DB or the field is absent/non-string.
+fn device_field_str(ip: &str, key: &str) -> Option<String> {
+    let db = crate::db::Database::open(&crate::db::Database::default_path()).ok()?;
+    let devices = db.load_devices().ok()?;
+    let dev = devices.into_iter().find(|d| d.ip == ip)?;
+    dev.fields[key].as_str().map(str::to_string)
+}
+
 fn require_api_key(headers: &HeaderMap, key: &str) -> Option<(StatusCode, Json<serde_json::Value>)> {
     let provided = headers
         .get("x-api-key")
@@ -438,7 +447,10 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
             }
         }
         "siemens" => {
-            let data = crate::vendors::siemens::s7comm::read_all_data(ip, 102, 5, None);
+            let password = device_field_str(ip, "password");
+            let data = crate::vendors::siemens::s7comm::read_all_data(
+                ip, 102, 5, password.as_deref(),
+            );
             for (area, maybe_bits) in &data {
                 let Some(bits) = maybe_bits else { continue };
                 let prefix = match area.as_str() {
@@ -582,7 +594,10 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         }
         // ── eWON Flexy: live tag values via REST API ──────────────────────────
         "ewon" => {
-            if let Ok(tag_values) = crate::vendors::ewon::scan::read_tag_values(ip, 80) {
+            let ewon_user = device_field_str(ip, "username");
+            let ewon_pass = device_field_str(ip, "password");
+            let ewon_creds = ewon_user.as_deref().zip(ewon_pass.as_deref());
+            if let Ok(tag_values) = crate::vendors::ewon::scan::read_tag_values(ip, 80, ewon_creds) {
                 for (name, val) in tag_values {
                     tags.insert(name, Value::String(val));
                 }
@@ -591,7 +606,8 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         // ── SNMP: walk MIB-II system OID tree ────────────────────────────────
         "snmp" => {
             use crate::vendors::snmp::client;
-            if let Ok(varbinds) = client::walk(ip, 161, "public", ".1.3.6.1.2.1.1") {
+            let community = device_field_str(ip, "community").unwrap_or_else(|| "public".to_string());
+            if let Ok(varbinds) = client::walk(ip, 161, &community, ".1.3.6.1.2.1.1") {
                 for (oid, val) in varbinds {
                     tags.insert(oid, Value::String(val.display()));
                 }
@@ -699,9 +715,10 @@ fn write_tag_for_vendor(
             anyhow::anyhow!("Siemens tag must be Q<byte>.<bit> or M<byte>.<bit>, got: {tag}")
         })?;
         let bit_on = parse_bool_value(value);
+        let password = device_field_str(ip, "password");
         match area {
-            'Q' => s7comm::write_output_bit(ip, byte_idx, bit_idx, bit_on, 102, 5, None)?,
-            'M' => s7comm::write_merker_bit(ip, byte_idx, bit_idx, bit_on, 102, 5, None)?,
+            'Q' => s7comm::write_output_bit(ip, byte_idx, bit_idx, bit_on, 102, 5, password.as_deref())?,
+            'M' => s7comm::write_merker_bit(ip, byte_idx, bit_idx, bit_on, 102, 5, password.as_deref())?,
             _ => anyhow::bail!("Unsupported Siemens area '{area}'; use Q or M"),
         }
         return Ok(());
@@ -1146,6 +1163,15 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
             }
         }
 
+        "siemens/probe_auth" => {
+            use crate::vendors::siemens::s7comm;
+            if s7comm::probe_auth_required(ip, 102, 5) {
+                Ok(format!("{ip} has S7Comm access protection enabled — a CPU password is required."))
+            } else {
+                Ok(format!("{ip} has no S7Comm access protection — commands succeed without a password."))
+            }
+        }
+
         "rockwell/identity" => {
             use crate::vendors::rockwell::driver;
             let dev = driver::get_device_info(ip, 44818)?;
@@ -1175,7 +1201,8 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
 
         "snmp/sys_info" => {
             use crate::vendors::snmp::client;
-            let varbinds = client::walk(ip, 161, "public", ".1.3.6.1.2.1.1")?;
+            let community = device_field_str(ip, "community").unwrap_or_else(|| "public".to_string());
+            let varbinds = client::walk(ip, 161, &community, ".1.3.6.1.2.1.1")?;
             if varbinds.is_empty() {
                 return Ok("No SNMP data returned from system subtree.".into());
             }
@@ -1188,7 +1215,8 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
 
         "snmp/interfaces" => {
             use crate::vendors::snmp::client;
-            let varbinds = client::walk(ip, 161, "public", ".1.3.6.1.2.1.2")?;
+            let community = device_field_str(ip, "community").unwrap_or_else(|| "public".to_string());
+            let varbinds = client::walk(ip, 161, &community, ".1.3.6.1.2.1.2")?;
             if varbinds.is_empty() {
                 return Ok("No SNMP interface data returned.".into());
             }
