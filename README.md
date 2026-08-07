@@ -107,9 +107,25 @@ Global options:
 | `--protocol <P>` | | | Protocol hint (`beckhoff`, `siemens`, `rockwell`, ...) |
 | `--stealth` | `-z` | off | Randomised probe order + inter-probe jitter |
 
-Commands: `scan`, `get`, `set`, `run`, `db`, `tui`
+Commands: `scan`, `get`, `set`, `run`, `db`, `tui`, `web`
 
 Examples:
+
+### Web UI
+
+```
+scadaver web                            # bind on 127.0.0.1:7443 (defaults)
+scadaver web --host 0.0.0.0 --port 8080
+```
+
+Launches a browser-based control panel. Authentication:
+
+- A random 32-character hex token is generated at startup and printed to the terminal.
+- The browser opens automatically at `http://host:port/?key=<token>` — no manual copy needed.
+- REST clients must include `X-API-Key: <token>` on protected endpoints
+  (scan, device tags, tag write, and all exploit routes).
+- The health check, device list, and device history endpoints do not require the key.
+- The token is ephemeral — a new one is generated every run.
 
 ```bash
 # Auto-detect vendor and enumerate
@@ -703,8 +719,8 @@ println!("{}: {}", device.product_name, device.revision);
 
 let tags = driver::enumerate_tags("192.168.1.50", 44818)?;
 for tag in &tags {
-    let value = driver::read_tag("192.168.1.50", 44818, tag)?;
-    println!("{} = {}", tag.name, driver::decode_value(tag.tag_type, &value));
+    let value = driver::read_tag("192.168.1.50", 44818, &tag.name)?;
+    println!("{} = {}", tag.name, driver::decode_value(tag.tag_type, &value, None));
 }
 ```
 
