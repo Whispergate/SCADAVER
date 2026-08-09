@@ -1,4 +1,4 @@
-# scadaver-rs
+# scadaver
 
 > Unified ICS red team multi-tool - Rust edition.
 
@@ -21,15 +21,15 @@ Single binary with a terminal UI, bloodyAD-style CLI, and REST web interface.
 - Ephemeral-token web API - no credential file, no config
 - ~300-entry ICS CVE reference database built in
 - Local simulator suite (`sim/`) for safe offline testing
-- Usable as a Rust library (`scadaver_rs` crate)
+- Usable as a Rust library (`scadaver` crate)
 
 ---
 
 ## Install
 
 ```sh
-git clone https://github.com/Whispergate/scadaver-rs
-cd scadaver-rs
+git clone https://github.com/Whispergate/scadaver
+cd scadaver
 cargo build --release
 # binary: target/release/scadaver
 ```
