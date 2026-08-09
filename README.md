@@ -28,7 +28,7 @@ Single binary with a terminal UI, bloodyAD-style CLI, and REST web interface.
 ## Install
 
 ```sh
-git clone https://github.com/SawyersPresent/scadaver-rs
+git clone https://github.com/Whispergate/scadaver-rs
 cd scadaver-rs
 cargo build --release
 # binary: target/release/scadaver
@@ -268,7 +268,7 @@ Use `--profile canonical` for standard protocol ports (requires Administrator/ro
 
 ```toml
 [dependencies]
-scadaver_rs = { git = "https://github.com/SawyersPresent/scadaver-rs" }
+scadaver_rs = { git = "https://github.com/Whispergate/scadaver" }
 ```
 
 Scan a Rockwell device and read tags:
