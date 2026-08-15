@@ -50,8 +50,12 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Rename binary
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/${{ matrix.artifact }} ${{ matrix.asset_name }}
+
       - name: Upload to release
         uses: softprops/action-gh-release@d1e66170d32c9ec7bbcb7fae044d3d686ce304d3  # v2
         with:
-          files: target/${{ matrix.target }}/release/${{ matrix.artifact }}
-          name: ${{ matrix.asset_name }}
+          name: scadaver ${{ github.ref_name }}
+          files: ${{ matrix.asset_name }}
