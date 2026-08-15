@@ -4,6 +4,7 @@ pub mod enip;
 pub mod ewon;
 pub mod iec104;
 pub mod mitsubishi;
+pub mod mqtt;
 pub mod omron;
 pub mod phoenix;
 pub mod rockwell;

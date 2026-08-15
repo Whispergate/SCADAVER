@@ -8,10 +8,11 @@ use scadaver::vendors::beckhoff::ads;
 use scadaver::vendors::enip::enums;
 use scadaver::vendors::ewon::exploit;
 use scadaver::vendors::mitsubishi::slmp::SlmpValue;
-use scadaver::vendors::omron::fins::{FinsDevice, AREA_DM_WORD, FINS_TCP_PORT};
+use scadaver::vendors::omron::fins::{OmronDevice, AREA_DM_WORD, FINS_TCP_PORT};
 use scadaver::vendors::rockwell::driver;
 use scadaver::vendors::schneider::session_hijack::{SchneiderDeviceInfo, SchneiderSession};
 use scadaver::vendors::siemens::scan as siemens_scan;
+use scadaver::vendors::mqtt::client::{self, MqttDevice, MQTT_PORT};
 use scadaver::vendors::snmp::oids;
 
 // ── core::bytes ──────────────────────────────────────────────────────────────
@@ -272,7 +273,7 @@ fn driver_logix_tag_struct_fields_accessible() {
 
 #[test]
 fn driver_logix_device_struct_fields_accessible() {
-    let dev = driver::LogixDevice {
+    let dev = driver::RockwellDevice {
         vendor: "Rockwell Automation/Allen-Bradley".into(),
         product_type: "Programmable Logic Controller".into(),
         product_code: 55,
@@ -567,27 +568,27 @@ fn ads_decode_value_unknown_type_hex_dump() {
 
 #[test]
 fn fins_cpu_state_stop() {
-    assert_eq!(FinsDevice::cpu_state_str(0x00), "Stop");
+    assert_eq!(OmronDevice::cpu_state_str(0x00), "Stop");
 }
 
 #[test]
 fn fins_cpu_state_run() {
-    assert_eq!(FinsDevice::cpu_state_str(0x01), "Run");
+    assert_eq!(OmronDevice::cpu_state_str(0x01), "Run");
 }
 
 #[test]
 fn fins_cpu_state_monitor() {
-    assert_eq!(FinsDevice::cpu_state_str(0x02), "Monitor");
+    assert_eq!(OmronDevice::cpu_state_str(0x02), "Monitor");
 }
 
 #[test]
 fn fins_cpu_state_program() {
-    assert_eq!(FinsDevice::cpu_state_str(0x04), "Program");
+    assert_eq!(OmronDevice::cpu_state_str(0x04), "Program");
 }
 
 #[test]
 fn fins_cpu_state_unknown() {
-    assert_eq!(FinsDevice::cpu_state_str(0xFF), "Unknown");
+    assert_eq!(OmronDevice::cpu_state_str(0xFF), "Unknown");
 }
 
 #[test]
@@ -598,7 +599,7 @@ fn fins_constants() {
 
 #[test]
 fn fins_device_struct_fields_accessible() {
-    let dev = FinsDevice {
+    let dev = OmronDevice {
         node_addr: 1,
         model: "CJ2M-CPU31".into(),
         version: "3.0".into(),
@@ -681,6 +682,70 @@ fn siemens_device_optional_fields_none() {
     assert!(dev.hardware.is_none());
     assert!(dev.cpu_state.is_none());
     assert!(dev.open_ports.is_empty());
+}
+
+// ── mqtt::client ─────────────────────────────────────────────────────────────
+
+#[test]
+fn mqtt_port_constant() {
+    assert_eq!(MQTT_PORT, 1883);
+}
+
+#[test]
+fn mqtt_device_struct_fields_accessible() {
+    let dev = MqttDevice {
+        ip: "192.168.1.100".into(),
+        port: 1883,
+        anonymous: true,
+        broker_info: Some("$SYS/broker/version: mosquitto 2.0.18".into()),
+        sparkplug: false,
+    };
+    assert_eq!(dev.ip, "192.168.1.100");
+    assert_eq!(dev.port, 1883);
+    assert!(dev.anonymous);
+    assert!(!dev.sparkplug);
+    assert!(dev.broker_info.is_some());
+}
+
+#[test]
+fn mqtt_device_broker_info_none() {
+    let dev = MqttDevice {
+        ip: "10.0.0.1".into(),
+        port: 1883,
+        anonymous: false,
+        broker_info: None,
+        sparkplug: true,
+    };
+    assert!(dev.broker_info.is_none());
+    assert!(dev.sparkplug);
+}
+
+#[test]
+fn mqtt_build_connect_anon_packet_structure() {
+    let pkt = client::build_connect("scadaver-probe", None, None);
+    assert_eq!(pkt[0], 0x10, "first byte must be CONNECT (0x10)");
+    assert!(pkt.windows(4).any(|w| w == b"MQTT"), "protocol name MQTT must appear in packet");
+    // After "MQTT": protocol level 0x04 (3.1.1), then connect flags 0x02 (clean session only)
+    let mqtt_pos = pkt.windows(4).position(|w| w == b"MQTT").unwrap();
+    assert_eq!(pkt[mqtt_pos + 4], 0x04, "protocol level must be 4 (MQTT 3.1.1)");
+    assert_eq!(pkt[mqtt_pos + 5], 0x02, "anonymous flags must be 0x02 (clean session only)");
+}
+
+#[test]
+fn mqtt_build_connect_with_creds_flags_byte() {
+    let pkt = client::build_connect("scadaver-spray", Some("admin"), Some("pass"));
+    assert_eq!(pkt[0], 0x10, "first byte must be CONNECT (0x10)");
+    let mqtt_pos = pkt.windows(4).position(|w| w == b"MQTT").unwrap();
+    assert_eq!(pkt[mqtt_pos + 5], 0xC2, "credentialed flags must be 0xC2 (username+password+clean session)");
+}
+
+#[test]
+fn mqtt_try_credential_unreachable_returns_none() {
+    // Port 9 (discard) is almost always closed — connection error → None
+    assert!(
+        client::try_credential("127.0.0.1", 9, "user", "pass").is_none(),
+        "connection to closed port must return None"
+    );
 }
 
 // ── core::autodetect ──────────────────────────────────────────────────────────

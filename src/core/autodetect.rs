@@ -1,3 +1,5 @@
+//! Device autodetection: probe a single IP or sweep a range across all supported vendors.
+
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -44,7 +46,7 @@ fn vendor_priority(vendor: &str) -> u8 {
         "beckhoff" | "siemens" | "rockwell" | "ewon" | "mitsubishi" | "schneider" | "phoenix"
         | "omron" => 1,
         "enip" | "iec104" => 2,
-        "snmp" => 3,
+        "snmp" | "mqtt" => 3,
         _ => 99,
     }
 }
@@ -105,6 +107,10 @@ fn make_probes() -> Vec<(ProbeInfo, ProbeFn)> {
         (
             ProbeInfo { label: "SNMP", transport: "UDP 161" },
             Box::new(probe_snmp),
+        ),
+        (
+            ProbeInfo { label: "MQTT", transport: "TCP 1883" },
+            Box::new(probe_mqtt),
         ),
     ]
 }
@@ -443,6 +449,21 @@ fn probe_snmp(ip: &str) -> Option<DeviceInfo> {
     }
 
     Some(DeviceInfo { vendor: vendor.into(), ip: ip.into(), fields })
+}
+
+fn probe_mqtt(ip: &str) -> Option<DeviceInfo> {
+    use crate::vendors::mqtt::client;
+    let d = client::probe(ip, client::MQTT_PORT)?;
+    let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
+    fields.insert("port".into(), i64::from(d.port).into());
+    fields.insert("mqtt_port".into(), i64::from(d.port).into());
+    fields.insert("anonymous".into(), d.anonymous.into());
+    fields.insert("sparkplug".into(), d.sparkplug.into());
+    if let Some(info) = d.broker_info {
+        fields.insert("broker_info".into(), info.into());
+    }
+    fields.insert("cap_mqtt_tcp".into(), true.into());
+    Some(DeviceInfo { vendor: "mqtt".into(), ip: ip.into(), fields })
 }
 
 /// Probe all protocol families in parallel against a single IP.
