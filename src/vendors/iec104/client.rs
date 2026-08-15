@@ -11,7 +11,7 @@ use std::time::Duration;
 pub const IEC104_PORT: u16 = 2404;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-// U-frame control field values
+// U-frame control field values (IEC 60870-5-104:2006 Table 5, sec 8.3).
 const STARTDT_ACT: [u8; 4] = [0x07, 0x00, 0x00, 0x00];
 const STARTDT_CON: [u8; 4] = [0x0B, 0x00, 0x00, 0x00];
 const TESTFR_ACT: [u8; 4] = [0x43, 0x00, 0x00, 0x00];

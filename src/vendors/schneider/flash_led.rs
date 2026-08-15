@@ -1,7 +1,17 @@
+//! Schneider Electric Modicon identification LED flash via proprietary UDP discovery.
+//!
+//! Port 27127 is used by Unity Pro / `EcoStruxure` Control Expert for device identification
+//! on the local LAN. The packet format (`\0TKITAK\0...`) is the Schneider BootP/DHCP
+//! identification magic used by the programming software to locate PLCs. Sending this
+//! packet causes the targeted Modicon device to flash its identification LED.
+//!
+//! Affected: Modicon M340, M580, Quantum, Premium. Not documented in a public CVE.
+
 use anyhow::Result;
 use std::net::UdpSocket;
 use std::time::Duration;
 
+// Schneider Electric Unity Pro / EcoStruxure Control Expert device identification port.
 const FLASH_PORT: u16 = 27127;
 
 /// Flash LED to a specific IP.

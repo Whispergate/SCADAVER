@@ -13,8 +13,9 @@ pub const FINS_TCP_PORT: u16 = 9600;
 pub const FINS_UDP_PORT: u16 = 9600;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Memory area codes used in FINS Memory Area Read/Write commands.
+/// DM area word access code. Source: Omron W227-E1 FINS Commands Reference Manual, sec 5-1.
 pub const AREA_DM_WORD: u8 = 0x82;
+
 /// Information retrieved from an Omron PLC via FINS.
 #[derive(Debug, Clone)]
 pub struct FinsDevice {
@@ -25,6 +26,9 @@ pub struct FinsDevice {
 
 impl FinsDevice {
     /// Map a FINS CPU operating-mode byte to a human-readable state string.
+    ///
+    /// Values from W327-E1 FINS Commands Reference Manual, table 5-3.
+    /// 0x03 is not used (reserved); the jump from 0x02 to 0x04 is by design.
     pub fn cpu_state_str(state: u8) -> &'static str {
         match state {
             0x00 => "Stop",

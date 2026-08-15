@@ -60,7 +60,7 @@ pub fn fdi_loop(
 
         let elapsed = started.elapsed();
         if elapsed < interval {
-            std::thread::sleep(interval - elapsed);
+            std::thread::sleep(interval.checked_sub(elapsed).unwrap());
         }
     }
 

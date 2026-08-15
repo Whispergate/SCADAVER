@@ -6,6 +6,8 @@
 [![Rust](https://img.shields.io/badge/Rust-stable-orange)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)]()
 
+**Experimental.** This tool is built from publicly available ICS protocol documentation, CVE advisories, and open-source security research. Direct access to hardware for testing is limited, so behavior on specific device models or firmware versions may differ from what is documented here. If you have access to ICS test equipment and can verify, correct, or extend any module, contributions are very welcome please open an issue or pull request.
+
 Discovers, enumerates, and exploits devices across twelve industrial control protocols.
 Single binary with a terminal UI, bloodyAD-style CLI, and REST web interface.
 
@@ -27,8 +29,14 @@ Single binary with a terminal UI, bloodyAD-style CLI, and REST web interface.
 
 ## Install
 
+**From crates.io (recommended):**
 ```sh
-git clone https://github.com/Whispergate/scadaver
+cargo install scadaver
+```
+
+**From source:**
+```sh
+git clone https://github.com/Whispergate/SCADAVER
 cd scadaver
 cargo build --release
 # binary: target/release/scadaver
@@ -266,15 +274,24 @@ Use `--profile canonical` for standard protocol ports (requires Administrator/ro
 
 ## Library Usage
 
+`scadaver` is both a binary and a library crate. When used as a dependency, all
+CLI and TUI deps (ratatui, clap, rusqlite, axum, etc.) are automatically excluded
+only the pure protocol stack is compiled.
+
 ```toml
 [dependencies]
-scadaver_rs = { git = "https://github.com/Whispergate/scadaver" }
+# library only zero CLI/TUI overhead
+scadaver = { version = "1", default-features = false }
+
+# library + derive macro
+scadaver = { version = "1", default-features = false, features = ["macros"] }
+scadaver-macros = "1"
 ```
 
 Scan a Rockwell device and read tags:
 
 ```rust
-use scadaver_rs::vendors::rockwell::driver;
+use scadaver::vendors::rockwell::driver;
 
 let device = driver::get_device_info("192.168.1.50", 44818)?;
 println!("{}: {}", device.product_name, device.revision);
@@ -286,45 +303,85 @@ for tag in &tags {
 }
 ```
 
+Multi-protocol sweep using the prelude:
+
+```rust
+use scadaver::prelude::*;
+
+set_stealth(true);
+for outcome in sweep("192.168.1.100", 8) {
+    if let Some(info) = outcome.device {
+        println!("[{}] {} — {:?}", info.vendor, info.ip, info.fields);
+    }
+}
+```
+
 Query the embedded ICS reference database:
 
 ```rust
-use scadaver_rs::references;
+use scadaver::references;
 
 for r in references::for_vendor("siemens") {
     println!("[{}] {} | {}", r.source, r.title, r.url);
 }
 ```
 
-Enable stealth mode before sweeping:
+### `#[derive(IntoDeviceInfo)]`
+
+The companion `scadaver-macros` crate provides a derive macro that converts any
+vendor device struct into the unified `DeviceInfo` type used by the sweep engine:
 
 ```rust
-use scadaver_rs::core::autodetect;
+use scadaver_macros::IntoDeviceInfo;
+use scadaver::core::autodetect::IntoDeviceInfo as _;
 
-autodetect::set_stealth(true);
-let results = autodetect::sweep("192.168.1.100", 8);
+#[derive(IntoDeviceInfo)]
+#[vendor(slug = "acme")]
+pub struct AcmeDevice {
+    #[device_info(ip)]          // becomes DeviceInfo::ip
+    pub ip: String,
+    pub firmware: String,
+    #[device_info(rename = "hw_rev")]
+    pub hardware_revision: String,
+    #[device_info(optional)]    // Option<T> — only inserted when Some
+    pub serial: Option<String>,
+    #[device_info(skip)]        // excluded from DeviceInfo::fields
+    pub _socket: std::net::TcpStream,
+}
+
+// Generated:
+// impl IntoDeviceInfo for AcmeDevice {
+//     const VENDOR_SLUG: &'static str = "acme";
+//     fn into_device_info(self) -> DeviceInfo { ... }
+// }
+
+let info: DeviceInfo = my_device.into_device_info();
 ```
 
-Public namespaces:
+Field attributes: `ip`, `skip`, `rename = "key"`, `optional`.
+Struct attribute: `#[vendor(slug = "...")]`.
+
+### Public namespaces
 
 | Namespace | Protocols |
 |-----------|-----------|
-| `scadaver_rs::vendors::schneider` | Modbus TCP, FC90, UDP discovery |
-| `scadaver_rs::vendors::siemens` | S7Comm / ISO-on-TCP |
-| `scadaver_rs::vendors::beckhoff` | ADS/AMS, TwinCAT, CX webcontrol |
-| `scadaver_rs::vendors::mitsubishi` | SLMP / MC Protocol 3E |
-| `scadaver_rs::vendors::omron` | FINS TCP/UDP |
-| `scadaver_rs::vendors::rockwell` | EtherNet/IP + CIP |
-| `scadaver_rs::vendors::enip` | EtherNet/IP enumerations |
-| `scadaver_rs::vendors::ewon` | eWON HTTP exploit + IPCONF scan |
-| `scadaver_rs::vendors::phoenix` | ProConOS binary, WebVisit HMI |
-| `scadaver_rs::vendors::snmp` | SNMPv1/v2c client, OID constants |
-| `scadaver_rs::vendors::iec104` | IEC 60870-5-104 client session |
-| `scadaver_rs::core::modbus` | Raw Modbus TCP client primitives |
-| `scadaver_rs::core::autodetect` | Multi-protocol sweep, stealth mode |
-| `scadaver_rs::core::network` | Interface enumeration, broadcast sockets |
-| `scadaver_rs::core::bytes` | Hex/IP utility functions |
-| `scadaver_rs::references` | Embedded ICS vulnerability reference database |
+| `scadaver::vendors::schneider` | Modbus TCP, FC90, UDP discovery |
+| `scadaver::vendors::siemens` | S7Comm / ISO-on-TCP |
+| `scadaver::vendors::beckhoff` | ADS/AMS, TwinCAT, CX webcontrol |
+| `scadaver::vendors::mitsubishi` | SLMP / MC Protocol 3E |
+| `scadaver::vendors::omron` | FINS TCP/UDP |
+| `scadaver::vendors::rockwell` | EtherNet/IP + CIP |
+| `scadaver::vendors::enip` | EtherNet/IP enumerations |
+| `scadaver::vendors::ewon` | eWON HTTP exploit + IPCONF scan |
+| `scadaver::vendors::phoenix` | ProConOS binary, WebVisit HMI |
+| `scadaver::vendors::snmp` | SNMPv1/v2c client, OID constants |
+| `scadaver::vendors::iec104` | IEC 60870-5-104 client session |
+| `scadaver::core::modbus` | Raw Modbus TCP client primitives |
+| `scadaver::core::autodetect` | Multi-protocol sweep, stealth mode |
+| `scadaver::core::network` | Interface enumeration, broadcast sockets |
+| `scadaver::core::bytes` | Hex/IP utility functions |
+| `scadaver::references` | Embedded ICS vulnerability reference database |
+| `scadaver::prelude` | Common re-exports (`DeviceInfo`, `sweep`, vendor result types) |
 
 ---
 

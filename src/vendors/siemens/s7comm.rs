@@ -443,7 +443,14 @@ pub fn change_cpu_state(ip: &str, port: u16, timeout_secs: u64) -> bool {
         return false;
     }
 
-    // SubscriptionContainer
+    // SubscriptionContainer: S7Comm UserData (type 7, subtype 0x72) session setup frame.
+    // This initiates the OMS+ Debugger subscription used by TIA Portal for remote CPU control.
+    // Packet structure: TPKT + COTP + S7 header + UserData group-7 (OMS) + ASN.1-encoded
+    // session descriptor. The ASCII strings embedded in the blob decode to:
+    //   "ServerSession_E6F548" (session ID), "1:::6.0:::" (version), "OMS+ Debugger" (role),
+    //   "SubscriptionContainer" (object type).
+    // Derived from captures of TIA Portal v15-v16 communicating with S7-1200/1500 CPUs.
+    // cmd_byte 0xCE = RunMode request, 0x88 = StopMode request (OMS+ control PDU subtype).
     let Some(sub_resp) = send_recv(
         &mut stream,
         &hex_decode(
@@ -557,7 +564,7 @@ pub fn probe_auth_required(ip: &str, port: u16, timeout_secs: u64) -> bool {
 }
 
 /// Return `true` if a TCP connection to `ip:port` succeeds within a 1-second timeout.
-pub fn scan_port(ip: &str, port: u16) -> bool {
+pub(crate) fn scan_port(ip: &str, port: u16) -> bool {
     TcpStream::connect_timeout(
         &format!("{ip}:{port}")
             .parse()
@@ -568,7 +575,7 @@ pub fn scan_port(ip: &str, port: u16) -> bool {
 }
 
 /// Probe the common Siemens ports (102, 502) and return those that are open.
-pub fn tcp_scan(ip: &str) -> Vec<u16> {
+pub(crate) fn tcp_scan(ip: &str) -> Vec<u16> {
     let mut ports = Vec::new();
     if scan_port(ip, 102) {
         ports.push(102);

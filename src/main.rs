@@ -5,8 +5,8 @@ mod display;
 mod tui;
 mod web;
 
-pub use scadaver_rs::core;
-pub use scadaver_rs::vendors;
+pub use scadaver::core;
+pub use scadaver::vendors;
 
 fn main() {
     use clap::Parser;

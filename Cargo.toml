@@ -1,48 +1,83 @@
+[workspace]
+members = [".", "scadaver-macros"]
+resolver = "2"
+
 [package]
-name = "scadaver-rs"
+name = "scadaver"
 version = "1.0.0"
 edition = "2021"
 authors = ["Saif Yaseen <saif.yas@hotmail.com>"]
 description = "Unified ICS Red Team Multi-Tool, Rust edition"
-repository = "https://github.com/SawyersPresent/scadaver-rs"
+repository = "https://github.com/Whispergate/SCADAVER"
 keywords = ["ics", "scada", "pentest", "modbus", "redteam"]
 categories = ["network-programming", "command-line-utilities"]
-license = "LicenseRef-PolyForm-Noncommercial-1.0"
+license-file = "LICENSE"
+readme = "README.md"
 
 [[bin]]
 name = "scadaver"
 path = "src/main.rs"
+required-features = ["cli"]
 
 [lib]
-name = "scadaver_rs"
+name = "scadaver"
 path = "src/lib.rs"
 
+[features]
+default = ["cli"]
+cli = [
+    "dep:clap",
+    "dep:colored",
+    "dep:tabled",
+    "dep:console",
+    "dep:indicatif",
+    "dep:dialoguer",
+    "dep:dirs",
+    "dep:toml",
+    "dep:rusqlite",
+    "dep:chrono",
+    "dep:ratatui",
+    "dep:crossterm",
+    "dep:axum",
+    "dep:tokio",
+]
+macros = ["dep:scadaver-macros"]
+
+# ── Library deps (always compiled) ───────────────────────────────────────────
 [dependencies]
-clap = { version = "4", features = ["derive", "color"] }
 anyhow = "1"
-axum = { version = "0.7", features = ["ws"] }
-tokio = { version = "1", features = ["full"] }
 thiserror = "1"
 ureq = { version = "2", features = ["tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 quick-xml = "0.36"
-colored = "2"
-tabled = { version = "0.16", features = ["std"] }
-dialoguer = "0.11"
-indicatif = "0.17"
 socket2 = { version = "0.5", features = ["all"] }
 base64 = "0.22"
 rand = "0.8"
 subtle = "2"
 network-interface = "2"
-console = "0.15"
-dirs = "5"
-toml = "0.8"
-ratatui = "0.29"
-crossterm = "0.28"
-rusqlite = { version = "0.31", features = ["bundled"] }
-chrono = "0.4"
+
+# ── CLI / binary deps (optional, enabled by the "cli" feature) ────────────────
+clap = { version = "4", features = ["derive", "color"], optional = true }
+axum = { version = "0.7", features = ["ws"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+colored = { version = "2", optional = true }
+tabled = { version = "0.16", features = ["std"], optional = true }
+dialoguer = { version = "0.11", optional = true }
+indicatif = { version = "0.17", optional = true }
+console = { version = "0.15", optional = true }
+dirs = { version = "5", optional = true }
+toml = { version = "0.8", optional = true }
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
+rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+chrono = { version = "0.4", optional = true }
+
+# ── Proc-macro companion (optional, enabled by the "macros" feature) ──────────
+scadaver-macros = { version = "1.0", path = "scadaver-macros", optional = true }
+
+[dev-dependencies]
+scadaver-macros = { path = "scadaver-macros" }
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

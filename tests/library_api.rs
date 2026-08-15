@@ -1,18 +1,18 @@
 // Integration tests for the scadaver_rs public library API.
 // Each test exercises the public surface as an external crate would:
-// using scadaver_rs:: paths, not crate:: paths.
+// using scadaver:: paths, not crate:: paths.
 
-use scadaver_rs::core::autodetect::{DeviceInfo, ProbeInfo, SweepOutcome};
-use scadaver_rs::core::bytes;
-use scadaver_rs::vendors::beckhoff::ads;
-use scadaver_rs::vendors::enip::enums;
-use scadaver_rs::vendors::ewon::exploit;
-use scadaver_rs::vendors::mitsubishi::slmp::SlmpValue;
-use scadaver_rs::vendors::omron::fins::{FinsDevice, AREA_DM_WORD, FINS_TCP_PORT};
-use scadaver_rs::vendors::rockwell::driver;
-use scadaver_rs::vendors::schneider::session_hijack::{SchneiderDeviceInfo, SchneiderSession};
-use scadaver_rs::vendors::siemens::scan as siemens_scan;
-use scadaver_rs::vendors::snmp::oids;
+use scadaver::core::autodetect::{DeviceInfo, ProbeInfo, SweepOutcome};
+use scadaver::core::bytes;
+use scadaver::vendors::beckhoff::ads;
+use scadaver::vendors::enip::enums;
+use scadaver::vendors::ewon::exploit;
+use scadaver::vendors::mitsubishi::slmp::SlmpValue;
+use scadaver::vendors::omron::fins::{FinsDevice, AREA_DM_WORD, FINS_TCP_PORT};
+use scadaver::vendors::rockwell::driver;
+use scadaver::vendors::schneider::session_hijack::{SchneiderDeviceInfo, SchneiderSession};
+use scadaver::vendors::siemens::scan as siemens_scan;
+use scadaver::vendors::snmp::oids;
 
 // ── core::bytes ──────────────────────────────────────────────────────────────
 
@@ -612,7 +612,7 @@ fn fins_device_struct_fields_accessible() {
 
 #[test]
 fn slmp_default_port() {
-    assert_eq!(scadaver_rs::vendors::mitsubishi::slmp::DEFAULT_PORT, 5007);
+    assert_eq!(scadaver::vendors::mitsubishi::slmp::DEFAULT_PORT, 5007);
 }
 
 #[test]

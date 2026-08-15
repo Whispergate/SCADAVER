@@ -1,9 +1,19 @@
+//! Mitsubishi MELSEC PLC run/stop/pause control via the GX Works2 proprietary UDP protocol.
+//!
+//! Port 5560 is used by GX Works2/3 for remote PLC state control. The packet format
+//! is not publicly documented by Mitsubishi; the `INIT_PACKETS` and CMD_* constants
+//! were derived from packet captures of GX Works2 communicating with MELSEC-Q/L/F PLCs.
+//!
+//! Compatibility: tested against MELSEC-Q series. Behavior on MELSEC-iQ-R and newer
+//! series is unverified -- those platforms may use a different handshake sequence.
+
 use anyhow::{bail, Result};
 use std::net::UdpSocket;
 use std::time::Duration;
 
 use crate::core::network::NetworkInterface;
 
+// Undocumented Mitsubishi GX Works2 remote control port (MELSEC-Q/L/F series).
 const CONTROL_PORT: u16 = 5560;
 
 const INIT_PACKETS: &[&str] = &[

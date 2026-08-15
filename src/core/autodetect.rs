@@ -27,6 +27,16 @@ pub struct DeviceInfo {
     pub fields: HashMap<String, serde_json::Value>,
 }
 
+/// Implemented by vendor device structs to convert themselves into the unified [`DeviceInfo`] type.
+/// Use `#[derive(scadaver_macros::IntoDeviceInfo)]` (with the `macros` feature) to generate this
+/// automatically from struct field annotations.
+pub trait IntoDeviceInfo {
+    /// The short vendor slug used as `DeviceInfo::vendor` (e.g. `"beckhoff"`, `"siemens"`).
+    const VENDOR_SLUG: &'static str;
+    /// Consume the vendor struct and produce a [`DeviceInfo`].
+    fn into_device_info(self) -> DeviceInfo;
+}
+
 /// Vendor detection priority: lower number = higher confidence.
 fn vendor_priority(vendor: &str) -> u8 {
     match vendor {

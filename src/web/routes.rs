@@ -1387,7 +1387,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
             let db: u16 = parts.first().and_then(|s| s.trim().parse().ok()).unwrap_or(1);
             let offset: u16 = parts.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
             let hex_str: String = password.chars().filter(|c| !c.is_whitespace()).collect();
-            if hex_str.is_empty() || hex_str.len() % 2 != 0 {
+            if hex_str.is_empty() || !hex_str.len().is_multiple_of(2) {
                 anyhow::bail!("Data must be an even number of hex chars (e.g. 'deadbeef')");
             }
             let data: Vec<u8> = (0..hex_str.len()).step_by(2)
@@ -1552,7 +1552,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
                 anyhow::bail!("Symbol name required in Username field");
             }
             let hex_str: String = password.chars().filter(|c| !c.is_whitespace()).collect();
-            if hex_str.is_empty() || hex_str.len() % 2 != 0 {
+            if hex_str.is_empty() || !hex_str.len().is_multiple_of(2) {
                 anyhow::bail!(
                     "Symbol value required as hex bytes in Password field \
                      (e.g. '01' for BOOL true, '2a00' for INT 42)"
@@ -1567,7 +1567,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
                 .ok_or_else(|| anyhow::anyhow!("No Beckhoff device responded at {ip}"))?;
             let ok = scan::write_symbol_value(&dev, &local_netid, username, value_bytes, 0)?;
             if ok {
-                Ok(format!("Symbol '{}' written on {ip}.", username))
+                Ok(format!("Symbol '{username}' written on {ip}."))
             } else {
                 anyhow::bail!("Symbol write was not confirmed by device")
             }
@@ -1706,7 +1706,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
 // ─── Port scanner ─────────────────────────────────────────────────────────────
 
 async fn api_portscan(Json(req): Json<PortscanReq>) -> Json<Value> {
-    let timeout = req.timeout.min(60).max(1);
+    let timeout = req.timeout.clamp(1, 60);
     let mut extra_ports = req.extra_ports;
     extra_ports.truncate(100);
     let result = tokio::task::spawn_blocking(move || {
@@ -1744,8 +1744,7 @@ async fn ws_monitor(
     let origin_ok = headers
         .get("origin")
         .and_then(|v| v.to_str().ok())
-        .map(|o| o.starts_with("http://localhost") || o.starts_with("http://127.0.0.1"))
-        .unwrap_or(false); // no Origin header = non-browser client; deny by default
+        .is_some_and(|o| o.starts_with("http://localhost") || o.starts_with("http://127.0.0.1")); // no Origin header = non-browser client; deny by default
     if !origin_ok {
         return axum::http::StatusCode::FORBIDDEN.into_response();
     }

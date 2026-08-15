@@ -76,6 +76,11 @@ pub fn start_plc(ip: &str, port: u16) -> Result<bool> {
 }
 
 /// Stop a TM221 (`SoMachine` Basic) PLC. No init sequence required.
+///
+/// TM221 uses unit ID `0x01` (not `0x00`) and subcommand `0xC9` (not `0x01`).
+/// The TM221 is a different hardware family (`SoMachine` Basic, compact I/O)
+/// from the M340/Quantum/Premium (Unity Pro). No init sequence is needed
+/// because TM221 FC90 is stateless -- each command is self-contained.
 pub fn stop_tm221(ip: &str, port: u16) -> Result<bool> {
     let mut stream = connect(ip, port)?;
     let stop = [0x01u8, 0x5A, 0xC9, 0x41, 0xFF, 0x00];

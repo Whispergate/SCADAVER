@@ -294,7 +294,8 @@ pub fn get_state(device: &BeckhoffDevice, local_netid: &str, port: u16) -> Strin
     match ads_state {
         5 => "RUN".to_string(),
         6 => "STOP".to_string(),
-        16 => "CONFIG".to_string(),
+        15 => "CONFIG".to_string(),  // ADS_STATE_CONFIG per Beckhoff spec
+        16 => "RECONFIG".to_string(), // ADS_STATE_RECONFIG (transitioning into config)
         _ => format!("STATE_{ads_state}"),
     }
 }
@@ -506,8 +507,8 @@ pub struct BeckhoffDeviceInfo {
 }
 
 // ADS symbol index groups (Beckhoff standard).
-const ADSIGRP_SYM_UPLOADINFO: u32 = 0xF00F;
-const ADSIGRP_SYM_UPLOAD: u32 = 0xF00B;
+const ADSIGRP_SYM_UPLOADINFO: u32 = 0xF00C; // Beckhoff TcAdsCommon.h
+const ADSIGRP_SYM_UPLOAD: u32 = 0xF011;    // Beckhoff TcAdsCommon.h
 const MAX_VALUE_READS: usize = 500;
 
 /// A single ADS symbol from a device's symbol table: its name, type, address, and decoded value.

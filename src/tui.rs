@@ -5263,8 +5263,8 @@ fn handle_references(app: &mut App, code: KeyCode) {
     }
 }
 
-fn references_vendor_refs(app: &App) -> Vec<&'static scadaver_rs::references::Reference> {
-    use scadaver_rs::references;
+fn references_vendor_refs(app: &App) -> Vec<&'static scadaver::references::Reference> {
+    use scadaver::references;
     let Some(dev) = app.selected_device() else {
         return Vec::new();
     };
@@ -5287,7 +5287,7 @@ fn references_vendor_refs(app: &App) -> Vec<&'static scadaver_rs::references::Re
 }
 
 fn draw_references(frame: &mut Frame, area: Rect, app: &mut App) {
-    use scadaver_rs::references::Reference;
+    use scadaver::references::Reference;
 
     let popup = centered_rect(72, 82, area);
     frame.render_widget(Clear, popup);
