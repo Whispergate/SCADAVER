@@ -2,7 +2,7 @@
 name = "scadaver-macros"
 version = "1.0.0"
 edition = "2021"
-authors = ["Saif Yaseen <saif.yas@hotmail.com>"]
+authors = ["SawyersPresent (https://github.com/SawyersPresent)"]
 description = "Proc-macro companion for the scadaver ICS red team toolkit"
 repository = "https://github.com/Whispergate/SCADAVER"
 keywords = ["ics", "scada", "pentest", "macros", "derive"]
