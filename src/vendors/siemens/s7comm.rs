@@ -1,3 +1,5 @@
+//! Siemens S7 communication protocol implementation (`S7Comm` over ISO-on-TCP, port 102).
+
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;

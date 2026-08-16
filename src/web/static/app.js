@@ -76,7 +76,7 @@ const EXPLOIT_CATALOG = {
             destructive: true,
         },
         {
-            id: 'beckhoff/adduser',
+            id: 'beckhoff/add_user',
             name: 'Add Admin User',
             desc: 'CVE-2015-4051: inject a new admin account via the UPnP SOAP service.',
             params: [
@@ -228,7 +228,7 @@ const EXPLOIT_CATALOG = {
             params: [],
         },
         {
-            id: 'common/httpcreds',
+            id: 'common/http_creds',
             name: 'HTTP Default Creds',
             desc: 'Try common ICS factory default credentials against HTTP Basic Auth (port 80). Based on SCADAPASS database.',
             params: [],

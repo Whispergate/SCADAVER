@@ -108,8 +108,8 @@ impl MqttSession {
             );
         }
 
-        // Longer timeout after handshake; reader sets its own short one.
-        stream.set_read_timeout(Some(Duration::from_mins(1)))?;
+        // Longer timeout after handshake (60 s); reader sets its own short one.
+        stream.set_read_timeout(Some(Duration::from_secs(60)))?;
 
         let read_stream = stream.try_clone().context("TcpStream::try_clone")?;
         let messages: Arc<Mutex<VecDeque<MqttMessage>>> = Arc::default();
@@ -216,7 +216,10 @@ fn reader_loop(mut stream: TcpStream, q: &Arc<Mutex<VecDeque<MqttMessage>>>) {
 
         let Ok(remaining_len) = decode_remaining_length(&mut stream) else { break };
         if remaining_len > 65_536 {
-            break;
+            // Drain and continue instead of killing the reader thread permanently.
+            let mut discard = vec![0u8; remaining_len.min(65_536)];
+            let _ = stream.read_exact(&mut discard);
+            continue;
         }
         let mut body = vec![0u8; remaining_len];
         if stream.read_exact(&mut body).is_err() {
@@ -297,7 +300,7 @@ fn build_connect(opts: &ConnectOptions) -> Vec<u8> {
     if opts.username.is_some() {
         flags |= 0x80;
     }
-    if opts.password.is_some() {
+    if opts.password.is_some() && opts.username.is_some() {
         flags |= 0x40;
     }
 

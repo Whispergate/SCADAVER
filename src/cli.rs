@@ -51,6 +51,7 @@ pub enum Protocol {
     Snmp,
     Iec104,
     Enip,
+    Mqtt,
 }
 
 #[derive(Subcommand)]
@@ -525,6 +526,7 @@ fn scan_broadcast(proto: Protocol, timeout: u64) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<()> {
     match proto {
         Protocol::Enip => {
@@ -611,6 +613,25 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
                     "{} community string(s) found.",
                     found.len()
                 ));
+            }
+        }
+        Protocol::Mqtt => {
+            let mqtt_port = if port == 0 { 1883 } else { port };
+            let pb = crate::display::spinner_start(&format!(
+                "Probing MQTT broker at {ip}:{mqtt_port}…"
+            ));
+            let result = crate::vendors::mqtt::client::probe(ip, mqtt_port);
+            pb.finish_and_clear();
+            match result {
+                None => crate::display::print_warn("No MQTT broker response."),
+                Some(dev) => {
+                    println!("  anonymous={}", dev.anonymous);
+                    if let Some(info) = &dev.broker_info {
+                        println!("  broker_info={info}");
+                    }
+                    println!("  sparkplug={}", dev.sparkplug);
+                    crate::display::print_success("MQTT broker responded.");
+                }
             }
         }
         p => {

@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] - 2026-08-16
+
+### Fixed
+
+- `session.rs`: oversized PUBLISH packet (`remaining_len > 65536`) now drains the body and
+  continues instead of killing the reader thread permanently
+- `session.rs`: password CONNECT flag no longer set when username is absent (MQTT 3.1.1 §3.1.2.8)
+- `client.rs`: `read_sys_publish` and `probe_sparkplug` now drain oversized packets before
+  returning to keep the TCP stream in sync for subsequent reads
+- `mqtt_shell.rs`: `exit`/`quit` in the messaging console now returns normally instead of
+  calling `process::exit(0)` which skipped all Drop impls
+- `mqtt_shell.rs`: connecting with an empty host now shows a clear message instead of an OS error
+
+### Added
+
+- `sim/mqtt_sim.py`: Python MQTT 3.1.1 broker simulator (amqtt) matching the `sim/` pattern
+- `sim/run_all.py` / `sim/smoke.py`: MQTT wired into the simulator suite (`--only mqtt`)
+- `tests/mqtt_integration.rs`: 5 live-broker integration tests (guarded by `TEST_MQTT_HOST`)
+- `Protocol::Mqtt` in CLI: `scadaver -i <host> --protocol mqtt scan` probes MQTT brokers
+- CI: Mosquitto service + `MQTT integration tests` step
+- `Cargo.toml`: declared `rust-version = "1.87"` (required for `Duration::from_mins`)
+
 ## [1.1.0] - 2026-08-16
 
 ### Added

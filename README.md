@@ -180,7 +180,7 @@ scadaver [OPTIONS] <COMMAND>
 | Command | Description |
 |---------|-------------|
 | `reboot` | Beckhoff CX9020 reboot via UPnP/SOAP (CVE-2015-4051) |
-| `add-user <credentials>` | Add admin user to CX9020 via UPnP/SOAP |
+| `add-user <credentials>` | Add admin user to CX9020 via UPnP/SOAP (default password: `Sc4d4v3r!`) |
 | `write-symbol <NAME=hexbytes>` | Write raw bytes to ADS symbol |
 | `flash-led` | Schneider identification LED flash |
 | `session-stop` | Schneider PLC stop via recovered legacy web session |

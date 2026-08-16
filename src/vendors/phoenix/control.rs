@@ -62,7 +62,7 @@ const ILC390_STATE_PACKETS: &[&str] = &[
 
 /// Identity of a Phoenix Contact PLC read over the `ProConOS` info protocol (type, firmware, build).
 #[derive(Debug, Clone)]
-pub struct PhoenixDeviceInfo {
+pub struct PhoenixDevice {
     pub plc_type: String,
     pub firmware: Option<String>,
     pub build: Option<String>,
@@ -78,7 +78,7 @@ fn send_recv(stream: &mut TcpStream, hex_data: &str) -> Option<Vec<u8>> {
 }
 
 /// Retrieve PLC type, firmware version. Pass `port = 0` to use the default (1962).
-pub fn get_device_info(target_ip: &str, port: u16, silent: bool) -> Result<PhoenixDeviceInfo> {
+pub fn get_device_info(target_ip: &str, port: u16, silent: bool) -> Result<PhoenixDevice> {
     let effective_port = if port == 0 { INFO_PORT } else { port };
     let mut stream = TcpStream::connect_timeout(
         &format!("{target_ip}:{effective_port}").parse()?,
@@ -162,7 +162,7 @@ pub fn get_device_info(target_ip: &str, port: u16, silent: bool) -> Result<Phoen
         }
     }
 
-    Ok(PhoenixDeviceInfo {
+    Ok(PhoenixDevice {
         plc_type,
         firmware,
         build,

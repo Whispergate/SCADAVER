@@ -21,6 +21,13 @@ jobs:
           toolchain: stable
           components: clippy
 
+      - name: Start Mosquitto broker
+        run: |
+          sudo apt-get install -y mosquitto mosquitto-clients
+          printf 'allow_anonymous true\nlistener 1883\n' > /tmp/mosquitto.conf
+          mosquitto -d -c /tmp/mosquitto.conf
+          sleep 2
+
       - name: Build
         run: cargo build --verbose
 
@@ -29,3 +36,8 @@ jobs:
 
       - name: Test
         run: cargo test --verbose
+
+      - name: MQTT integration tests
+        env:
+          TEST_MQTT_HOST: 127.0.0.1
+        run: cargo test --test mqtt_integration

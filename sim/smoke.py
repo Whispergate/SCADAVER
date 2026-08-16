@@ -252,6 +252,12 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
             ("-i", target, "-p", str(ports.phoenix_http), "--protocol", "phoenix", "get", "tags"),
             ("PUMP_RUN",),
         ),
+        SmokeCase(
+            "mqtt-scan",
+            "mqtt",
+            ("-i", target, "-p", str(ports.mqtt), "--protocol", "mqtt", "scan"),
+            ("anonymous=true", "MQTT broker responded."),
+        ),
     ]
 
 
@@ -374,7 +380,7 @@ def parse_args() -> argparse.Namespace:
         "--only",
         nargs="+",
         choices=["modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp",
-                 "rockwell", "fins", "iec104", "phoenix"],
+                 "rockwell", "fins", "iec104", "phoenix", "mqtt"],
         help="run only cases for selected simulator families",
     )
     parser.add_argument("--no-start", action="store_true", help="use already-running simulators")

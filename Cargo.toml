@@ -6,6 +6,7 @@ resolver = "2"
 name = "scadaver"
 version = "1.1.0"
 edition = "2021"
+rust-version = "1.87"
 authors = ["SawyersPresent (https://github.com/SawyersPresent)"]
 description = "Unified ICS Red Team Multi-Tool, Rust edition"
 repository = "https://github.com/Whispergate/SCADAVER"

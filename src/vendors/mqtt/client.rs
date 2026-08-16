@@ -144,6 +144,9 @@ fn read_sys_publish(stream: &mut TcpStream) -> Option<String> {
 
         let remaining_len = decode_remaining_length(stream).ok()?;
         if remaining_len > 4096 {
+            // Drain to keep stream in sync before returning.
+            let mut discard = vec![0u8; remaining_len.min(4096)];
+            let _ = stream.read_exact(&mut discard);
             return None;
         }
         let mut body = vec![0u8; remaining_len];
@@ -188,6 +191,9 @@ fn probe_sparkplug(stream: &mut TcpStream) -> bool {
         let packet_type = (type_byte[0] >> 4) & 0x0F;
         let Ok(remaining_len) = decode_remaining_length(stream) else { return false };
         if remaining_len > 4096 {
+            // Drain to keep stream in sync before returning.
+            let mut discard = vec![0u8; remaining_len.min(4096)];
+            let _ = stream.read_exact(&mut discard);
             return false;
         }
         let mut body = vec![0u8; remaining_len];

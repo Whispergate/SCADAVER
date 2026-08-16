@@ -138,7 +138,7 @@ pub fn cip_type_size(cip_type: u16) -> Option<usize> {
 
 /// Identity of an EtherNet/IP / Logix device (vendor, product type/code, revision, serial, name).
 #[derive(Debug, Clone)]
-pub struct LogixDevice {
+pub struct RockwellDevice {
     pub vendor: String,
     pub product_type: String,
     pub product_code: u16,
@@ -819,7 +819,7 @@ pub fn enumerate_templates(ip: &str, port: u16, tags: &[LogixTag]) -> TemplateMa
 ///
 /// Tries List Identity first (supported by all EtherNet/IP devices), then falls back
 /// to CIP Get Attribute All (Logix-only). Pass `port = 0` to use the default (44818).
-pub fn get_device_info(ip: &str, port: u16) -> Result<LogixDevice> {
+pub fn get_device_info(ip: &str, port: u16) -> Result<RockwellDevice> {
     if let Ok(dev) = list_identity_tcp(ip, port) {
         return Ok(dev);
     }
@@ -828,7 +828,7 @@ pub fn get_device_info(ip: &str, port: u16) -> Result<LogixDevice> {
 
 /// EtherNet/IP List Identity (command 0x63) over TCP: no session required.
 /// Works on every compliant EtherNet/IP device.
-fn list_identity_tcp(ip: &str, port: u16) -> Result<LogixDevice> {
+fn list_identity_tcp(ip: &str, port: u16) -> Result<RockwellDevice> {
     let effective_port = if port == 0 { EIP_PORT } else { port };
     let mut stream = TcpStream::connect_timeout(
         &format!("{ip}:{effective_port}").parse()?,
@@ -857,7 +857,7 @@ fn list_identity_tcp(ip: &str, port: u16) -> Result<LogixDevice> {
     parse_list_identity_response(&buf, ip)
 }
 
-fn parse_list_identity_response(data: &[u8], _ip: &str) -> Result<LogixDevice> {
+fn parse_list_identity_response(data: &[u8], _ip: &str) -> Result<RockwellDevice> {
     if data.len() < 4 || data[0] != 0x63 || data[1] != 0x00 {
         anyhow::bail!("Not a List Identity response");
     }
@@ -890,7 +890,7 @@ fn parse_list_identity_response(data: &[u8], _ip: &str) -> Result<LogixDevice> {
         String::new()
     };
 
-    Ok(LogixDevice {
+    Ok(RockwellDevice {
         vendor: vendor_name(vendor_id).to_string(),
         product_type: product_type_name(dev_type).to_string(),
         product_code: prod_code,
@@ -900,7 +900,7 @@ fn parse_list_identity_response(data: &[u8], _ip: &str) -> Result<LogixDevice> {
     })
 }
 
-fn get_device_info_cip(ip: &str, port: u16) -> Result<LogixDevice> {
+fn get_device_info_cip(ip: &str, port: u16) -> Result<RockwellDevice> {
     // CIP starts at offset 40 (24-byte EIP header + 16-byte CPF overhead).
     // d[0]=service_echo, d[1]=reserved, d[2]=status, d[3]=ext_status_size, d[4..]=data.
     const CIP_OFF: usize = 40;
@@ -939,7 +939,7 @@ fn get_device_info_cip(ip: &str, port: u16) -> Result<LogixDevice> {
         String::new()
     };
 
-    Ok(LogixDevice {
+    Ok(RockwellDevice {
         vendor: vendor_name(vendor_id).to_string(),
         product_type: product_type_name(product_type).to_string(),
         product_code,

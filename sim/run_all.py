@@ -31,6 +31,7 @@ class PortProfile:
     iec104: int
     phoenix: int
     phoenix_http: int
+    mqtt: int
 
 
 PROFILES = {
@@ -47,6 +48,7 @@ PROFILES = {
         iec104=2404,
         phoenix=1962,
         phoenix_http=8080,
+        mqtt=1883,
     ),
     "high": PortProfile(
         modbus=1502,
@@ -61,6 +63,7 @@ PROFILES = {
         iec104=12404,
         phoenix=11962,
         phoenix_http=11980,
+        mqtt=11883,
     ),
 }
 
@@ -106,6 +109,7 @@ def selected_ports(args: argparse.Namespace) -> PortProfile:
         phoenix_http=valid_port(
             args.phoenix_http_port or profile.phoenix_http, "phoenix http port"
         ),
+        mqtt=valid_port(args.mqtt_port or profile.mqtt, "mqtt port"),
     )
 
 
@@ -183,6 +187,12 @@ def build_specs(host: str, ports: PortProfile) -> list[SimSpec]:
             ),
             tcp_ports=(ports.phoenix, ports.phoenix_http),
         ),
+        SimSpec(
+            "mqtt",
+            "mqtt_sim.py",
+            ("--host", host, "--port", str(ports.mqtt)),
+            tcp_ports=(ports.mqtt,),
+        ),
     ]
 
 
@@ -252,6 +262,8 @@ def print_scadaver_hints(host: str, ports: PortProfile) -> None:
     print(f"  scadaver scan siemens -i {target} --port {ports.siemens}")
     print(f"  scadaver scan ewon -i {target} --port {ports.ewon}")
     print(f"  scadaver snmp enum -t {target} --port {ports.snmp}")
+    print(f"  scadaver -i {target} -p {ports.mqtt} --protocol mqtt scan")
+    print(f"  scadaver mqtt --host {target} --port {ports.mqtt}")
 
 
 def install_dependencies() -> None:
@@ -339,11 +351,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iec104-port", type=int)
     parser.add_argument("--phoenix-port", type=int)
     parser.add_argument("--phoenix-http-port", type=int)
+    parser.add_argument("--mqtt-port", type=int)
     parser.add_argument(
         "--only",
         nargs="+",
         choices=["modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp",
-                 "rockwell", "fins", "iec104", "phoenix"],
+                 "rockwell", "fins", "iec104", "phoenix", "mqtt"],
         help="start only selected simulators",
     )
     parser.add_argument(

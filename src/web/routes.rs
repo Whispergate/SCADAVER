@@ -977,7 +977,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
             }
         }
 
-        "beckhoff/adduser" => {
+        "beckhoff/add_user" => {
             if username.is_empty() || password.is_empty() {
                 anyhow::bail!("Username and password are required");
             }
@@ -1044,7 +1044,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
             Ok(out)
         }
 
-        "common/httpcreds" => {
+        "common/http_creds" => {
             match crate::core::httpcreds::test_http_basic(ip, 80, "/", 8) {
                 Some(r) => Ok(format!(
                     "Valid credentials found: {}:{} (HTTP {})\nPath: {}",

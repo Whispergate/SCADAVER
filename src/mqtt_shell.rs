@@ -150,6 +150,10 @@ fn connection_console(ms: &mut MainState, cs: &mut ConnState) -> Result<()> {
             "will" => handle_will_cmd(cs, args),
             "clear_will" => { cs.will = None; println!("  will cleared"); }
             "connect" => {
+                if cs.host.is_empty() {
+                    println!("  set a host first: host <hostname>");
+                    continue;
+                }
                 let opts = cs.to_connect_options(ms);
                 print!("  Connecting to {}:{}… ", opts.host, opts.port);
                 let _ = io::stdout().flush();
@@ -258,7 +262,7 @@ fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
             "exit" | "quit" => {
                 let _ = session.disconnect();
                 println!("  disconnected.");
-                std::process::exit(0);
+                return Ok(());
             }
             "" => {}
             _ => println!("  unknown command '{cmd}'  (type 'help' for list)"),
