@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "scadaver"
-version = "1.1.0"
+version = "1.1.2"
 edition = "2021"
 rust-version = "1.87"
 authors = ["SawyersPresent (https://github.com/SawyersPresent)"]
@@ -78,7 +78,7 @@ chrono = { version = "0.4", optional = true }
 scadaver-macros = { version = "1.0", path = "scadaver-macros", optional = true }
 
 [dev-dependencies]
-scadaver-macros = { path = "scadaver-macros" }
+scadaver-macros = { version = "1.0", path = "scadaver-macros" }
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
