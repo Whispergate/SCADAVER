@@ -75,10 +75,10 @@ rusqlite = { version = "0.31", features = ["bundled"], optional = true }
 chrono = { version = "0.4", optional = true }
 
 # ── Proc-macro companion (optional, enabled by the "macros" feature) ──────────
-scadaver-macros = { version = "1.0", path = "scadaver-macros", optional = true }
+scadaver-macros = { version = "1.1", path = "scadaver-macros", optional = true }
 
 [dev-dependencies]
-scadaver-macros = { version = "1.0", path = "scadaver-macros" }
+scadaver-macros = { version = "1.1", path = "scadaver-macros" }
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

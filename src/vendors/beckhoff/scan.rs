@@ -15,10 +15,15 @@ pub const DEFAULT_ADS_PORT: u16 = 48898;
 
 /// A discovered Beckhoff `TwinCAT` device: its IP, AMS Net ID, and version/kernel identity.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "macros", derive(scadaver_macros::IntoDeviceInfo))]
+#[cfg_attr(feature = "macros", vendor(slug = "beckhoff", scadaver = "crate"))]
 pub struct BeckhoffDevice {
+    #[cfg_attr(feature = "macros", device_info(ip))]
     pub ip: String,
     pub name: String,
+    #[cfg_attr(feature = "macros", device_info(skip))]
     pub netid: String,
+    #[cfg_attr(feature = "macros", device_info(rename = "netid"))]
     pub netid_str: String,
     pub tc_version: String,
     pub kernel: String,

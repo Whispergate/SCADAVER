@@ -574,6 +574,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
         }
         Protocol::Siemens => {
             use crate::vendors::siemens::scan;
+            use crate::vendors::snmp::{client as snmp_client, enumerate as snmp_enum};
             let dev = scan::scan_ip_with_port(ip, if port == 0 { 102 } else { port });
             println!("  IP:       {}", dev.ip);
             if let Some(hw) = &dev.hardware {
@@ -589,6 +590,34 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
                 let ports: Vec<String> =
                     dev.open_ports.iter().map(ToString::to_string).collect();
                 println!("  Ports:    {}", ports.join(", "));
+            }
+            let pb = crate::display::spinner_start("Probing SNMP…");
+            let community = snmp_client::discover_community(ip, snmp_client::SNMP_PORT);
+            pb.finish_and_clear();
+            if let Some(community) = community {
+                if let Ok(info) =
+                    snmp_enum::get_system_info(ip, snmp_client::SNMP_PORT, &community)
+                {
+                    println!("  SNMP community: {community}");
+                    if !info.descr.is_empty() {
+                        println!("  sysDescr:  {}", info.descr);
+                    }
+                    if !info.name.is_empty() {
+                        println!("  sysName:   {}", info.name);
+                    }
+                    if !info.location.is_empty() {
+                        println!("  Location:  {}", info.location);
+                    }
+                    if let Some(v) = info.ics_vendor {
+                        println!("  ICS vendor (SNMP): {v}");
+                    }
+                    for cve in snmp_enum::check_cves(&info) {
+                        crate::display::print_warn(&format!(
+                            "  CVE: {} (CVSS {}) — {}",
+                            cve.id, cve.cvss, cve.summary
+                        ));
+                    }
+                }
             }
         }
         Protocol::Snmp => {

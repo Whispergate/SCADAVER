@@ -1,6 +1,6 @@
 [package]
 name = "scadaver-macros"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 authors = ["SawyersPresent (https://github.com/SawyersPresent)"]
 description = "Proc-macro companion for the scadaver ICS red team toolkit"

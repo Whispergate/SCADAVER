@@ -2,11 +2,18 @@ use crate::vendors::siemens::s7comm::{get_device_snapshot, tcp_scan, S7_PORT};
 
 /// A scanned Siemens S7 PLC: its open ports plus hardware, firmware, and CPU state where readable.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "macros", derive(scadaver_macros::IntoDeviceInfo))]
+#[cfg_attr(feature = "macros", vendor(slug = "siemens", scadaver = "crate"))]
 pub struct SiemensDevice {
+    #[cfg_attr(feature = "macros", device_info(ip))]
     pub ip: String,
+    #[cfg_attr(feature = "macros", device_info(optional))]
     pub hardware: Option<String>,
+    #[cfg_attr(feature = "macros", device_info(optional))]
     pub firmware: Option<String>,
+    #[cfg_attr(feature = "macros", device_info(optional))]
     pub cpu_state: Option<String>,
+    #[cfg_attr(feature = "macros", device_info(skip))]
     pub open_ports: Vec<u16>,
 }
 

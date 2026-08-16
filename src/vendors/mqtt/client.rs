@@ -16,14 +16,19 @@ const RECON_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// Information retrieved from an MQTT broker.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "macros", derive(scadaver_macros::IntoDeviceInfo))]
+#[cfg_attr(feature = "macros", vendor(slug = "mqtt", scadaver = "crate"))]
 pub struct MqttDevice {
+    #[cfg_attr(feature = "macros", device_info(ip))]
     pub ip: String,
+    #[cfg_attr(feature = "macros", device_info(skip))]
     pub port: u16,
-    /// True when the broker returned CONNACK 0x00 with no username/password.
+    #[cfg_attr(feature = "macros", device_info(skip))]
     pub anonymous: bool,
     /// First `$SYS/broker/*` topic and value received, if any. e.g. "$SYS/broker/version: mosquitto 2.0.18"
+    #[cfg_attr(feature = "macros", device_info(optional))]
     pub broker_info: Option<String>,
-    /// True when at least one `spBv1.0/` PUBLISH was observed after subscribing (Sparkplug B SCADA node present).
+    #[cfg_attr(feature = "macros", device_info(skip))]
     pub sparkplug: bool,
 }
 

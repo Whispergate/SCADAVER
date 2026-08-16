@@ -51,6 +51,11 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields, Type};
 #[darling(attributes(vendor))]
 struct VendorArgs {
     slug: String,
+    /// Override the `scadaver` crate path. Use `scadaver = "crate"` when deriving
+    /// from inside the `scadaver` crate itself, so generated code uses `crate::...`
+    /// instead of `scadaver::...`.
+    #[darling(default)]
+    scadaver: Option<String>,
 }
 
 #[derive(FromField)]
@@ -87,10 +92,18 @@ pub fn derive_into_device_info(input: TokenStream) -> TokenStream {
 fn expand_into_device_info(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let struct_name = &input.ident;
 
-    // Extract #[vendor(slug = "...")]
+    // Extract #[vendor(slug = "...", scadaver = "crate")]
     let vendor_args = VendorArgs::from_derive_input(input)
         .map_err(|e| syn::Error::new_spanned(&input.ident, e.to_string()))?;
     let slug = &vendor_args.slug;
+
+    // Build the root path tokens: `crate` when inside scadaver, else `scadaver`.
+    let root: proc_macro2::TokenStream = match vendor_args.scadaver.as_deref() {
+        Some("crate") => quote! { crate },
+        Some(other) => syn::parse_str(other)
+            .map_err(|e| syn::Error::new_spanned(&input.ident, format!("invalid scadaver path: {e}")))?,
+        None => quote! { scadaver },
+    };
 
     // Only works on structs with named fields
     let fields = match &input.data {
@@ -158,13 +171,13 @@ fn expand_into_device_info(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })?;
 
     Ok(quote! {
-        impl scadaver::core::autodetect::IntoDeviceInfo for #struct_name {
+        impl #root::core::autodetect::IntoDeviceInfo for #struct_name {
             const VENDOR_SLUG: &'static str = #slug;
 
-            fn into_device_info(self) -> scadaver::core::autodetect::DeviceInfo {
+            fn into_device_info(self) -> #root::core::autodetect::DeviceInfo {
                 let mut fields = ::std::collections::HashMap::new();
                 #(#insert_stmts)*
-                scadaver::core::autodetect::DeviceInfo {
+                #root::core::autodetect::DeviceInfo {
                     vendor: Self::VENDOR_SLUG.to_string(),
                     ip: self.#ip_field,
                     fields,
