@@ -14,6 +14,11 @@ All notable changes to this project will be documented in this file.
 - `MqttDevice` struct re-exported via `scadaver::prelude`
 - `probe_mqtt` wired into the autodetect engine alongside all other protocol probes
 - 6 new library API integration tests covering MQTT packet structure and struct fields
+- `MqttSession`: persistent MQTT connection with background reader thread (subscribe, unsubscribe,
+  publish, unsubscribe_all, ping, drain_messages, disconnect)
+- `ConnectOptions`, `MqttMessage`, `WillConfig` re-exported via `scadaver::prelude`
+- `scadaver mqtt` CLI subcommand: interactive 3-level MQTT client shell (configure, connect,
+  pub/sub); based on python-mqtt-client-shell by Barry Powell
 
 ## [1.0.0] - 2026-08-15
 

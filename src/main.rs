@@ -2,14 +2,21 @@ mod cli;
 mod creds;
 mod db;
 mod display;
+mod mqtt_shell;
 mod tui;
 mod web;
 
 pub use scadaver::core;
 pub use scadaver::vendors;
 
+fn print_disclaimer() {
+    eprintln!("SCADAVER \u{2014} authorized security research tool. For lab and CTF use only.");
+    eprintln!("Unauthorized use against production systems is illegal.");
+}
+
 fn main() {
     use clap::Parser;
+    print_disclaimer();
     let args = cli::Args::parse();
 
     let launch_tui =

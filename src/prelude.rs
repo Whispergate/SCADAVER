@@ -13,5 +13,6 @@ pub use crate::vendors::beckhoff::scan::{
 };
 pub use crate::vendors::mitsubishi::slmp::SlmpValue;
 pub use crate::vendors::mqtt::client::{MqttDevice, MQTT_PORT};
+pub use crate::vendors::mqtt::session::{ConnectOptions, MqttMessage, MqttSession, WillConfig};
 pub use crate::vendors::omron::fins::{OmronDevice, FINS_TCP_PORT, FINS_UDP_PORT};
 pub use crate::vendors::siemens::scan::SiemensDevice;

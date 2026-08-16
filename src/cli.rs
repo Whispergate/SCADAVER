@@ -88,6 +88,15 @@ pub enum Verb {
         #[command(subcommand)]
         cmd: DbCmd,
     },
+    /// Interactive MQTT client shell (broker recon, pub/sub, credential testing)
+    Mqtt {
+        /// Broker host to pre-populate in the connection console
+        #[arg(long)]
+        host: Option<String>,
+        /// Broker port (default 1883)
+        #[arg(long, default_value = "1883")]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand)]
@@ -413,6 +422,7 @@ pub fn run(args: Args) -> Result<()> {
     let Some(command) = args.command else { return Ok(()); };
     match command {
         Verb::Tui | Verb::Web { .. } => Ok(()), // handled in main.rs before cli::run is called
+        Verb::Mqtt { host, port } => crate::mqtt_shell::run_shell(host.as_deref(), port),
         Verb::Db { cmd } => run_db(cmd),
         Verb::Scan => run_scan(args.ip.as_deref(), args.port, args.timeout, args.protocol),
         Verb::Get { noun } => {

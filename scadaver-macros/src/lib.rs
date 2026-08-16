@@ -57,6 +57,7 @@ struct VendorArgs {
 #[darling(attributes(device_info))]
 struct FieldArgs {
     ident: Option<syn::Ident>,
+    #[allow(dead_code)]
     ty: Type,
     #[darling(default)]
     ip: bool,
