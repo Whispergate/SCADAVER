@@ -8,7 +8,7 @@
 
 **Experimental.** This tool is built from publicly available ICS protocol documentation, CVE advisories, and open-source security research. Direct access to hardware for testing is limited, so behavior on specific device models or firmware versions may differ from what is documented here. If you have access to ICS test equipment and can verify, correct, or extend any module, contributions are very welcome please open an issue or pull request.
 
-Discovers, enumerates, and exploits devices across twelve industrial control protocols.
+Discovers, enumerates, and exploits devices across thirteen industrial control protocols.
 Single binary with a terminal UI, bloodyAD-style CLI, and REST web interface.
 
 
@@ -16,7 +16,7 @@ Single binary with a terminal UI, bloodyAD-style CLI, and REST web interface.
 
 ## Features
 
-- Active fingerprint and passive scan across 12 ICS protocols
+- Active fingerprint and passive scan across 13 ICS protocols
 - TUI, CLI, and REST web interface in one binary
 - Authenticated and unauthenticated exploitation paths
 - Protocol fingerprint randomisation - always-on, no flags needed
@@ -48,7 +48,8 @@ cargo build --release
 
 ```sh
 scadaver scan                                       # sweep local network, all protocols
-scadaver scan --protocol siemens -i 10.0.0.50       # targeted S7 fingerprint
+scadaver scan --protocol siemens -i 10.0.0.50       # targeted S7 fingerprint + SNMP enrichment
+scadaver scan --protocol mqtt -i 192.168.1.10       # MQTT broker probe + $SYS recon
 scadaver get io -i 10.0.0.50 --protocol siemens     # read digital I/O state
 scadaver run fc90-stop -i 192.168.1.10              # unauthenticated Schneider stop
 scadaver tui                                        # interactive terminal UI
@@ -61,7 +62,7 @@ scadaver web --host 0.0.0.0 --port 8080             # REST API + browser UI
 
 | Protocol | Vendor | Port(s) | Discovery | Exploitation | Auth |
 |---|---|---|---|---|---|
-| S7Comm / ISO-TCP | Siemens | TCP 102 | COTP fingerprint, PDU info | I/O and DB r/w, CPU start/stop, password spray | optional password |
+| S7Comm / ISO-TCP | Siemens | TCP 102 | COTP fingerprint, PDU info; automatic SNMP enrichment (sysDescr, sysName, location, CVEs) | I/O and DB r/w, CPU start/stop, password spray | optional password |
 | ADS/AMS | Beckhoff TwinCAT | UDP 48899, TCP 48898 | broadcast NetID | run/config state, symbol r/w, add route | none (pre-4024) |
 | Modbus TCP | Schneider / generic | TCP 502 | FC43 Device ID, UDP 1740 | FC1/3/4/5/6/16, false-data injection, rogue server | none |
 | FC90 | Schneider M340/TM221 | TCP 502 | function-code probe | stop, start, force output bit | none |
@@ -72,6 +73,7 @@ scadaver web --host 0.0.0.0 --port 8080             # REST API + browser UI
 | ProConOS + WebVisit | Phoenix Contact | TCP 1962, 80/8080 | HTTP probe | password retrieval (CVE-2016-8366), tag r/w | HTTP Basic |
 | SNMPv2c | generic | UDP 161 | community scan | GET, GETNEXT, walk, SET | community string |
 | IEC 60870-5-104 | generic RTU/relay | TCP 2404 | TESTFR probe | GI dump, single command, double command | none |
+| MQTT 3.1.1 | Generic brokers, Ignition, SCADA HMIs | TCP 1883 | CONNECT probe, $SYS topic recon, Sparkplug B detection | anonymous connect, $SYS enumeration, credential spray | none / username+password |
 | HTTP Basic | generic | TCP 80/443/8080 | TCP connect | default-cred spray, Shellshock (CVE-2014-6271) | configurable |
 
 ### Protocol Fingerprint Hardening
@@ -374,6 +376,7 @@ Struct attribute: `#[vendor(slug = "...")]`.
 | `scadaver::vendors::enip` | EtherNet/IP enumerations |
 | `scadaver::vendors::ewon` | eWON HTTP exploit + IPCONF scan |
 | `scadaver::vendors::phoenix` | ProConOS binary, WebVisit HMI |
+| `scadaver::vendors::mqtt` | MQTT 3.1.1 broker probing, $SYS recon, Sparkplug B detection, credential testing |
 | `scadaver::vendors::snmp` | SNMPv1/v2c client, OID constants |
 | `scadaver::vendors::iec104` | IEC 60870-5-104 client session |
 | `scadaver::core::modbus` | Raw Modbus TCP client primitives |
