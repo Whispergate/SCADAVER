@@ -4,11 +4,12 @@
 //! (<https://github.com/bapowell/python-mqtt-client-shell>)
 
 use anyhow::Result;
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::time::Duration;
 use std::thread;
 
-use scadaver::vendors::mqtt::session::{ConnectOptions, MqttSession, WillConfig};
+use scadaver::vendors::mqtt::session::{ConnectOptions, MqttMessage, MqttSession, WillConfig};
 
 // ── Shell entry point ─────────────────────────────────────────────────────────
 
@@ -179,6 +180,8 @@ fn connection_console(ms: &mut MainState, cs: &mut ConnState) -> Result<()> {
 fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
     let mut logging = true;
     let mut seq: u64 = 0;
+    let mut filter = String::new();
+    let mut topic_stats: HashMap<String, usize> = HashMap::new();
     println!("  Logging is ON.  Incoming messages will appear before each prompt.");
     println!("  Type 'help' for commands.");
     println!();
@@ -186,7 +189,8 @@ fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
     loop {
         // Drain and optionally print queued messages before each prompt.
         for msg in session.drain_messages() {
-            if logging {
+            *topic_stats.entry(msg.topic.clone()).or_insert(0) += 1;
+            if logging && matches_filter(&msg, &filter) {
                 let payload = msg.payload_str();
                 println!();
                 println!("  [{}] {} : {}", if msg.retain { "R" } else { " " }, msg.topic, payload);
@@ -197,6 +201,8 @@ fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
         let (cmd, rest) = split_first(&line);
 
         match cmd {
+            "filter" => apply_filter_cmd(&mut filter, rest),
+            "topics" => show_topics(&topic_stats),
             "subscribe" | "sub" => {
                 let (topic, qos_str) = split_first(rest);
                 if topic.is_empty() {
@@ -236,7 +242,7 @@ fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
                 }
             }
             "publish" | "pub" => handle_publish_cmd(&mut session, rest, &mut seq),
-            "listen" => handle_listen_cmd(&session, rest),
+            "listen" => handle_listen_cmd(&session, rest, &filter, &mut topic_stats),
             "logging" => {
                 logging = match rest.to_lowercase().as_str() {
                     "off" | "0" | "false" => {
@@ -316,19 +322,71 @@ fn handle_publish_cmd(session: &mut MqttSession, args: &str, seq: &mut u64) {
     }
 }
 
-fn handle_listen_cmd(session: &MqttSession, args: &str) {
+fn handle_listen_cmd(
+    session: &MqttSession,
+    args: &str,
+    filter: &str,
+    topic_stats: &mut HashMap<String, usize>,
+) {
     let secs: u64 = args.parse().unwrap_or(5);
-    println!("  Listening for {secs}s…");
+    let filter_note = if filter.is_empty() { String::new() } else { format!(" [filter: {filter}]") };
+    println!("  Listening for {secs}s{filter_note}…");
     let deadline = std::time::Instant::now() + Duration::from_secs(secs);
-    let mut count = 0usize;
+    let mut shown = 0usize;
+    let mut total = 0usize;
     while std::time::Instant::now() < deadline {
         for msg in session.drain_messages() {
-            println!("  [{}] {} : {}", if msg.retain { "R" } else { " " }, msg.topic, msg.payload_str());
-            count += 1;
+            total += 1;
+            *topic_stats.entry(msg.topic.clone()).or_insert(0) += 1;
+            if matches_filter(&msg, filter) {
+                println!("  [{}] {} : {}", if msg.retain { "R" } else { " " }, msg.topic, msg.payload_str());
+                shown += 1;
+            }
         }
         thread::sleep(Duration::from_millis(50));
     }
-    println!("  listened {secs}s, {count} message(s) received.");
+    if filter.is_empty() {
+        println!("  listened {secs}s — {total} message(s), {} unique topic(s).", topic_stats.len());
+    } else {
+        println!("  listened {secs}s — {shown} shown, {total} received, {} unique topic(s).", topic_stats.len());
+    }
+}
+
+fn apply_filter_cmd(filter: &mut String, pattern: &str) {
+    if pattern.is_empty() {
+        filter.clear();
+        println!("  filter cleared — all messages shown");
+    } else {
+        pattern.clone_into(filter);
+        println!("  filter set to '{filter}' (topic or payload substring, case-insensitive)");
+    }
+}
+
+fn show_topics(topic_stats: &HashMap<String, usize>) {
+    if topic_stats.is_empty() {
+        println!("  (no messages received yet)");
+        return;
+    }
+    let mut rows: Vec<(&String, &usize)> = topic_stats.iter().collect();
+    rows.sort_by_key(|(t, _)| t.as_str());
+    println!("  {:<48} msgs", "topic");
+    println!("  {}", "─".repeat(56));
+    for (topic, count) in &rows {
+        println!("  {topic:<48} {count}");
+    }
+    println!(
+        "  {} unique topic(s), {} message(s) total",
+        rows.len(),
+        rows.iter().map(|(_, &c)| c).sum::<usize>()
+    );
+}
+
+fn matches_filter(msg: &MqttMessage, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    let f = filter.to_lowercase();
+    msg.topic.to_lowercase().contains(&f) || msg.payload_str().to_lowercase().contains(&f)
 }
 
 fn apply_seq(payload: &str, seq: &mut u64) -> String {
@@ -401,6 +459,8 @@ fn print_msg_help() {
     println!("      payload: use {{seq}} for auto-incrementing sequence number");
     println!("    listen [seconds]           print incoming messages for N seconds");
     println!("    logging on|off             toggle live message display");
+    println!("    filter [pattern]           show only messages matching topic/payload substring");
+    println!("    topics                     list unique topics seen with message count");
     println!("    ping                       send PINGREQ");
     println!("    disconnect                 disconnect and return to connection console");
     println!("    exit / quit                disconnect and exit shell");
