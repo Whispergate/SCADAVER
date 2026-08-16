@@ -1,7 +1,7 @@
-/// Omron FINS (Factory Interface Network Service) protocol implementation.
-///
-/// Supports TCP (port 9600, 2-stage: address negotiation + command) and
-/// UDP (port 9600, direct command send).
+//! Omron FINS (Factory Interface Network Service) protocol implementation.
+//!
+//! Supports TCP (port 9600, 2-stage: address negotiation + command) and
+//! UDP (port 9600, direct command send).
 use anyhow::{Context, Result};
 use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};
@@ -18,13 +18,13 @@ pub const AREA_DM_WORD: u8 = 0x82;
 
 /// Information retrieved from an Omron PLC via FINS.
 #[derive(Debug, Clone)]
-pub struct FinsDevice {
+pub struct OmronDevice {
     pub node_addr: u8,
     pub model: String,
     pub version: String,
 }
 
-impl FinsDevice {
+impl OmronDevice {
     /// Map a FINS CPU operating-mode byte to a human-readable state string.
     ///
     /// Values from W327-E1 FINS Commands Reference Manual, table 5-3.
@@ -139,7 +139,7 @@ fn send_fins_udp(ip: &str, cmd: &[u8], server_node: u8) -> Result<Vec<u8>> {
 
 /// Connect via TCP, negotiate address, and read controller model/version (command 05 01).
 /// Pass `port = 0` to use the default FINS/TCP port (9600).
-pub fn get_device_info_tcp(ip: &str, port: u16) -> Result<FinsDevice> {
+pub fn get_device_info_tcp(ip: &str, port: u16) -> Result<OmronDevice> {
     let mut stream = tcp_connect(ip, port)?;
     let server_node = negotiate_address(&mut stream)?;
     // Controller Data Read: 05 01
@@ -155,11 +155,11 @@ pub fn get_device_info_tcp(ip: &str, port: u16) -> Result<FinsDevice> {
     } else {
         "Unknown".to_string()
     };
-    Ok(FinsDevice { node_addr: server_node, model, version })
+    Ok(OmronDevice { node_addr: server_node, model, version })
 }
 
 /// Probe via UDP for a FINS device. Returns None if no valid response.
-pub fn scan_udp(ip: &str) -> Option<FinsDevice> {
+pub fn scan_udp(ip: &str) -> Option<OmronDevice> {
     // Send Controller Data Read (05 01) directly via UDP
     let resp = send_fins_udp(ip, &[0x05, 0x01], 0x00).ok()?;
     // Check for valid FINS response: at least 12 bytes (header 10 + end_code 2)
@@ -185,7 +185,7 @@ pub fn scan_udp(ip: &str) -> Option<FinsDevice> {
     } else {
         String::new()
     };
-    Some(FinsDevice { node_addr: server_node, model, version })
+    Some(OmronDevice { node_addr: server_node, model, version })
 }
 
 /// Read DM word area via TCP FINS (command 01 02, area 0x82).
@@ -267,7 +267,7 @@ pub fn get_cpu_state(ip: &str, port: u16, node: u8) -> Result<String> {
     }
     // Byte 12 = operating mode: 0x00=Stop, 0x01=Program, 0x02=Monitor, 0x03=Run
     let mode = resp[12];
-    Ok(FinsDevice::cpu_state_str(mode).to_string())
+    Ok(OmronDevice::cpu_state_str(mode).to_string())
 }
 
 /// Change CPU operating mode via FINS (command 04 01).
