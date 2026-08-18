@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -89,9 +89,13 @@ impl MqttSession {
     /// CONNACK return code.
     pub fn connect(opts: &ConnectOptions) -> Result<Self> {
         let addr = format!("{}:{}", opts.host, opts.port);
-        let mut stream =
-            TcpStream::connect_timeout(&addr.parse().context("invalid address")?, Duration::from_secs(10))
-                .with_context(|| format!("TCP connect to {addr}"))?;
+        let sock_addr = addr
+            .to_socket_addrs()
+            .context("resolve address")?
+            .next()
+            .context("no addresses for host")?;
+        let mut stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(10))
+            .with_context(|| format!("TCP connect to {addr}"))?;
 
         stream.set_write_timeout(Some(Duration::from_secs(10)))?;
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;

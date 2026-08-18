@@ -13,10 +13,11 @@ use ratatui::{
     Frame, Terminal,
 };
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
+use scadaver::vendors::mqtt::session::{ConnectOptions, MqttSession};
 
 // ─── Background events ───────────────────────────────────────────────────────
 
@@ -528,6 +529,7 @@ enum Mode {
     Help,
     References,
     OutputZoom,
+    MqttMonitor,
 }
 
 struct App {
@@ -555,6 +557,13 @@ struct App {
     active_jobs: u32,
     references_scroll: usize,
     stealth: bool,
+    mqtt_session: Option<MqttSession>,
+    mqtt_broker: String,
+    mqtt_topics: Vec<(String, usize, String)>,
+    mqtt_retained: HashSet<String>,
+    mqtt_total_msgs: usize,
+    mqtt_topic_list_state: ListState,
+    mqtt_filter: String,
 }
 
 impl App {
@@ -592,6 +601,13 @@ impl App {
             active_jobs: 0,
             references_scroll: 0,
             stealth: false,
+            mqtt_session: None,
+            mqtt_broker: String::new(),
+            mqtt_topics: Vec::new(),
+            mqtt_retained: HashSet::new(),
+            mqtt_total_msgs: 0,
+            mqtt_topic_list_state: ListState::default(),
+            mqtt_filter: String::new(),
         }
     }
 
@@ -751,6 +767,62 @@ impl App {
                     }
                     self.output_lines.push(line);
                 }
+            }
+        }
+    }
+
+    fn drain_mqtt_messages(&mut self) {
+        let messages = match &self.mqtt_session {
+            Some(s) => s.drain_messages(),
+            None => return,
+        };
+        for msg in messages {
+            self.mqtt_total_msgs += 1;
+            let (fmt, display) = detect_payload_tui(&msg.topic, &msg.payload);
+            let label = format!("{display}  [{fmt}]");
+            if let Some(entry) = self.mqtt_topics.iter_mut().find(|(t, _, _)| t == &msg.topic) {
+                entry.1 += 1;
+                entry.2 = label;
+            } else {
+                self.mqtt_topics.push((msg.topic.clone(), 1, label));
+                self.mqtt_topics.sort_by(|a, b| a.0.cmp(&b.0));
+            }
+            if msg.retain {
+                self.mqtt_retained.insert(msg.topic.clone());
+            }
+        }
+    }
+
+    fn enter_mqtt_monitor(&mut self, ip: &str, port: u16) {
+        self.mqtt_session = None;
+        self.mqtt_topics.clear();
+        self.mqtt_retained.clear();
+        self.mqtt_total_msgs = 0;
+        self.mqtt_topic_list_state = ListState::default();
+        self.mqtt_filter.clear();
+
+        let opts = ConnectOptions {
+            host: ip.to_string(),
+            port,
+            client_id: "scadaver-tui".into(),
+            keepalive: 60,
+            clean_session: true,
+            username: None,
+            password: None,
+            will: None,
+        };
+        match MqttSession::connect(&opts) {
+            Ok(mut session) => {
+                let _ = session.subscribe("#", 0);
+                let _ = session.subscribe("$SYS/#", 0);
+                self.mqtt_broker = format!("{ip}:{port}");
+                self.mqtt_session = Some(session);
+                self.mode = Mode::MqttMonitor;
+                self.log(format!("[*] MQTT monitor \u{2192} {ip}:{port}"));
+            }
+            Err(e) => {
+                self.output_lines.push(format!("MQTT connect failed: {e:#}"));
+                self.log(format!("[!] MQTT connect failed: {e:#}"));
             }
         }
     }
@@ -4264,7 +4336,9 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let title = format!(" SCADAver ICS Red Team Tool v1.0{scan_tag}{stealth_tag} ");
     let keys = match app.mode {
         Mode::Normal =>
-            " [A] Add IP  [S] Scan  [E] Exploit  [W] References  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear  [Z] Stealth  [?] Help  [Q] Quit",
+            " [A] Add IP  [S] Scan  [E] Exploit  [M] MQTT  [W] References  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear  [Z] Stealth  [?] Help  [Q] Quit",
+        Mode::MqttMonitor =>
+            " [J/K/↑↓] Navigate topics  [/] Filter  [ESC/M] Disconnect",
         Mode::IpInput => " Enter IP address \u{2014} [ESC] cancel",
         Mode::ExploitMenu => " [J/K] Navigate  [ENTER] Run  [V] View as protocol  [O] Zoom  [PgUp/PgDn] Scroll  [ESC] back",
         Mode::Search => " Type to filter \u{2014} [ESC] clear  [ENTER] confirm",
@@ -4389,6 +4463,7 @@ fn draw_right_panel(frame: &mut Frame, area: Rect, app: &mut App) {
         }
         Mode::IpInput => draw_ip_input(frame, area, app),
         Mode::Search => draw_search_panel(frame, area, app),
+        Mode::MqttMonitor => draw_mqtt_panel(frame, area, app),
         _ => draw_detail_panel(frame, area, app),
     }
 }
@@ -5484,6 +5559,10 @@ fn handle_key(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers) -
             handle_output_zoom(app, code, mods);
             false
         }
+        Mode::MqttMonitor => {
+            handle_mqtt_monitor(app, code);
+            false
+        }
     }
 }
 
@@ -5584,6 +5663,11 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
         KeyCode::Char('w' | 'W') => {
             app.references_scroll = 0;
             app.mode = Mode::References;
+        }
+        KeyCode::Char('m' | 'M') => {
+            let ip = app.selected_device_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+            let port = app.field_port(&["port"], 1883);
+            app.enter_mqtt_monitor(&ip, port);
         }
         KeyCode::Char('z' | 'Z') => {
             app.stealth = !app.stealth;
@@ -6026,6 +6110,7 @@ pub fn run(db: &Database) -> Result<()> {
 fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, db: &Database) -> Result<()> {
     loop {
         app.drain_scan_events(db);
+        app.drain_mqtt_messages();
         terminal.draw(|f| draw(f, app))?;
 
         if event::poll(Duration::from_millis(50))? {
@@ -6037,6 +6122,126 @@ fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, db: &Database
         }
     }
     Ok(())
+}
+
+// ─── MQTT monitor ────────────────────────────────────────────────────────────
+
+fn detect_payload_tui(topic: &str, payload: &[u8]) -> (&'static str, String) {
+    if topic.starts_with("spBv1.0/") || topic.starts_with("spAv1.0/") {
+        let hex = payload.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+        return ("sparkplug-b", hex);
+    }
+    if let Ok(s) = std::str::from_utf8(payload) {
+        let t = s.trim();
+        if t.starts_with('{') || t.starts_with('[') {
+            return ("json", t.to_string());
+        }
+        if t.parse::<f64>().is_ok() {
+            return ("number", t.to_string());
+        }
+        if t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("false") {
+            return ("bool", t.to_string());
+        }
+        if payload.iter().all(|&b| (0x20u8..0x7F).contains(&b)) {
+            return ("text", t.to_string());
+        }
+        return ("utf8", t.to_string());
+    }
+    let hex = payload.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+    ("binary", hex)
+}
+
+fn draw_mqtt_panel(frame: &mut Frame, area: Rect, app: &mut App) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+
+    let filter_note = if app.mqtt_filter.is_empty() {
+        String::new()
+    } else {
+        format!("  filter: {}", app.mqtt_filter)
+    };
+    let header_text = format!(
+        " MQTT  {}  \u{2502}  {} topics  \u{2502}  {} msgs{}  \u{2502}  [ESC/M] disconnect",
+        app.mqtt_broker,
+        app.mqtt_topics.len(),
+        app.mqtt_total_msgs,
+        filter_note,
+    );
+    frame.render_widget(
+        Paragraph::new(header_text).style(Style::new().fg(Color::Black).bg(Color::Cyan)),
+        rows[0],
+    );
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(rows[1]);
+
+    let filter_lower = app.mqtt_filter.to_lowercase();
+    let visible: Vec<ListItem> = app
+        .mqtt_topics
+        .iter()
+        .filter(|(t, _, _)| filter_lower.is_empty() || t.to_lowercase().contains(&filter_lower))
+        .map(|(topic, count, _)| {
+            let r = if app.mqtt_retained.contains(topic) { "R" } else { " " };
+            ListItem::new(format!(" [{r}] {topic:<46} {count:>4}"))
+        })
+        .collect();
+
+    let topic_list = List::new(visible)
+        .block(Block::default().borders(Borders::ALL).title(" Topics "))
+        .highlight_style(Style::new().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_symbol("\u{25b6} ");
+    frame.render_stateful_widget(topic_list, cols[0], &mut app.mqtt_topic_list_state);
+
+    let selected_idx = app.mqtt_topic_list_state.selected().unwrap_or(0);
+    let filtered: Vec<&(String, usize, String)> = app
+        .mqtt_topics
+        .iter()
+        .filter(|(t, _, _)| filter_lower.is_empty() || t.to_lowercase().contains(&filter_lower))
+        .collect();
+
+    let detail_text = if let Some((topic, count, last_display)) = filtered.get(selected_idx) {
+        let retained_str = if app.mqtt_retained.contains(topic.as_str()) { "yes" } else { "no" };
+        format!(
+            "\n Topic:    {topic}\n\n Last:     {last_display}\n\n Messages: {count}\n Retained: {retained_str}"
+        )
+    } else if app.mqtt_session.is_some() {
+        "\n Waiting for messages…\n\n Subscribed to # and $SYS/#".to_string()
+    } else {
+        "\n (not connected)".to_string()
+    };
+
+    frame.render_widget(
+        Paragraph::new(detail_text)
+            .block(Block::default().borders(Borders::ALL).title(" Detail ")),
+        cols[1],
+    );
+}
+
+fn handle_mqtt_monitor(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Char('m' | 'M') => {
+            app.mqtt_session = None;
+            app.mode = Mode::Normal;
+            app.log("[*] MQTT monitor disconnected.".to_string());
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            let max = app.mqtt_topics.len().saturating_sub(1);
+            let next = app.mqtt_topic_list_state.selected().map_or(0, |i| (i + 1).min(max));
+            app.mqtt_topic_list_state.select(Some(next));
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            let prev = app.mqtt_topic_list_state.selected().map_or(0, |i| i.saturating_sub(1));
+            app.mqtt_topic_list_state.select(Some(prev));
+        }
+        KeyCode::Char('/') => {
+            app.mqtt_filter.clear();
+        }
+        _ => {}
+    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -6500,6 +6705,13 @@ mod tests {
             exploit_list_state: ratatui::widgets::ListState::default(),
             references_scroll: 0,
             stealth: false,
+            mqtt_session: None,
+            mqtt_broker: String::new(),
+            mqtt_topics: Vec::new(),
+            mqtt_retained: HashSet::new(),
+            mqtt_total_msgs: 0,
+            mqtt_topic_list_state: ListState::default(),
+            mqtt_filter: String::new(),
         }
     }
 
