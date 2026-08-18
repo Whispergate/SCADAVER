@@ -395,10 +395,14 @@ fn fuzz_establish(session: &mut MqttSession, delay_ms: u64, dry_run: bool) {
     let nbirth = nbirth_payload(0);
     let dbirth_metric = build_metric_bool("Device/Online", true);
     let dbirth = build_payload(1, &[dbirth_metric]);
-    safe_publish(session, &nbirth_topic, &nbirth, delay_ms,
-        &format!("establish  NBIRTH {FUZZ_GROUP}/{FUZZ_NODE}"), dry_run);
-    safe_publish(session, &dbirth_topic, &dbirth, delay_ms,
-        &format!("establish  DBIRTH {FUZZ_GROUP}/{FUZZ_NODE}/{FUZZ_DEVICE}"), dry_run);
+    if !safe_publish(session, &nbirth_topic, &nbirth, delay_ms,
+        &format!("establish  NBIRTH {FUZZ_GROUP}/{FUZZ_NODE}"), dry_run) {
+        println!("  [!] establish: NBIRTH failed; subsequent DDATA categories have no birth context");
+    }
+    if !safe_publish(session, &dbirth_topic, &dbirth, delay_ms,
+        &format!("establish  DBIRTH {FUZZ_GROUP}/{FUZZ_NODE}/{FUZZ_DEVICE}"), dry_run) {
+        println!("  [!] establish: DBIRTH failed; DDATA from device categories has no birth context");
+    }
 }
 
 // ─── Fuzz categories ──────────────────────────────────────────────────────────
@@ -638,7 +642,8 @@ fn fuzz_boundary(session: &mut MqttSession, delay_ms: u64, dry_run: bool) -> usi
     ];
 
     for s in string_cases {
-        let desc_s = if s.len() > 40 { format!("\"{}...\"", &s[..40]) } else { format!("\"{s}\"") };
+        let end = s.char_indices().nth(40).map_or(s.len(), |(i, _)| i);
+        let desc_s = if s.len() > end { format!("\"{}...\"", &s[..end]) } else { format!("\"{s}\"") };
         let payload = ddata_string_payload(seq, "fuzz/String/injection", s);
         if safe_publish(session, &topic, &payload, delay_ms, &format!("boundary  string {desc_s}"), dry_run) {
             count += 1;
@@ -956,6 +961,9 @@ pub fn run_sparkplug_fuzz(
             0
         }
     } else {
+        if config.probe_write {
+            println!("  [*] Targeted phase skipped: no devices discovered during passive listen.");
+        }
         0
     };
 
@@ -964,8 +972,10 @@ pub fn run_sparkplug_fuzz(
     {
         let ndeath_topic = sp_topic(FUZZ_GROUP, "NDEATH", FUZZ_NODE, None);
         let ndeath = ndeath_payload(0);
-        safe_publish(session, &ndeath_topic, &ndeath, delay_ms,
-            &format!("cleanup  NDEATH {FUZZ_GROUP}/{FUZZ_NODE}"), dry_run);
+        if !safe_publish(session, &ndeath_topic, &ndeath, delay_ms,
+            &format!("cleanup  NDEATH {FUZZ_GROUP}/{FUZZ_NODE}"), dry_run) {
+            println!("  [!] cleanup: NDEATH failed — FuzzNode may remain alive in broker state");
+        }
     }
 
     // Step 9: Summary

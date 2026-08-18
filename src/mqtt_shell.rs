@@ -499,6 +499,12 @@ fn handle_spfuzz_cmd(session: &mut MqttSession, cs: &ConnState, args: &str) {
                 config.categories.clear();
                 parse_categories = true;
             }
+            // Help must appear before the parse_categories guard so "spfuzz help"
+            // works even when --categories was already seen.
+            "--help" | "-h" | "help" => {
+                print_spfuzz_help();
+                return;
+            }
             tok if parse_categories => {
                 if tok.starts_with("--") {
                     println!("  unknown flag '{tok}'. Type 'spfuzz help' for usage.");
@@ -510,10 +516,6 @@ fn handle_spfuzz_cmd(session: &mut MqttSession, cs: &ConnState, args: &str) {
                     println!("  unknown category '{tok}'. Valid: topic malformed boundary ordering sequence");
                     return;
                 }
-            }
-            "--help" | "-h" | "help" => {
-                print_spfuzz_help();
-                return;
             }
             _ => {
                 println!("  unknown flag '{tok}'. Type 'spfuzz help' for usage.");

@@ -396,3 +396,13 @@ The authors assume no liability for misuse.
 
 # Authors:
 - [Sawyer (Saif Yaseen)](https://github.com/SawyersPresent)
+
+---
+
+## Credits
+
+- **[mqttui](https://github.com/EdJoPaTo/mqttui)** — MQTT topic browser UI and live message
+  display patterns informed the TUI monitor view and topic table design in `src/tui.rs`.
+- **[Sparkplug Fuzzer](https://github.com/timzaak/sparkplug-fuzzer)** — Sparkplug B protocol
+  fuzzing approach, category structure, and several payload construction patterns were adapted
+  for `src/vendors/mqtt/sparkplug_fuzz.rs`.
