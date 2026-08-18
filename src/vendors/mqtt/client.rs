@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 /// Default plaintext MQTT port.
@@ -226,7 +226,8 @@ fn probe_sparkplug(stream: &mut TcpStream) -> bool {
 /// Also attempts `$SYS/#` recon and Sparkplug B detection within a 1.5-second window.
 pub fn probe(ip: &str, port: u16) -> Option<MqttDevice> {
     let addr = format!("{ip}:{port}");
-    let mut stream = TcpStream::connect_timeout(&addr.parse().ok()?, TIMEOUT).ok()?;
+    let sock_addr = addr.to_socket_addrs().ok()?.next()?;
+    let mut stream = TcpStream::connect_timeout(&sock_addr, TIMEOUT).ok()?;
     stream.set_read_timeout(Some(TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(TIMEOUT)).ok()?;
 
@@ -265,8 +266,8 @@ pub fn probe(ip: &str, port: u16) -> Option<MqttDevice> {
 /// Creates a fresh TCP connection per attempt.
 pub fn try_credential(ip: &str, port: u16, user: &str, pass: &str) -> Option<bool> {
     let addr = format!("{ip}:{port}");
-    let mut stream =
-        TcpStream::connect_timeout(&addr.parse().ok()?, Duration::from_secs(3)).ok()?;
+    let sock_addr = addr.to_socket_addrs().ok()?.next()?;
+    let mut stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(3)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
     stream.set_write_timeout(Some(Duration::from_secs(3))).ok()?;
 

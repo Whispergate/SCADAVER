@@ -9,7 +9,9 @@ use std::io::{self, Write};
 use std::time::Duration;
 use std::thread;
 
+use scadaver::vendors::mqtt::client;
 use scadaver::vendors::mqtt::session::{ConnectOptions, MqttMessage, MqttSession, WillConfig};
+use scadaver::vendors::mqtt::sparkplug_fuzz::{FuzzCategory, FuzzConfig, run_sparkplug_fuzz};
 
 // ── Shell entry point ─────────────────────────────────────────────────────────
 
@@ -177,25 +179,52 @@ fn connection_console(ms: &mut MainState, cs: &mut ConnState) -> Result<()> {
     Ok(())
 }
 
+fn drain_and_log(
+    session: &MqttSession,
+    topic_stats: &mut HashMap<String, usize>,
+    retained_cache: &mut HashMap<String, String>,
+    logging: bool,
+    filter: &str,
+) {
+    for msg in session.drain_messages() {
+        *topic_stats.entry(msg.topic.clone()).or_insert(0) += 1;
+        if msg.retain {
+            let (_, display) = detect_payload(&msg.topic, &msg.payload);
+            retained_cache.insert(msg.topic.clone(), display);
+        }
+        if logging && matches_filter(&msg, filter) {
+            let (fmt, display) = detect_payload(&msg.topic, &msg.payload);
+            println!();
+            println!(
+                "  [{}] {} : {}  [{}]",
+                if msg.retain { "R" } else { " " },
+                msg.topic,
+                display,
+                fmt
+            );
+        }
+    }
+}
+
 fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
     let mut logging = true;
     let mut seq: u64 = 0;
     let mut filter = String::new();
     let mut topic_stats: HashMap<String, usize> = HashMap::new();
+    let mut retained_cache: HashMap<String, String> = HashMap::new();
     println!("  Logging is ON.  Incoming messages will appear before each prompt.");
     println!("  Type 'help' for commands.");
     println!();
 
+    if let Err(e) = session.subscribe("#", 0) {
+        println!("  warning: could not subscribe to '#': {e:#}");
+    } else {
+        println!("  auto-subscribed to '#' (QoS 0) — use 'subscribe'/'unsubscribe' to adjust.");
+    }
+    println!();
+
     loop {
-        // Drain and optionally print queued messages before each prompt.
-        for msg in session.drain_messages() {
-            *topic_stats.entry(msg.topic.clone()).or_insert(0) += 1;
-            if logging && matches_filter(&msg, &filter) {
-                let payload = msg.payload_str();
-                println!();
-                println!("  [{}] {} : {}", if msg.retain { "R" } else { " " }, msg.topic, payload);
-            }
-        }
+        drain_and_log(&session, &mut topic_stats, &mut retained_cache, logging, &filter);
 
         let line = read_line("mqtt/messaging> ")?;
         let (cmd, rest) = split_first(&line);
@@ -203,6 +232,11 @@ fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
         match cmd {
             "filter" => apply_filter_cmd(&mut filter, rest),
             "topics" => show_topics(&topic_stats),
+            "tree" => show_topic_tree(&topic_stats),
+            "retained" => show_retained(&retained_cache),
+            "sys" => handle_sys_cmd(&mut session, &mut topic_stats),
+            "creds" => handle_creds_cmd(cs, rest),
+            "spfuzz" => handle_spfuzz_cmd(&mut session, cs, rest),
             "subscribe" | "sub" => {
                 let (topic, qos_str) = split_first(rest);
                 if topic.is_empty() {
@@ -242,7 +276,7 @@ fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
                 }
             }
             "publish" | "pub" => handle_publish_cmd(&mut session, rest, &mut seq),
-            "listen" => handle_listen_cmd(&session, rest, &filter, &mut topic_stats),
+            "listen" => handle_listen_cmd(&session, rest, &filter, &mut topic_stats, &mut retained_cache),
             "logging" => {
                 logging = match rest.to_lowercase().as_str() {
                     "off" | "0" | "false" => {
@@ -327,6 +361,7 @@ fn handle_listen_cmd(
     args: &str,
     filter: &str,
     topic_stats: &mut HashMap<String, usize>,
+    retained_cache: &mut HashMap<String, String>,
 ) {
     let secs: u64 = args.parse().unwrap_or(5);
     let filter_note = if filter.is_empty() { String::new() } else { format!(" [filter: {filter}]") };
@@ -338,8 +373,19 @@ fn handle_listen_cmd(
         for msg in session.drain_messages() {
             total += 1;
             *topic_stats.entry(msg.topic.clone()).or_insert(0) += 1;
+            if msg.retain {
+                let (_, display) = detect_payload(&msg.topic, &msg.payload);
+                retained_cache.insert(msg.topic.clone(), display);
+            }
             if matches_filter(&msg, filter) {
-                println!("  [{}] {} : {}", if msg.retain { "R" } else { " " }, msg.topic, msg.payload_str());
+                let (fmt, display) = detect_payload(&msg.topic, &msg.payload);
+                println!(
+                    "  [{}] {} : {}  [{}]",
+                    if msg.retain { "R" } else { " " },
+                    msg.topic,
+                    display,
+                    fmt
+                );
                 shown += 1;
             }
         }
@@ -350,6 +396,169 @@ fn handle_listen_cmd(
     } else {
         println!("  listened {secs}s — {shown} shown, {total} received, {} unique topic(s).", topic_stats.len());
     }
+}
+
+fn handle_sys_cmd(session: &mut MqttSession, topic_stats: &mut HashMap<String, usize>) {
+    if let Err(e) = session.subscribe("$SYS/#", 0) {
+        println!("  subscribe failed: {e:#}");
+        return;
+    }
+    println!("  Fetching $SYS stats (2s)…");
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut count = 0usize;
+    while std::time::Instant::now() < deadline {
+        for msg in session.drain_messages() {
+            *topic_stats.entry(msg.topic.clone()).or_insert(0) += 1;
+            if msg.topic.starts_with("$SYS/") {
+                let (_, display) = detect_payload(&msg.topic, &msg.payload);
+                println!("  {:<46} : {}", msg.topic, display);
+                count += 1;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    println!("  {count} stat(s) received.");
+}
+
+const DEFAULT_CREDS: &[(&str, &str)] = &[
+    ("admin",  "admin"),
+    ("admin",  "password"),
+    ("admin",  "1234"),
+    ("admin",  ""),
+    ("mqtt",   "mqtt"),
+    ("mqtt",   "password"),
+    ("user",   "user"),
+    ("guest",  "guest"),
+    ("test",   "test"),
+    ("root",   "root"),
+    ("admin",  "admin1234"),
+    ("admin",  "mosquitto"),
+];
+
+fn handle_creds_cmd(cs: &ConnState, extra: &str) {
+    let pairs: Vec<(&str, &str)> = if extra.is_empty() {
+        DEFAULT_CREDS.to_vec()
+    } else {
+        extra.split_once(':')
+            .map(|(u, p)| vec![(u, p)])
+            .unwrap_or_default()
+    };
+    if pairs.is_empty() {
+        println!("  usage: creds [user:pass]");
+        return;
+    }
+    println!("  Testing {} credential pair(s) against {}:{}…", pairs.len(), cs.host, cs.port);
+    let mut hits = 0usize;
+    for (user, pass) in &pairs {
+        match client::try_credential(&cs.host, cs.port, user, pass) {
+            Some(true) => {
+                println!("  [+] {user} : {pass}  <- ACCEPTED");
+                hits += 1;
+            }
+            Some(false) => println!("  [-] {user} : {pass}"),
+            None => println!("  [?] {user} : {pass}  (network error)"),
+        }
+    }
+    if hits == 0 {
+        println!("  no valid credentials found.");
+    } else {
+        println!("  {hits} valid credential(s) found.");
+    }
+}
+
+fn handle_spfuzz_cmd(session: &mut MqttSession, cs: &ConnState, args: &str) {
+    let mut config = FuzzConfig::default();
+    let mut tokens = args.split_whitespace().peekable();
+    let mut parse_categories = false;
+
+    while let Some(tok) = tokens.next() {
+        match tok {
+            "--delay" => {
+                if let Some(v) = tokens.next().and_then(|s| s.parse::<u64>().ok()) {
+                    config.delay_ms = v;
+                } else {
+                    println!("  usage: spfuzz --delay <ms>");
+                    return;
+                }
+            }
+            "--discovery" => {
+                if let Some(v) = tokens.next().and_then(|s| s.parse::<u32>().ok()) {
+                    config.discovery_secs = v;
+                } else {
+                    println!("  usage: spfuzz --discovery <seconds>");
+                    return;
+                }
+            }
+            "--probe-write" => {
+                config.probe_write = true;
+            }
+            "--dry-run" => {
+                config.dry_run = true;
+            }
+            "--categories" => {
+                config.categories.clear();
+                parse_categories = true;
+            }
+            tok if parse_categories => {
+                if tok.starts_with("--") {
+                    println!("  unknown flag '{tok}'. Type 'spfuzz help' for usage.");
+                    return;
+                }
+                if let Some(cat) = FuzzCategory::parse(tok) {
+                    config.categories.push(cat);
+                } else {
+                    println!("  unknown category '{tok}'. Valid: topic malformed boundary ordering sequence");
+                    return;
+                }
+            }
+            "--help" | "-h" | "help" => {
+                print_spfuzz_help();
+                return;
+            }
+            _ => {
+                println!("  unknown flag '{tok}'. Type 'spfuzz help' for usage.");
+                return;
+            }
+        }
+    }
+
+    if config.categories.is_empty() {
+        println!("  no categories selected after --categories. Valid: topic malformed boundary ordering sequence");
+        return;
+    }
+
+    let no_creds = cs.username.is_none();
+    if let Err(e) = run_sparkplug_fuzz(session, &cs.host, cs.port, no_creds, &config) {
+        println!("  spfuzz error: {e:#}");
+    }
+}
+
+fn print_spfuzz_help() {
+    println!("  spfuzz — Sparkplug B protocol fuzzer (authorized use only)");
+    println!();
+    println!("  Usage: spfuzz [OPTIONS]");
+    println!();
+    println!("  Options:");
+    println!("    --delay <ms>             delay between messages (min 50, default 100)");
+    println!("    --discovery <s>          passive listen time before fuzzing (min 5, default 10)");
+    println!("    --probe-write            enable targeted spoofing against discovered devices");
+    println!("    --dry-run                print what would be sent without publishing anything");
+    println!("    --categories <list>      space-separated categories to run (default: topic malformed boundary)");
+    println!("      Valid categories: topic  malformed  boundary  ordering  sequence");
+    println!("    help                     show this help");
+    println!();
+    println!("  Safety notes:");
+    println!("    Always run --dry-run first to review the payload list");
+    println!("    NBIRTH+DBIRTH are published before fuzz categories (protocol compliance)");
+    println!("    NDEATH is published at the end of every run (clean broker state)");
+    println!("    All messages use QoS 0 and retain=false");
+    println!();
+    println!("  Examples:");
+    println!("    spfuzz --dry-run                         preview all messages without sending");
+    println!("    spfuzz                                   run with defaults");
+    println!("    spfuzz --delay 500 --discovery 30        slower pace, longer discovery");
+    println!("    spfuzz --categories topic malformed      only those two categories");
+    println!("    spfuzz --probe-write                     enable targeted device spoofing");
 }
 
 fn apply_filter_cmd(filter: &mut String, pattern: &str) {
@@ -381,12 +590,80 @@ fn show_topics(topic_stats: &HashMap<String, usize>) {
     );
 }
 
+fn show_topic_tree(topic_stats: &HashMap<String, usize>) {
+    if topic_stats.is_empty() {
+        println!("  (no messages received yet)");
+        return;
+    }
+    let mut topics: Vec<(&String, &usize)> = topic_stats.iter().collect();
+    topics.sort_by_key(|(t, _)| t.as_str());
+    let mut printed: Vec<String> = Vec::new();
+    for (topic, count) in &topics {
+        let parts: Vec<&str> = topic.split('/').collect();
+        for depth in 0..parts.len() {
+            let prefix = parts[..=depth].join("/");
+            if printed.contains(&prefix) {
+                continue;
+            }
+            printed.push(prefix.clone());
+            let indent = "  ".repeat(depth + 1);
+            if depth == parts.len() - 1 {
+                println!("  {indent}{:<36} {count}", parts[depth]);
+            } else {
+                println!("  {indent}{}/", parts[depth]);
+            }
+        }
+    }
+    let total: usize = topic_stats.values().sum();
+    println!("  {} topic(s), {} message(s) total", topic_stats.len(), total);
+}
+
+fn show_retained(cache: &HashMap<String, String>) {
+    if cache.is_empty() {
+        println!("  (no retained messages seen yet)");
+        return;
+    }
+    let mut rows: Vec<(&String, &String)> = cache.iter().collect();
+    rows.sort_by_key(|(t, _)| t.as_str());
+    println!("  {:<44} last retained payload", "topic");
+    println!("  {}", "─".repeat(62));
+    for (topic, payload) in &rows {
+        println!("  {topic:<44} {payload}");
+    }
+    println!("  {} retained topic(s)", rows.len());
+}
+
 fn matches_filter(msg: &MqttMessage, filter: &str) -> bool {
     if filter.is_empty() {
         return true;
     }
     let f = filter.to_lowercase();
     msg.topic.to_lowercase().contains(&f) || msg.payload_str().to_lowercase().contains(&f)
+}
+
+fn detect_payload(topic: &str, payload: &[u8]) -> (&'static str, String) {
+    if topic.starts_with("spBv1.0/") || topic.starts_with("spAv1.0/") {
+        let hex: String = payload.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+        return ("sparkplug-b", hex);
+    }
+    if let Ok(s) = std::str::from_utf8(payload) {
+        let trimmed = s.trim();
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            return ("json", trimmed.to_string());
+        }
+        if trimmed.parse::<f64>().is_ok() {
+            return ("number", trimmed.to_string());
+        }
+        if trimmed.eq_ignore_ascii_case("true") || trimmed.eq_ignore_ascii_case("false") {
+            return ("bool", trimmed.to_string());
+        }
+        if payload.iter().all(|&b| (0x20u8..0x7F).contains(&b)) {
+            return ("text", trimmed.to_string());
+        }
+        return ("utf8", trimmed.to_string());
+    }
+    let hex: String = payload.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+    ("binary", hex)
 }
 
 fn apply_seq(payload: &str, seq: &mut u64) -> String {
@@ -461,6 +738,11 @@ fn print_msg_help() {
     println!("    logging on|off             toggle live message display");
     println!("    filter [pattern]           show only messages matching topic/payload substring");
     println!("    topics                     list unique topics seen with message count");
+    println!("    tree                       show observed topics as an indented hierarchy");
+    println!("    retained                   list topics with broker-retained payloads seen so far");
+    println!("    sys                        subscribe to $SYS/# and display broker statistics");
+    println!("    creds [user:pass]          test default MQTT credentials (or one specific pair)");
+    println!("    spfuzz [options]           Sparkplug B fuzzer (run --dry-run first! see 'spfuzz help')");
     println!("    ping                       send PINGREQ");
     println!("    disconnect                 disconnect and return to connection console");
     println!("    exit / quit                disconnect and exit shell");
