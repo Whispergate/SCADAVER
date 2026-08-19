@@ -82,6 +82,8 @@ pub struct MqttSession {
     subscriptions: Vec<String>,
     packet_id: u16,
     _reader: JoinHandle<()>,
+    /// True when the broker resumed a stored session (CONNACK session-present bit).
+    pub session_present: bool,
 }
 
 impl MqttSession {
@@ -129,6 +131,7 @@ impl MqttSession {
             subscriptions: Vec::new(),
             packet_id: 1,
             _reader: reader,
+            session_present: ack_flags & 0x01 != 0,
         })
     }
 

