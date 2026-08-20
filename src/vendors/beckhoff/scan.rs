@@ -316,6 +316,12 @@ pub fn add_route(
 ) -> bool {
     let route_name = route_name.map_or_else(hostname_or_default, str::to_string);
 
+    // Each field is length-prefixed as a single hex byte in the ADS UDP packet.
+    // Values > 254 would produce a 3-char hex string, silently corrupting the packet.
+    if route_name.len() > 254 || username.len() > 254 || password.len() > 254 || local_ip.len() > 254 {
+        return false;
+    }
+
     let Ok(sock) = UdpSocket::bind(format!("{local_ip}:0")) else { return false };
     let _ = sock.set_read_timeout(Some(Duration::from_secs(3)));
 

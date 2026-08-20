@@ -27,12 +27,18 @@
       <span class="text-cyan-400 font-bold text-xl tracking-widest font-mono">SCADAver</span>
       <span class="text-slate-500 text-xs">ICS Red Team Tool, Rust Edition</span>
     </div>
-    <div x-show="selectedDevice" class="text-sm text-slate-400 font-mono">
-      <span class="text-cyan-400" x-text="selectedDevice?.ip"></span>
-      &nbsp;·&nbsp;
-      <span class="uppercase text-xs px-2 py-0.5 rounded text-white"
-            :class="'badge-' + (selectedDevice?.vendor || 'unknown')"
-            x-text="selectedDevice?.vendor || 'unknown'"></span>
+    <div class="flex items-center gap-4">
+      <div x-show="selectedDevice" class="text-sm text-slate-400 font-mono">
+        <span class="text-cyan-400" x-text="selectedDevice?.ip"></span>
+        &nbsp;·&nbsp;
+        <span class="uppercase text-xs px-2 py-0.5 rounded text-white"
+              :class="'badge-' + (selectedDevice?.vendor || 'unknown')"
+              x-text="selectedDevice?.vendor || 'unknown'"></span>
+      </div>
+      <button @click="exportDevices()"
+              class="text-xs text-slate-400 hover:text-cyan-400 border border-slate-700 hover:border-cyan-700 px-2 py-1 rounded transition-colors">
+        Export JSON
+      </button>
     </div>
   </header>
 

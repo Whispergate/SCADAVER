@@ -9,13 +9,17 @@ pub struct CredResult {
     pub status: u16,
 }
 
-/// Try each entry from `ICS_HTTP_CREDS` against HTTP Basic Auth on `ip:port/path`.
-/// Returns the first credential pair that receives a non-401/403 response.
+/// Try each credential pair against HTTP Basic Auth on `ip:port/path`.
+///
+/// `extra_creds` are tried first (custom wordlist / creds.toml entries), followed by the
+/// compiled-in `ICS_HTTP_CREDS` defaults. Returns the first pair that receives a
+/// non-401/403 response.
 pub fn test_http_basic(
     ip: &str,
     port: u16,
     path: &str,
     timeout_secs: u64,
+    extra_creds: &[(String, String)],
 ) -> Option<CredResult> {
     let url = format!("http://{ip}:{port}{path}");
     let agent = ureq::AgentBuilder::new()
@@ -23,7 +27,10 @@ pub fn test_http_basic(
         .redirects(0)
         .build();
 
-    for &(username, password) in ICS_HTTP_CREDS {
+    let custom = extra_creds.iter().map(|(u, p)| (u.as_str(), p.as_str()));
+    let builtin = ICS_HTTP_CREDS.iter().map(|&(u, p)| (u, p));
+
+    for (username, password) in custom.chain(builtin) {
         let encoded = base64::engine::general_purpose::STANDARD
             .encode(format!("{username}:{password}"));
         match agent

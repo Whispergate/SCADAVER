@@ -179,7 +179,8 @@ pub fn scan(_interface: &NetworkInterface, timeout: u64, silent: bool) -> Result
     }
 
     if !silent {
-        println!("Got {} response(s).", devices.len() / 2);
+        let device_count = devices.iter().filter(|d| d.response_type == "device_info").count();
+        println!("Got {device_count} device(s).");
     }
     Ok(devices)
 }

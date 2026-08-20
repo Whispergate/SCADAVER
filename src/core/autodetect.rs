@@ -44,7 +44,7 @@ fn vendor_priority(vendor: &str) -> u8 {
     match vendor {
         "modicon" => 0,
         "beckhoff" | "siemens" | "rockwell" | "ewon" | "mitsubishi" | "schneider" | "phoenix"
-        | "omron" => 1,
+        | "omron" | "bacnet" | "dnp3" | "opcua" => 1,
         "enip" | "iec104" => 2,
         "snmp" | "mqtt" => 3,
         _ => 99,
@@ -111,6 +111,18 @@ fn make_probes() -> Vec<(ProbeInfo, ProbeFn)> {
         (
             ProbeInfo { label: "MQTT", transport: "TCP 1883" },
             Box::new(probe_mqtt),
+        ),
+        (
+            ProbeInfo { label: "BACnet/IP", transport: "UDP 47808" },
+            Box::new(probe_bacnet),
+        ),
+        (
+            ProbeInfo { label: "DNP3", transport: "TCP 20000" },
+            Box::new(probe_dnp3),
+        ),
+        (
+            ProbeInfo { label: "OPC-UA", transport: "TCP 4840" },
+            Box::new(probe_opcua),
         ),
     ]
 }
@@ -464,6 +476,59 @@ fn probe_mqtt(ip: &str) -> Option<DeviceInfo> {
     }
     fields.insert("cap_mqtt_tcp".into(), true.into());
     Some(DeviceInfo { vendor: "mqtt".into(), ip: ip.into(), fields })
+}
+
+fn probe_bacnet(ip: &str) -> Option<DeviceInfo> {
+    use crate::vendors::bacnet::client;
+    let dev = client::scan_ip(ip, 3)?;
+    let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
+    fields.insert("port".into(), i64::from(client::BACNET_PORT).into());
+    fields.insert("bacnet_port".into(), i64::from(client::BACNET_PORT).into());
+    fields.insert("instance_id".into(), i64::from(dev.instance_id).into());
+    fields.insert("vendor_id".into(), i64::from(dev.vendor_id).into());
+    if !dev.object_name.is_empty() {
+        fields.insert("object_name".into(), dev.object_name.into());
+    }
+    if !dev.vendor_name.is_empty() {
+        fields.insert("vendor_name".into(), dev.vendor_name.into());
+    }
+    if !dev.description.is_empty() {
+        fields.insert("description".into(), dev.description.into());
+    }
+    if !dev.firmware_revision.is_empty() {
+        fields.insert("firmware".into(), dev.firmware_revision.into());
+    }
+    fields.insert("cap_bacnet_udp".into(), true.into());
+    Some(DeviceInfo { vendor: "bacnet".into(), ip: ip.into(), fields })
+}
+
+fn probe_dnp3(ip: &str) -> Option<DeviceInfo> {
+    use crate::vendors::dnp3::client;
+    let dev = client::detect(ip, Duration::from_secs(3))?;
+    let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
+    fields.insert("port".into(), i64::from(client::DNP3_PORT).into());
+    fields.insert("dnp3_port".into(), i64::from(client::DNP3_PORT).into());
+    fields.insert("outstation_addr".into(), i64::from(dev.outstation_addr).into());
+    fields.insert("cap_dnp3_tcp".into(), true.into());
+    Some(DeviceInfo { vendor: "dnp3".into(), ip: ip.into(), fields })
+}
+
+fn probe_opcua(ip: &str) -> Option<DeviceInfo> {
+    use crate::vendors::opcua::client;
+    let server = client::detect(ip, 0, Duration::from_secs(3))?;
+    let endpoints = client::get_endpoints(ip, 0, Duration::from_secs(5));
+    let anonymous_count = endpoints.iter().filter(|e| e.allows_anonymous).count();
+    let mut fields: HashMap<String, serde_json::Value> = HashMap::new();
+    fields.insert("port".into(), i64::from(server.port).into());
+    fields.insert("opcua_port".into(), i64::from(server.port).into());
+    fields.insert("endpoint_count".into(), i64::try_from(endpoints.len()).unwrap_or(i64::MAX).into());
+    fields.insert("anonymous_endpoints".into(), i64::try_from(anonymous_count).unwrap_or(i64::MAX).into());
+    if let Some(ep) = endpoints.first() {
+        fields.insert("security_mode".into(), ep.security_mode.clone().into());
+        fields.insert("security_policy".into(), ep.security_policy.clone().into());
+    }
+    fields.insert("cap_opcua_tcp".into(), true.into());
+    Some(DeviceInfo { vendor: "opcua".into(), ip: ip.into(), fields })
 }
 
 /// Probe all protocol families in parallel against a single IP.

@@ -278,6 +278,10 @@ function scadaApp() {
         exploitRunning: {},
         exploitResults: {},
 
+        // Events WebSocket (live device push)
+        eventsWs: null,
+        eventsWsDelay: 1000,
+
         // Toast
         toast: null,
         toastTimer: null,
@@ -290,6 +294,7 @@ function scadaApp() {
         // ── Lifecycle ──────────────────────────────────────────────────────
         async init() {
             await Promise.all([this.loadDevices(), this.loadInterfaces()]);
+            this.wsConnect();
         },
 
         // ── Devices ────────────────────────────────────────────────────────
@@ -303,6 +308,34 @@ function scadaApp() {
             }
         },
 
+        wsConnect() {
+            if (this.eventsWs) {
+                this.eventsWs.onclose = null;
+                this.eventsWs.close();
+            }
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
+            this.eventsWs = ws;
+
+            ws.onmessage = (ev) => {
+                try {
+                    const data = JSON.parse(ev.data);
+                    if (data.event === 'device_found' || data.event === 'exploit_output') {
+                        this.loadDevices();
+                    }
+                } catch { /* ignore malformed frames */ }
+            };
+
+            ws.onclose = () => {
+                this.eventsWs = null;
+                const delay = Math.min(this.eventsWsDelay, 10000);
+                this.eventsWsDelay = Math.min(delay * 2, 10000);
+                setTimeout(() => { this.eventsWsDelay = 1000; this.wsConnect(); }, delay);
+            };
+
+            ws.onopen = () => { this.eventsWsDelay = 1000; };
+        },
+
         async addDevice(dev) {
             await fetch('/api/devices', {
                 method: 'POST',
@@ -310,6 +343,20 @@ function scadaApp() {
                 body: JSON.stringify({ ip: dev.ip, vendor: dev.vendor, fields: dev }),
             });
             await this.loadDevices();
+        },
+
+        async exportDevices() {
+            const r = await fetch('/api/export', {
+                headers: { 'X-API-Key': this.apiKey },
+            });
+            if (!r.ok) { alert('Export failed: ' + r.status); return; }
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'scadaver-export.json';
+            a.click();
+            URL.revokeObjectURL(url);
         },
 
         async removeDevice(ip) {

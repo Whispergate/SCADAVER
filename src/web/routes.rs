@@ -10,6 +10,7 @@ use axum::{
 };
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 use serde_json::{json, Map, Value};
 use std::fmt::Write as _;
 use std::time::Duration;
@@ -102,9 +103,27 @@ fn default_timeout() -> u64 {
     5
 }
 
+// ─── Shared router state ──────────────────────────────────────────────────────
+
+/// Event broadcast over `/ws/events` to connected browser clients.
+#[derive(Clone, Serialize)]
+pub struct DeviceEvent {
+    pub event: &'static str,
+    pub ip: String,
+    pub vendor: Option<String>,
+    pub message: Option<String>,
+}
+
+pub struct AppState {
+    pub api_key: String,
+    pub events_tx: broadcast::Sender<DeviceEvent>,
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 pub fn build_router(api_key: String) -> Router {
+    let (events_tx, _) = broadcast::channel::<DeviceEvent>(256);
+    let state = Arc::new(AppState { api_key, events_tx });
     Router::new()
         .route("/", get(index_html))
         .route("/static/app.js", get(app_js))
@@ -119,9 +138,11 @@ pub fn build_router(api_key: String) -> Router {
         .route("/api/device/write", post(api_device_write))
         .route("/api/device/history", get(api_device_history))
         .route("/api/exploit/*id", post(api_exploit))
+        .route("/api/export", get(api_export))
         .route("/api/run/portscan", post(api_portscan))
         .route("/ws/monitor/:ip", get(ws_monitor))
-        .with_state(Arc::new(api_key))
+        .route("/ws/events", get(ws_events))
+        .with_state(state)
 }
 
 /// Look up a single string field from the stored device record for `ip`.
@@ -133,6 +154,8 @@ fn device_field_str(ip: &str, key: &str) -> Option<String> {
     dev.fields[key].as_str().map(str::to_string)
 }
 
+// When `key` is empty the server runs in no-auth mode: every request is accepted.
+// This is intentional for local/isolated deployments; pass a non-empty key in production.
 fn require_api_key(headers: &HeaderMap, key: &str) -> Option<(StatusCode, Json<serde_json::Value>)> {
     use subtle::ConstantTimeEq as _;
     let provided = headers
@@ -204,6 +227,101 @@ async fn api_list_devices() -> Json<Value> {
     Json(json!({"devices": list}))
 }
 
+#[derive(Deserialize, Default)]
+struct ExportQuery {
+    format: Option<String>,
+}
+
+async fn api_export(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<ExportQuery>,
+) -> impl IntoResponse {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return err.into_response();
+    }
+
+    let result = tokio::task::spawn_blocking(|| {
+        let db = crate::db::Database::open(&crate::db::Database::default_path())?;
+        db.load_devices()
+    })
+    .await;
+
+    let devices = match result {
+        Ok(Ok(d)) => d,
+        Ok(Err(e)) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
+        }
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
+        }
+    };
+
+    let is_csv = q.format.as_deref().is_some_and(|f| f.eq_ignore_ascii_case("csv"));
+
+    if is_csv {
+        let mut lines = vec!["ip,vendor,last_seen,fields".to_string()];
+        for d in &devices {
+            let fields_inline = d.fields.to_string().replace('"', "\"\"");
+            lines.push(format!("{},{},{},\"{}\"", d.ip, d.vendor, d.last_seen, fields_inline));
+        }
+        let body = lines.join("\n");
+        return (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "text/csv"),
+                (header::CONTENT_DISPOSITION, "attachment; filename=\"scadaver-export.csv\""),
+            ],
+            body,
+        )
+            .into_response();
+    }
+
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let device_list: Vec<Value> = devices
+        .iter()
+        .map(|d| {
+            json!({
+                "ip": d.ip,
+                "vendor": d.vendor,
+                "last_seen": d.last_seen,
+                "fields": d.fields,
+            })
+        })
+        .collect();
+
+    let payload = json!({
+        "tool": "scadaver",
+        "version": env!("CARGO_PKG_VERSION"),
+        "exported_at": epoch,
+        "source": "web",
+        "devices": device_list,
+        "output": [],
+    });
+
+    let body = match serde_json::to_string_pretty(&payload) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"scadaver-export.json\"",
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 async fn api_save_device(Json(req): Json<DeviceReq>) -> Json<Value> {
     let ip = req.ip.clone();
     let vendor = req.vendor.clone();
@@ -238,17 +356,17 @@ async fn api_delete_device(Path(ip): Path<String>) -> Json<Value> {
 // ─── Scan ─────────────────────────────────────────────────────────────────────
 
 async fn api_scan_ip(
-    State(key): State<Arc<String>>,
+    State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<ScanIpReq>,
 ) -> Response {
-    if let Some(err) = require_api_key(&headers, &key) {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
         return err.into_response();
     }
-    api_scan_ip_inner(req).await.into_response()
+    api_scan_ip_inner(req, state.events_tx.clone()).await.into_response()
 }
 
-async fn api_scan_ip_inner(req: ScanIpReq) -> Json<Value> {
+async fn api_scan_ip_inner(req: ScanIpReq, events_tx: broadcast::Sender<DeviceEvent>) -> Json<Value> {
     let ip = req.ip.clone();
     let timeout = req.timeout.min(60);
 
@@ -260,10 +378,15 @@ async fn api_scan_ip_inner(req: ScanIpReq) -> Json<Value> {
 
     match detected {
         Some(dev) => {
-            // Persist to DB asynchronously
             let ip2 = dev.ip.clone();
             let vendor2 = dev.vendor.clone();
             let fields2 = serde_json::to_value(&dev.fields).unwrap_or_default();
+            let _ = events_tx.send(DeviceEvent {
+                event: "device_found",
+                ip: dev.ip.clone(),
+                vendor: Some(dev.vendor.clone()),
+                message: None,
+            });
             tokio::spawn(tokio::task::spawn_blocking(move || {
                 if let Ok(db) = crate::db::Database::open(&crate::db::Database::default_path()) {
                     let _ = db.upsert_device(&ip2, &vendor2, &fields2);
@@ -283,11 +406,11 @@ async fn api_scan_ip_inner(req: ScanIpReq) -> Json<Value> {
 }
 
 async fn api_scan(
-    State(key): State<Arc<String>>,
+    State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<ScanNetworkReq>,
 ) -> Response {
-    if let Some(err) = require_api_key(&headers, &key) {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
         return err.into_response();
     }
     api_scan_inner(req).await.into_response()
@@ -421,11 +544,11 @@ fn broadcast_scan(
 // ─── Tags ─────────────────────────────────────────────────────────────────────
 
 async fn api_device_tags(
-    State(key): State<Arc<String>>,
+    State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<TagsReq>,
 ) -> Response {
-    if let Some(err) = require_api_key(&headers, &key) {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
         return err.into_response();
     }
     api_device_tags_inner(req).await.into_response()
@@ -671,11 +794,11 @@ fn read_tags_from_db(ip: &str) -> Value {
 // ─── Write tag ────────────────────────────────────────────────────────────────
 
 async fn api_device_write(
-    State(key): State<Arc<String>>,
+    State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<WriteReq>,
 ) -> Response {
-    if let Some(err) = require_api_key(&headers, &key) {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
         return err.into_response();
     }
     api_device_write_inner(req).await.into_response()
@@ -886,18 +1009,18 @@ async fn api_device_history(Query(q): Query<HistoryQuery>) -> Json<Value> {
 // ─── Exploits ─────────────────────────────────────────────────────────────────
 
 async fn api_exploit(
-    State(key): State<Arc<String>>,
+    State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(req): Json<ExploitReq>,
 ) -> Response {
-    if let Some(err) = require_api_key(&headers, &key) {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
         return err.into_response();
     }
-    api_exploit_inner(id, req).await.into_response()
+    api_exploit_inner(id, req, state.events_tx.clone()).await.into_response()
 }
 
-async fn api_exploit_inner(id: String, req: ExploitReq) -> Json<Value> {
+async fn api_exploit_inner(id: String, req: ExploitReq, events_tx: broadcast::Sender<DeviceEvent>) -> Json<Value> {
     let exploit_id = id.trim_start_matches('/').to_string();
     let ip = req.ip.clone();
     let username = req.username.clone();
@@ -909,7 +1032,15 @@ async fn api_exploit_inner(id: String, req: ExploitReq) -> Json<Value> {
     .await;
 
     match result {
-        Ok(Ok(output)) => Json(json!({"success": true, "output": output})),
+        Ok(Ok(output)) => {
+            let _ = events_tx.send(DeviceEvent {
+                event: "exploit_output",
+                ip: req.ip.clone(),
+                vendor: None,
+                message: Some(output.clone()),
+            });
+            Json(json!({"success": true, "output": output}))
+        }
         Ok(Err(e)) => Json(json!({"success": false, "error": e.to_string()})),
         Err(e) => Json(json!({"success": false, "error": e.to_string()})),
     }
@@ -1045,7 +1176,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "common/http_creds" => {
-            match crate::core::httpcreds::test_http_basic(ip, 80, "/", 8) {
+            match crate::core::httpcreds::test_http_basic(ip, 80, "/", 8, &[]) {
                 Some(r) => Ok(format!(
                     "Valid credentials found: {}:{} (HTTP {})\nPath: {}",
                     r.username, r.password, r.status, r.path
@@ -1730,6 +1861,39 @@ async fn api_portscan(Json(req): Json<PortscanReq>) -> Json<Value> {
             Json(json!({"ports": ports}))
         }
         Err(e) => Json(json!({"ports": [], "error": e.to_string()})),
+    }
+}
+
+// ─── WebSocket events push ────────────────────────────────────────────────────
+
+async fn ws_events(
+    ws: WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let origin_ok = headers
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|o| o.starts_with("http://localhost") || o.starts_with("http://127.0.0.1"));
+    if !origin_ok {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    }
+    let rx = state.events_tx.subscribe();
+    ws.on_upgrade(move |socket| events_loop(socket, rx))
+}
+
+async fn events_loop(mut socket: WebSocket, mut rx: broadcast::Receiver<DeviceEvent>) {
+    loop {
+        match rx.recv().await {
+            Ok(ev) => {
+                let Ok(msg) = serde_json::to_string(&ev) else { break };
+                if socket.send(Message::Text(msg)).await.is_err() {
+                    break;
+                }
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+            Err(broadcast::error::RecvError::Lagged(_)) => {}
+        }
     }
 }
 

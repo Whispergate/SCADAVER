@@ -49,8 +49,8 @@ fn init_sequence(stream: &mut TcpStream) {
 }
 
 fn check_ack(resp: &[u8]) -> bool {
-    // ACK: 00 5a 01 04
-    resp.len() >= 4 && resp[0] == 0x00 && resp[1] == 0x5A && resp[3] == 0x04
+    // ACK: 00 5a 01 04  (unit, FC90, subcommand echo, response_type=ACK)
+    resp.len() >= 4 && resp[0] == 0x00 && resp[1] == 0x5A && resp[2] == 0x01 && resp[3] == 0x04
 }
 
 /// Stop an M340, Quantum, or Premium PLC via unauthenticated FC90.

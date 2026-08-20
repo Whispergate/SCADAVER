@@ -21,9 +21,9 @@ pub struct Args {
     #[arg(short = 'p', long, global = true, default_value = "0")]
     pub port: u16,
 
-    /// Timeout in seconds
-    #[arg(short, long, global = true, default_value = "5")]
-    pub timeout: u64,
+    /// Timeout in seconds (overrides config file default)
+    #[arg(short, long, global = true)]
+    pub timeout: Option<u64>,
 
     /// Protocol hint (required for some operations)
     #[arg(long, global = true, value_enum)]
@@ -32,6 +32,10 @@ pub struct Args {
     /// Randomise probe order and add inter-probe jitter to reduce scan fingerprint
     #[arg(short = 'z', long, global = true)]
     pub stealth: bool,
+
+    /// CIDR network range to scan (e.g. 192.168.1.0/24); alternative to -i for bulk scans
+    #[arg(long, global = true)]
+    pub network: Option<String>,
 
     #[command(subcommand)]
     pub command: Option<Verb>,
@@ -97,6 +101,21 @@ pub enum Verb {
         /// Broker port (default 1883)
         #[arg(long, default_value = "1883")]
         port: u16,
+    },
+    /// Import hosts into the device database from external sources
+    Import {
+        /// nmap XML output file to import
+        #[arg(long)]
+        nmap: Option<String>,
+    },
+    /// Export the device database
+    Export {
+        /// Output format: json or csv (default: json)
+        #[arg(long, default_value = "json")]
+        format: String,
+        /// Write to file instead of stdout
+        #[arg(long)]
+        output: Option<String>,
     },
 }
 
@@ -356,6 +375,9 @@ pub enum RunCmd {
         /// HTTP port of the target web server
         #[arg(long, default_value = "80")]
         http_port: u16,
+        /// Custom wordlist file (user:pass per line); tried before built-in defaults
+        #[arg(long)]
+        wordlist: Option<String>,
     },
     /// False Data Injection: continuously write a forged Modbus value (SCASS §6.3.1)
     Fdi {
@@ -415,9 +437,11 @@ pub enum DbCmd {
 // Public entrypoint
 // ===================================================================
 
-pub fn run(args: Args) -> Result<()> {
+pub fn run(args: Args, cfg: &crate::config::ConfigFile) -> Result<()> {
+    let timeout = args.timeout.unwrap_or_else(|| cfg.defaults.timeout.unwrap_or(5));
+    let stealth = args.stealth || cfg.defaults.stealth.unwrap_or(false);
     crate::display::print_banner();
-    if args.stealth {
+    if stealth {
         crate::core::autodetect::set_stealth(true);
     }
     let Some(command) = args.command else { return Ok(()); };
@@ -425,14 +449,22 @@ pub fn run(args: Args) -> Result<()> {
         Verb::Tui | Verb::Web { .. } => Ok(()), // handled in main.rs before cli::run is called
         Verb::Mqtt { host, port } => crate::mqtt_shell::run_shell(host.as_deref(), port),
         Verb::Db { cmd } => run_db(cmd),
-        Verb::Scan => run_scan(args.ip.as_deref(), args.port, args.timeout, args.protocol),
+        Verb::Scan => run_scan(
+            args.ip.as_deref(),
+            args.network.as_deref(),
+            args.port,
+            timeout,
+            args.protocol,
+        ),
+        Verb::Import { nmap } => run_import(nmap),
+        Verb::Export { format, output } => run_export(&format, output.as_deref()),
         Verb::Get { noun } => {
             let ip = require_ip(args.ip.as_ref(), "get")?;
-            run_get(ip, args.port, args.timeout, args.protocol, noun)
+            run_get(ip, args.port, timeout, args.protocol, noun)
         }
         Verb::Set { noun } => {
             let ip = require_ip(args.ip.as_ref(), "set")?;
-            run_set(ip, args.port, args.timeout, args.protocol, noun)
+            run_set(ip, args.port, timeout, args.protocol, noun)
         }
         Verb::Run { exploit } => match exploit {
             // ModbusServer binds locally: no target IP needed.
@@ -441,7 +473,7 @@ pub fn run(args: Args) -> Result<()> {
             }
             other => {
                 let ip = require_ip(args.ip.as_ref(), "run")?;
-                run_run(ip, args.port, args.timeout, other)
+                run_run(ip, args.port, timeout, other)
             }
         }
     }
@@ -456,13 +488,149 @@ fn require_ip<'a>(ip: Option<&'a String>, verb: &str) -> Result<&'a str> {
 // Scan
 // ===================================================================
 
-fn run_scan(ip: Option<&str>, port: u16, timeout: u64, protocol: Option<Protocol>) -> Result<()> {
+fn run_scan(
+    ip: Option<&str>,
+    network: Option<&str>,
+    port: u16,
+    timeout: u64,
+    protocol: Option<Protocol>,
+) -> Result<()> {
+    if let Some(cidr) = network {
+        return scan_network(cidr, timeout);
+    }
     match (ip, protocol) {
         (Some(ip), None) => { scan_auto(ip, timeout); Ok(()) }
         (Some(ip), Some(proto)) => scan_targeted(ip, port, timeout, proto),
         (None, Some(proto)) => scan_broadcast(proto, timeout),
-        (None, None) => bail!("'-i <IP>' or '--protocol <PROTO>' required for scan"),
+        (None, None) => bail!("'-i <IP>', '--network <CIDR>', or '--protocol <PROTO>' required for scan"),
     }
+}
+
+fn scan_network(cidr: &str, timeout: u64) -> Result<()> {
+    const MAX_CONCURRENT: usize = 64;
+    use ipnetwork::IpNetwork;
+    use std::sync::mpsc;
+
+    let net: IpNetwork = cidr
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid CIDR: {cidr}"))?;
+
+    let hosts: Vec<std::net::IpAddr> = net.iter().collect();
+    let host_count = hosts.len();
+    crate::display::print_info(&format!("Scanning {host_count} hosts in {cidr}…"));
+
+    let (tx, rx) = mpsc::channel::<String>();
+    let sem = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+
+    for host in hosts {
+        let ip_str = host.to_string();
+        let tx2 = tx.clone();
+        let sem2 = std::sync::Arc::clone(&sem);
+
+        // Simple spinning semaphore: wait until a slot is available.
+        loop {
+            let mut count = sem2.lock().unwrap();
+            if *count < MAX_CONCURRENT {
+                *count += 1;
+                break;
+            }
+            drop(count);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        std::thread::spawn(move || {
+            let outcomes = crate::core::autodetect::sweep(&ip_str, timeout);
+            for o in outcomes {
+                if let Some(dev) = o.device {
+                    let model = dev
+                        .fields
+                        .get("model")
+                        .or_else(|| dev.fields.get("name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    let _ = tx2.send(format!(
+                        "[+] {} — {} ({})",
+                        ip_str, dev.vendor, model
+                    ));
+                }
+            }
+            let mut count = sem2.lock().unwrap();
+            *count = count.saturating_sub(1);
+        });
+    }
+    drop(tx);
+
+    for line in rx {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+fn run_import(nmap: Option<String>) -> Result<()> {
+    let Some(path) = nmap else {
+        bail!("--nmap <path> is required for import");
+    };
+    let hosts = crate::import::parse_nmap_xml(&path)?;
+    if hosts.is_empty() {
+        println!("[*] No up hosts with open ports found in {path}");
+        return Ok(());
+    }
+    let db = crate::db::Database::open(&crate::db::Database::default_path())?;
+    let mut count = 0usize;
+    for host in &hosts {
+        let fields = serde_json::json!({
+            "hostnames": host.hostnames,
+            "open_ports": host.open_ports,
+        });
+        db.upsert_device(&host.ip, "nmap", &fields)?;
+        count += 1;
+    }
+    println!("[+] Imported {count} host(s) from {path}");
+    Ok(())
+}
+
+fn run_export(format: &str, output: Option<&str>) -> Result<()> {
+    let db = crate::db::Database::open(&crate::db::Database::default_path())?;
+    let devices = db.load_devices()?;
+
+    let content = if format.to_lowercase() == "csv" {
+        let mut lines = vec!["ip,vendor,last_seen,fields".to_string()];
+        for d in &devices {
+            let fields_inline = d.fields.to_string().replace('"', "\"\"");
+            lines.push(format!(
+                "{},{},{},\"{}\"",
+                d.ip, d.vendor, d.last_seen, fields_inline
+            ));
+        }
+        lines.join("\n")
+    } else {
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let json = serde_json::json!({
+            "tool": "scadaver",
+            "version": env!("CARGO_PKG_VERSION"),
+            "exported_at": epoch,
+            "source": "cli",
+            "devices": devices.iter().map(|d| serde_json::json!({
+                "ip": d.ip,
+                "vendor": d.vendor,
+                "last_seen": d.last_seen,
+                "fields": d.fields,
+            })).collect::<Vec<_>>(),
+        });
+        serde_json::to_string_pretty(&json)?
+    };
+
+    match output {
+        Some(path) => {
+            std::fs::write(path, &content)?;
+            println!("[+] Exported {} device(s) to {path}", devices.len());
+        }
+        None => println!("{content}"),
+    }
+    Ok(())
 }
 
 fn scan_auto(ip: &str, timeout: u64) {
@@ -1849,12 +2017,31 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
                 crate::display::print_success("No Shellshock vulnerability detected.");
             }
         }
-        RunCmd::DefaultCreds { path, http_port } => {
+        RunCmd::DefaultCreds { path, http_port, wordlist } => {
             use crate::core::httpcreds::test_http_basic;
+            let mut extra_creds: Vec<(String, String)> = Vec::new();
+            // creds.toml HTTP pairs
+            let creds_cfg = crate::creds::load();
+            for entry in creds_cfg.http.credentials {
+                extra_creds.push((entry[0].clone(), entry[1].clone()));
+            }
+            // --wordlist file pairs (appended after creds.toml so file overrides are first)
+            if let Some(ref wl_path) = wordlist {
+                match crate::creds::load_wordlist(wl_path) {
+                    Ok(pairs) => {
+                        let mut combined = pairs;
+                        combined.extend(extra_creds);
+                        extra_creds = combined;
+                    }
+                    Err(e) => crate::display::print_warn(&format!("[!] Wordlist: {e}")),
+                }
+            }
             crate::display::print_info(&format!(
-                "Testing HTTP default credentials on {ip}:{http_port}{path}…"
+                "Testing HTTP credentials on {ip}:{http_port}{path} \
+                 ({} extra + built-in defaults)…",
+                extra_creds.len()
             ));
-            match test_http_basic(ip, http_port, &path, timeout) {
+            match test_http_basic(ip, http_port, &path, timeout, &extra_creds) {
                 Some(r) => {
                     crate::display::print_success(&format!(
                         "Valid credentials: {}:{} (HTTP {})",

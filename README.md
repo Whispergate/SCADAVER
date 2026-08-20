@@ -406,3 +406,10 @@ The authors assume no liability for misuse.
 - **[Sparkplug Fuzzer](https://github.com/timzaak/sparkplug-fuzzer)** — Sparkplug B protocol
   fuzzing approach, category structure, and several payload construction patterns were adapted
   for `src/vendors/mqtt/sparkplug_fuzz.rs`.
+- **[python-mqtt-client-shell](https://github.com/bapowell/python-mqtt-client-shell)** by
+  Barry Powell — interactive MQTT shell design and command-loop patterns informed
+  `src/mqtt_shell.rs`.
+- **[HackTricks MQTT Pentesting Guide](https://hacktricks.wiki/en/network-services-pentesting/1883-pentesting-mqtt-mosquitto.html)**
+  — ACL wildcard probing, session-hijack via `clean_session=false`, and retained-message
+  enumeration techniques are drawn from this guide and implemented in
+  `src/vendors/mqtt/attacks.rs` and the shell/TUI attack commands.

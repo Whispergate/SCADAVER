@@ -1,11 +1,14 @@
+pub mod bacnet;
 pub mod beckhoff;
 pub mod default_creds;
+pub mod dnp3;
 pub mod enip;
 pub mod ewon;
 pub mod iec104;
 pub mod mitsubishi;
 pub mod mqtt;
 pub mod omron;
+pub mod opcua;
 pub mod phoenix;
 pub mod rockwell;
 pub mod schneider;

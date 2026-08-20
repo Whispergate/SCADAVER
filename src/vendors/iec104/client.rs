@@ -318,12 +318,27 @@ fn double_cmd_asdu(asdu_addr: u16, ioa: u32, state: u8) -> Vec<u8> {
     ]
 }
 
-/// Send General Interrogation and collect returned data objects.
+/// Send General Interrogation and collect all returned data objects.
+///
+/// GI produces a burst: activation confirmation (COT=7, TypeID=100), then N data
+/// I-frames, then activation termination (COT=10, TypeID=100). Reading only the
+/// first frame yields only the confirmation with no measurements. This loops
+/// until the termination frame or a recv timeout.
 pub fn general_interrogation(session: &mut Iec104Session) -> Result<Vec<DataObject>> {
     let asdu = gi_asdu(session.asdu_addr);
-    let resp = session.send_iframe(&asdu)?;
+    let frame = session.apdu_iframe(&asdu);
+    session.send(&frame)?;
+    session.tx_seq = session.tx_seq.wrapping_add(1);
+
     let mut objects = Vec::new();
-    parse_response_objects(&resp, &mut objects);
+    loop {
+        let Ok(resp) = session.recv() else { break }; // timeout or peer closed
+        parse_response_objects(&resp, &mut objects);
+        // Termination: TypeID=100 (C_IC_NA_1), COT bits 5-0 = 10 (ActivationTermination)
+        if resp.len() >= 7 && resp[4] == 100 && (resp[6] & 0x3F) == 10 {
+            break;
+        }
+    }
     Ok(objects)
 }
 

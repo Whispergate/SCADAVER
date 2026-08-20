@@ -35,6 +35,8 @@ cli = [
     "dep:dialoguer",
     "dep:dirs",
     "dep:toml",
+    "dep:ipnetwork",
+    "dep:native-tls",
     "dep:rusqlite",
     "dep:chrono",
     "dep:ratatui",
@@ -69,6 +71,8 @@ indicatif = { version = "0.17", optional = true }
 console = { version = "0.15", optional = true }
 dirs = { version = "5", optional = true }
 toml = { version = "0.8", optional = true }
+ipnetwork = { version = "0.21", optional = true }
+native-tls = { version = "0.2", optional = true }
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true }
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }

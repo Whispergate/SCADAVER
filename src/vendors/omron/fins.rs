@@ -265,7 +265,7 @@ pub fn get_cpu_state(ip: &str, port: u16, node: u8) -> Result<String> {
     if end_code != 0x0000 {
         anyhow::bail!("FINS CPU Status Read error 0x{end_code:04x}");
     }
-    // Byte 12 = operating mode: 0x00=Stop, 0x01=Program, 0x02=Monitor, 0x03=Run
+    // Byte 12 = operating mode: 0x00=Stop, 0x01=Run, 0x02=Monitor, 0x04=Program
     let mode = resp[12];
     Ok(OmronDevice::cpu_state_str(mode).to_string())
 }

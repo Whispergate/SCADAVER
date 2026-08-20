@@ -144,10 +144,11 @@ pub fn read_all_data(
         return result;
     };
 
-    let base = "0300001f02f08032010000732f000e00000401120a1006000100008{area}000000";
-
-    for (label, area) in &[("inputs", "1"), ("outputs", "2"), ("merkers", "3")] {
-        let pkt_str = base.replace("{area}", area);
+    for (label, area_byte) in &[("inputs", 0x81u8), ("outputs", 0x82u8), ("merkers", 0x83u8)] {
+        let invoke = rand::random::<u16>();
+        let pkt_str = format!(
+            "0300001f02f08032010000{invoke:04x}000e00000401120a100600010000{area_byte:02x}000000"
+        );
         let pkt = hex_decode(&pkt_str);
         let Some(resp) = send_recv(&mut stream, &pkt) else { continue };
         result.insert((*label).to_string(), parse_coil_data(&hex_encode(&resp), label));

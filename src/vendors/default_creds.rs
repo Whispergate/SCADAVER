@@ -36,6 +36,39 @@ pub const ICS_HTTP_CREDS: &[(&str, &str)] = &[
     ("mitsubishi", "mitsubishi"),
     ("plc", "plc"),
     ("operator", "operator1"),
+    // Beckhoff TwinCAT
+    ("Administrator", "1"),
+    ("admin", "beckhoff"),
+    // Schneider viewer
+    ("viewer", ""),
+    // ABB
+    ("Admin", "Admin"),
+    ("engineer", "engineer"),
+    ("admin", "abb"),
+    // GE
+    ("admin", "ge"),
+    ("engineer", "ge123"),
+    // Emerson DeltaV
+    ("admin", "emerson"),
+    ("DeltaV", "DeltaV"),
+    ("admin", "deltav"),
+    // Honeywell
+    ("admin", "honeywell"),
+    ("engineer", "Honeywell"),
+    ("admin", "Honey1"),
+    // Rockwell
+    ("admin", "1756"),
+    ("admin", "rockwell"),
+    // Phoenix Contact alternate
+    ("admin", "phoenix"),
+    // General ICS operator accounts
+    ("operator", ""),
+    ("technician", "technician"),
+    ("maintenance", "maintenance"),
+    ("config", "config"),
+    ("eng", "eng"),
+    ("user", "1234"),
+    ("admin", "system"),
 ];
 
 /// `S7Comm` PLC access-protection passwords (no username: password only).
@@ -65,6 +98,22 @@ pub const SIEMENS_S7_PASSWORDS: &[&str] = &[
     "dddd",
     "eeee",
     "ffff",
+    // Additional common S7/TIA Portal passwords
+    "S7",
+    "plc",
+    "PLC",
+    "wincc",
+    "WinCC",
+    "Password1",
+    "Siemens1",
+    "Admin",
+    "simatic",
+    "s7online",
+    "s7comm",
+    "step7",
+    "Step7",
+    "siplus",
+    "logo",
 ];
 
 #[cfg(test)]

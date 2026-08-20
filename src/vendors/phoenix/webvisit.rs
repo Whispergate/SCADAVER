@@ -202,9 +202,6 @@ pub fn read_tag_values(target_ip: &str, port: u16, tags: &[String]) -> Result<Ve
 
 /// Write a tag value (CVE-2016-8380). Pass `port = 0` for default (80).
 pub fn write_tag_value(target_ip: &str, port: u16, tag_name: &str, value: &str) -> Result<bool> {
-    if target_ip.parse::<std::net::Ipv4Addr>().is_err() {
-        anyhow::bail!("Invalid target IP: {target_ip}");
-    }
     let effective_port = if port == 0 { 80 } else { port };
     let enc_name = percent_encode(tag_name);
     let enc_value = percent_encode(value);

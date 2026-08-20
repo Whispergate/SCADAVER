@@ -1,6 +1,7 @@
 //! Sparkplug B protocol fuzzer for authorized ICS/OT security assessments.
 //!
-//! Inspired by the Bishop Fox sparkplugFuzzer tool. Safety-first design:
+//! Inspired by sparkplug-fuzzer by timzaak
+//! (<https://github.com/timzaak/sparkplug-fuzzer>). Safety-first design:
 //! - Mandatory responsible-use banner with typed YES confirmation
 //! - Passive-only discovery phase before any active fuzzing
 //! - Enforced minimum 50 ms delay between every published message

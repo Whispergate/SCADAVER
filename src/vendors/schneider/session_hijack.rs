@@ -76,7 +76,12 @@ pub fn get_device_info(
         .timeout_read(Duration::from_secs(10))
         .build();
 
-    for user in &[username, "USER"] {
+    let fallback_users: Vec<&str> = if username == "USER" {
+        vec![username]
+    } else {
+        vec![username, "USER"]
+    };
+    for user in &fallback_users {
         let cookie = format!("M258_LOG={user}:{cookie_value}");
         let result = agent
             .post(&url)
@@ -100,10 +105,11 @@ pub fn get_device_info(
                     "Unknown".to_string()
                 };
 
-                let device_part = data.split(';').next().unwrap_or("").to_string();
+                let device_part = parts.first().copied().unwrap_or("");
                 let mac = device_part
                     .split_whitespace()
-                    .nth(1).map_or_else(|| "Unknown".to_string(), |s| s.trim_start_matches('[').to_string());
+                    .nth(1)
+                    .map_or_else(|| "Unknown".to_string(), |s| s.trim_matches(|c| c == '[' || c == ']').to_string());
 
                 let info = SchneiderDeviceInfo {
                     device: device_part.split_whitespace().next().unwrap_or("").to_string(),

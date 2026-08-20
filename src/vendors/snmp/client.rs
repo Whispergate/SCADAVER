@@ -338,7 +338,9 @@ fn parse_response(buf: &[u8]) -> Result<Vec<(Vec<u32>, SnmpValue)>> {
     let (_, vbl_start, vbl_end) = parse_tlv(buf, ei_end)?;
 
     if error_status != 0 {
-        return Ok(vec![]);
+        bail!(
+            "SNMP error-status {error_status} (1=tooBig 2=noSuchName 3=badValue 4=readOnly 5=genErr)"
+        );
     }
     let mut results = Vec::new();
     let mut pos = vbl_start;
@@ -555,12 +557,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_response_error_status_nonzero_returns_empty() {
+    fn parse_response_error_status_nonzero_returns_error() {
         // error-status value is at offset 20 (after SEQUENCE+len, INTEGER×3, OCTET_STRING+len+6,
         // PDU+len, req-id tag+len+val, error-status tag+len).
         let mut pkt = SYSDESCR_RESPONSE.to_vec();
         pkt[20] = 0x01;
-        let result = parse_response(&pkt).unwrap();
-        assert!(result.is_empty());
+        let result = parse_response(&pkt);
+        assert!(result.is_err(), "non-zero error-status must return Err");
+        assert!(result.unwrap_err().to_string().contains("error-status 1"));
     }
 }

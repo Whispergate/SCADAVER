@@ -3,12 +3,13 @@ pub mod routes;
 use anyhow::Result;
 
 /// Start the web interface. Blocks until the server is stopped (Ctrl-C).
-pub fn start(host: &str, port: u16) -> Result<()> {
+/// `api_key`: when `Some`, uses a fixed key (from config); when `None`, auto-generates per session.
+pub fn start(host: &str, port: u16, api_key: Option<String>) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to create async runtime: {e}"))?;
-    rt.block_on(run(host, port))
+    rt.block_on(run(host, port, api_key))
 }
 
 fn generate_token() -> String {
@@ -19,12 +20,12 @@ fn generate_token() -> String {
     })
 }
 
-async fn run(host: &str, port: u16) -> Result<()> {
+async fn run(host: &str, port: u16, api_key: Option<String>) -> Result<()> {
     let addr: std::net::SocketAddr = format!("{host}:{port}")
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid listen address '{host}:{port}': {e}"))?;
 
-    let token = generate_token();
+    let token = api_key.unwrap_or_else(generate_token);
     let app = routes::build_router(token.clone());
     let url = format!("http://{addr}");
     println!("[*] SCADAver web interface - {url}/?key={token}");
