@@ -361,7 +361,13 @@ fn reader_loop(
         match result {
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => {}
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                // Sleep briefly so writer threads can acquire the lock.
+                // Without this the reader re-acquires immediately, starving writes
+                // on 1-2 core CI runners.
+                thread::sleep(Duration::from_millis(5));
+            }
             Err(_) => break,
             Ok((packet_type, qos, retain, body)) => {
                 dispatch_packet(packet_type, qos, retain, &body, q, subacks);
