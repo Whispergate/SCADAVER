@@ -75,6 +75,7 @@ impl ConnState {
             username: self.username.clone(),
             password: self.password.clone(),
             will: self.will.clone(),
+            ..ConnectOptions::default()
         }
     }
 }
@@ -755,6 +756,7 @@ fn handle_session_cmd(cs: &ConnState, args: &str) {
         username: cs.username.clone(),
         password: cs.password.clone(),
         will: None,
+        ..ConnectOptions::default()
     };
 
     let mut hijack = match MqttSession::connect(&opts) {
