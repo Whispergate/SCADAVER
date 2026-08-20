@@ -748,6 +748,113 @@ fn mqtt_try_credential_unreachable_returns_none() {
     );
 }
 
+// ── iec104::client ───────────────────────────────────────────────────────────
+
+#[test]
+fn iec104_port_constant() {
+    assert_eq!(scadaver::vendors::iec104::client::IEC104_PORT, 2404);
+}
+
+// ── phoenix::control ─────────────────────────────────────────────────────────
+
+#[test]
+fn phoenix_device_struct_fields_accessible() {
+    let dev = scadaver::vendors::phoenix::control::PhoenixDevice {
+        plc_type: "ILC 131 ETH".into(),
+        firmware: Some("V2.0".into()),
+        build: Some("Build-20240101".into()),
+    };
+    assert_eq!(dev.plc_type, "ILC 131 ETH");
+    assert!(dev.firmware.is_some());
+    assert!(dev.build.is_some());
+}
+
+// ── bacnet::client ───────────────────────────────────────────────────────────
+
+#[test]
+fn bacnet_port_constant() {
+    use scadaver::vendors::bacnet::client::BACNET_PORT;
+    assert_eq!(BACNET_PORT, 0xBAC0);
+    assert_eq!(BACNET_PORT, 47808);
+}
+
+#[test]
+fn bacnet_prop_object_name_constant() {
+    assert_eq!(scadaver::vendors::bacnet::client::PROP_OBJECT_NAME, 77);
+}
+
+#[test]
+fn bacnet_device_struct_fields_accessible() {
+    let dev = scadaver::vendors::bacnet::client::BacnetDevice {
+        ip: "192.168.1.5".into(),
+        instance_id: 1000,
+        vendor_id: 999,
+        max_apdu: 1476,
+        object_name: "CI-BACnet".into(),
+        vendor_name: "scadaver-sim".into(),
+        description: "CI test device".into(),
+        firmware_revision: "1.0".into(),
+    };
+    assert_eq!(dev.ip, "192.168.1.5");
+    assert_eq!(dev.instance_id, 1000);
+    assert_eq!(dev.object_name, "CI-BACnet");
+}
+
+// ── dnp3::client ─────────────────────────────────────────────────────────────
+
+#[test]
+fn dnp3_port_constant() {
+    assert_eq!(scadaver::vendors::dnp3::client::DNP3_PORT, 20000);
+}
+
+#[test]
+fn dnp3_device_struct_fields_accessible() {
+    use std::collections::HashMap;
+    let dev = scadaver::vendors::dnp3::client::Dnp3Device {
+        ip: "10.0.0.100".into(),
+        outstation_addr: 1,
+        device_attributes: HashMap::new(),
+    };
+    assert_eq!(dev.ip, "10.0.0.100");
+    assert_eq!(dev.outstation_addr, 1);
+    assert!(dev.device_attributes.is_empty());
+}
+
+// ── opcua::client ─────────────────────────────────────────────────────────────
+
+#[test]
+fn opcua_port_constant() {
+    assert_eq!(scadaver::vendors::opcua::client::OPCUA_PORT, 4840);
+}
+
+#[test]
+fn opcua_server_struct_fields_accessible() {
+    let server = scadaver::vendors::opcua::client::OpcuaServer {
+        ip: "10.0.0.50".into(),
+        port: 4840,
+        application_name: "CIServer".into(),
+        application_uri: "urn:ci:server".into(),
+        product_uri: "urn:ci:product".into(),
+        endpoints: vec![],
+    };
+    assert_eq!(server.ip, "10.0.0.50");
+    assert_eq!(server.port, 4840);
+    assert_eq!(server.application_name, "CIServer");
+    assert!(server.endpoints.is_empty());
+}
+
+#[test]
+fn opcua_endpoint_info_struct_fields_accessible() {
+    let ep = scadaver::vendors::opcua::client::EndpointInfo {
+        url: "opc.tcp://10.0.0.50:4840".into(),
+        security_mode: "None".into(),
+        security_policy: "None".into(),
+        allows_anonymous: true,
+    };
+    assert_eq!(ep.security_mode, "None");
+    assert!(ep.allows_anonymous);
+}
+
 // ── core::autodetect ──────────────────────────────────────────────────────────
 
 #[test]
