@@ -43,15 +43,13 @@ jobs:
         run: cargo test --test mqtt_integration
 
       - name: Install Python simulators
-        run: pip install pymodbus pysnmp asyncua
+        run: pip install pysnmp asyncua
 
       - name: Start external simulators
         run: |
-          python3 scripts/sim_modbus.py > /tmp/sim_modbus.log 2>&1 &
           python3 scripts/sim_snmp.py  > /tmp/sim_snmp.log  2>&1 &
           python3 scripts/sim_opcua.py > /tmp/sim_opcua.log 2>&1 &
           sleep 10
-          echo "=== sim_modbus ===" && cat /tmp/sim_modbus.log || true
           echo "=== sim_snmp ===" && cat /tmp/sim_snmp.log || true
           echo "=== sim_opcua ===" && cat /tmp/sim_opcua.log || true
 
@@ -66,15 +64,13 @@ jobs:
           cargo test --test phoenix_integration
           cargo test --test schneider_integration
           cargo test --test dnp3_integration
+          cargo test --test modbus_integration
 
       - name: Simulator-backed integration tests
         env:
           TEST_OPCUA_HOST: 127.0.0.1
-          TEST_MODBUS_HOST: 127.0.0.1
-          TEST_MODBUS_PORT: "5020"
           TEST_SNMP_HOST: 127.0.0.1
           TEST_SNMP_PORT: "16100"
         run: |
           cargo test --test opcua_integration
-          cargo test --test modbus_integration
           cargo test --test snmp_integration
