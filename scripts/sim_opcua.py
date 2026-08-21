@@ -11,7 +11,6 @@ async def main():
     await server.init()
     server.set_endpoint("opc.tcp://0.0.0.0:4840/freeopcua/server/")
     server.set_server_name("ScadaverCI OPC-UA Server")
-    server.set_security_policy([])
 
     uri = "urn:scadaver:ci:server"
     idx = await server.register_namespace(uri)
