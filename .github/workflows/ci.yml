@@ -47,10 +47,13 @@ jobs:
 
       - name: Start external simulators
         run: |
-          python3 scripts/sim_modbus.py &
-          python3 scripts/sim_snmp.py &
-          python3 scripts/sim_opcua.py &
-          sleep 5
+          python3 scripts/sim_modbus.py > /tmp/sim_modbus.log 2>&1 &
+          python3 scripts/sim_snmp.py  > /tmp/sim_snmp.log  2>&1 &
+          python3 scripts/sim_opcua.py > /tmp/sim_opcua.log 2>&1 &
+          sleep 10
+          echo "=== sim_modbus ===" && cat /tmp/sim_modbus.log || true
+          echo "=== sim_snmp ===" && cat /tmp/sim_snmp.log || true
+          echo "=== sim_opcua ===" && cat /tmp/sim_opcua.log || true
 
       - name: In-process loopback integration tests
         run: |
