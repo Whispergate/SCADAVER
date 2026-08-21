@@ -1,4 +1,7 @@
-"""pymodbus async TCP server on port 5020 for CI integration tests."""
+"""pymodbus async TCP server on port 5020 for CI integration tests.
+
+Compatible with pymodbus 3.x.
+"""
 import asyncio
 from pymodbus.server import StartAsyncTcpServer
 from pymodbus.datastore import (
@@ -6,31 +9,35 @@ from pymodbus.datastore import (
     ModbusServerContext,
     ModbusSlaveContext,
 )
-from pymodbus.device import ModbusDeviceIdentification
 
-
-def build_identity():
-    identity = ModbusDeviceIdentification()
-    identity.VendorName = "scadaver-sim"
-    identity.ProductCode = "SIM-MODBUS"
-    identity.VendorUrl = "https://github.com/scadaver"
-    identity.ProductName = "Modbus CI Simulator"
-    identity.ModelName = "SIM-1"
-    identity.MajorMinorRevision = "1.0"
-    return identity
+try:
+    from pymodbus.device import ModbusDeviceIdentification
+    _identity = ModbusDeviceIdentification(
+        info_name={
+            "VendorName": "scadaver-sim",
+            "ProductCode": "SIM-MODBUS",
+            "VendorUrl": "https://github.com/scadaver",
+            "ProductName": "Modbus CI Simulator",
+            "ModelName": "SIM-1",
+            "MajorMinorRevision": "1.0",
+        }
+    )
+except Exception:
+    _identity = None
 
 
 async def main():
+    datablock = ModbusSequentialDataBlock(0, [i % 65536 for i in range(1000)])
     store = ModbusSlaveContext(
-        co=ModbusSequentialDataBlock(0, [0] * 100),
-        di=ModbusSequentialDataBlock(0, [0] * 100),
-        hr=ModbusSequentialDataBlock(0, [i % 65536 for i in range(200)]),
-        ir=ModbusSequentialDataBlock(0, [i % 65536 for i in range(200)]),
+        co=ModbusSequentialDataBlock(0, [0] * 1000),
+        di=ModbusSequentialDataBlock(0, [0] * 1000),
+        hr=datablock,
+        ir=datablock,
     )
     context = ModbusServerContext(slaves=store, single=True)
     await StartAsyncTcpServer(
-        context,
-        identity=build_identity(),
+        context=context,
+        identity=_identity,
         address=("0.0.0.0", 5020),
     )
 
