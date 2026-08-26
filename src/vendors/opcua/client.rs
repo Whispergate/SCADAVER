@@ -313,8 +313,21 @@ impl<'a> Parser<'a> {
         let node_type = self.read_u8()?;
         match node_type {
             0x01 => { self.pos += 3; } // namespace(1) + id(2)
-            0x02 => { self.pos += 5; } // namespace(2) + id(4)
-            0x03..=0x05 => { self.skip_node_id()?; } // string / GUID / ByteString
+            0x02 => {
+                if self.remaining() < 6 {
+                    return None;
+                }
+                self.pos += 6;
+            } // namespace(2) + id(4)
+            0x04 => { self.pos += 18; } // namespace(2) + GUID(16)
+            0x03 | 0x05 => {
+                // namespace(2) + length(4) + content bytes
+                self.pos += 2;
+                let len = self.read_i32()?;
+                if len > 0 {
+                    self.pos += usize::try_from(len).unwrap_or(0);
+                }
+            }
             _ => { self.read_u8()?; } // 0x00 (2-byte numeric) or unknown: skip 1 byte
         }
         Some(())
@@ -374,7 +387,9 @@ fn parse_get_endpoints(data: &[u8]) -> Vec<EndpointInfo> {
     let mut p = Parser::new(&data[body_start..]);
 
     // TypeId (NodeId)
-    p.skip_node_id();
+    if p.skip_node_id().is_none() {
+        return endpoints;
+    }
 
     // Response header
     if p.skip_response_header().is_none() {

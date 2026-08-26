@@ -322,7 +322,14 @@ async fn api_export(
         .into_response()
 }
 
-async fn api_save_device(Json(req): Json<DeviceReq>) -> Json<Value> {
+async fn api_save_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<DeviceReq>,
+) -> Response {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return err.into_response();
+    }
     let ip = req.ip.clone();
     let vendor = req.vendor.clone();
     let fields = req.fields.clone();
@@ -333,13 +340,20 @@ async fn api_save_device(Json(req): Json<DeviceReq>) -> Json<Value> {
     .await;
 
     match result {
-        Ok(Ok(id)) => Json(json!({"success": true, "id": id})),
-        Ok(Err(e)) => Json(json!({"success": false, "error": e.to_string()})),
-        Err(e) => Json(json!({"success": false, "error": e.to_string()})),
+        Ok(Ok(id)) => Json(json!({"success": true, "id": id})).into_response(),
+        Ok(Err(e)) => Json(json!({"success": false, "error": e.to_string()})).into_response(),
+        Err(e) => Json(json!({"success": false, "error": e.to_string()})).into_response(),
     }
 }
 
-async fn api_delete_device(Path(ip): Path<String>) -> Json<Value> {
+async fn api_delete_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(ip): Path<String>,
+) -> Response {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return err.into_response();
+    }
     let result = tokio::task::spawn_blocking(move || {
         let db = crate::db::Database::open(&crate::db::Database::default_path())?;
         db.delete_device_by_ip(&ip)
@@ -347,9 +361,9 @@ async fn api_delete_device(Path(ip): Path<String>) -> Json<Value> {
     .await;
 
     match result {
-        Ok(Ok(())) => Json(json!({"success": true})),
-        Ok(Err(e)) => Json(json!({"success": false, "error": e.to_string()})),
-        Err(e) => Json(json!({"success": false, "error": e.to_string()})),
+        Ok(Ok(())) => Json(json!({"success": true})).into_response(),
+        Ok(Err(e)) => Json(json!({"success": false, "error": e.to_string()})).into_response(),
+        Err(e) => Json(json!({"success": false, "error": e.to_string()})).into_response(),
     }
 }
 
@@ -970,7 +984,7 @@ fn write_tag_for_vendor(
 
 fn parse_s7_bit_tag(tag: &str) -> Option<(char, u8, u8)> {
     let area = tag.chars().next()?;
-    let rest = &tag[1..];
+    let rest = &tag[area.len_utf8()..]; // correct: skip the actual UTF-8 byte length
     let (byte_s, bit_s) = rest.split_once('.')?;
     Some((area, byte_s.parse().ok()?, bit_s.parse().ok()?))
 }
@@ -1836,7 +1850,14 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
 
 // ─── Port scanner ─────────────────────────────────────────────────────────────
 
-async fn api_portscan(Json(req): Json<PortscanReq>) -> Json<Value> {
+async fn api_portscan(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<PortscanReq>,
+) -> Json<Value> {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return Json(err.1.0);
+    }
     let timeout = req.timeout.clamp(1, 60);
     let mut extra_ports = req.extra_ports;
     extra_ports.truncate(100);
@@ -2027,5 +2048,15 @@ mod tests {
     #[test]
     fn parse_s7_bit_tag_non_numeric_byte_returns_none() {
         assert!(parse_s7_bit_tag("Qx.3").is_none());
+    }
+
+    #[test]
+    fn parse_s7_bit_tag_multibyte_utf8_does_not_panic() {
+        // Regression: &tag[1..] panicked on multi-byte UTF-8 first chars (e.g. 'é' = 2 bytes).
+        // Fix: use &tag[area.len_utf8()..] to skip the correct byte length.
+        // The function only parses format, not area validity — callers validate the area char.
+        // This test verifies no panic occurs; the exact return value is not significant.
+        let _ = parse_s7_bit_tag("é0.5"); // must not panic
+        let _ = parse_s7_bit_tag("中1.2"); // 3-byte UTF-8 char
     }
 }

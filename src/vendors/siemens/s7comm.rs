@@ -151,15 +151,14 @@ pub fn read_all_data(
         );
         let pkt = hex_decode(&pkt_str);
         let Some(resp) = send_recv(&mut stream, &pkt) else { continue };
-        result.insert((*label).to_string(), parse_coil_data(&hex_encode(&resp), label));
+        result.insert((*label).to_string(), parse_coil_data(&hex_encode(&resp)));
     }
 
     result
 }
 
-fn parse_coil_data(s7_hex: &str, label: &str) -> Option<HashMap<String, u8>> {
+fn parse_coil_data(s7_hex: &str) -> Option<HashMap<String, u8>> {
     if s7_hex.len() < 20 || &s7_hex[18..20] != "00" {
-        eprintln!("S7Comm error reading {label}");
         return None;
     }
 

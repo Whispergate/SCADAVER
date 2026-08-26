@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(
     name = "scadaver",
-    version = "1.0.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "Unified ICS Red Team Multi-Tool (Rust)",
     long_about = None,
 )]
@@ -43,19 +43,22 @@ pub struct Args {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum Protocol {
+    Bacnet,
     Beckhoff,
-    Siemens,
-    Schneider,
-    Modbus,
-    Rockwell,
-    Mitsubishi,
-    Omron,
-    Phoenix,
-    Ewon,
-    Snmp,
-    Iec104,
+    Dnp3,
     Enip,
+    Ewon,
+    Iec104,
+    Mitsubishi,
+    Modbus,
     Mqtt,
+    Omron,
+    OpcUa,
+    Phoenix,
+    Rockwell,
+    Schneider,
+    Siemens,
+    Snmp,
 }
 
 #[derive(Subcommand)]
@@ -408,6 +411,21 @@ pub enum RunCmd {
         /// Value returned for all FC1 coil reads (0=OFF, 1=ON)
         #[arg(long, default_value = "0")]
         coil_value: u8,
+    },
+    /// Passive ICS device discovery: ingest a .pcap/.pcapng file or live-capture a network interface
+    Pcap {
+        /// Offline path to a .pcap or .pcapng file to parse
+        #[arg(long)]
+        file: Option<String>,
+        /// Live capture: network interface name (e.g. "Ethernet", "eth0")
+        #[arg(long)]
+        iface: Option<String>,
+        /// Live capture: save captured packets to this .pcap file
+        #[arg(long)]
+        output: Option<String>,
+        /// Live capture: stop after N packets (0 = until Ctrl-C)
+        #[arg(long, default_value = "0")]
+        count: u64,
     },
 }
 
@@ -831,6 +849,96 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
                 }
             }
         }
+        Protocol::Bacnet => {
+            use crate::vendors::bacnet::client;
+            let pb = crate::display::spinner_start(&format!("Scanning BACnet/IP at {ip}…"));
+            let dev = client::scan_ip(ip, timeout);
+            pb.finish_and_clear();
+            match dev {
+                None => crate::display::print_warn("No BACnet device responded."),
+                Some(d) => {
+                    println!("  Instance:  {}", d.instance_id);
+                    println!("  Vendor ID: {}", d.vendor_id);
+                    println!("  Name:      {}", d.object_name);
+                    if !d.vendor_name.is_empty() {
+                        println!("  Vendor:    {}", d.vendor_name);
+                    }
+                    crate::display::print_success("BACnet device responded.");
+                }
+            }
+        }
+        Protocol::Dnp3 => {
+            use std::time::Duration;
+            use crate::vendors::dnp3::client;
+            let pb = crate::display::spinner_start(&format!("Scanning DNP3 at {ip}…"));
+            let dev = client::detect(ip, Duration::from_secs(timeout));
+            pb.finish_and_clear();
+            match dev {
+                None => crate::display::print_warn("No DNP3 outstation responded."),
+                Some(d) => {
+                    println!("  Outstation: 0x{:04x}", d.outstation_addr);
+                    for (k, v) in &d.device_attributes {
+                        println!("  {k}: {v}");
+                    }
+                    crate::display::print_success("DNP3 outstation responded.");
+                }
+            }
+        }
+        Protocol::OpcUa => {
+            use std::time::Duration;
+            use crate::vendors::opcua::client;
+            let opcua_port = if port == 0 { 4840 } else { port };
+            let pb = crate::display::spinner_start(&format!(
+                "Scanning OPC-UA at {ip}:{opcua_port}…"
+            ));
+            let dev = client::detect(ip, opcua_port, Duration::from_secs(timeout));
+            pb.finish_and_clear();
+            match dev {
+                None => crate::display::print_warn("No OPC-UA server responded."),
+                Some(d) => {
+                    println!("  Application: {}", d.application_name);
+                    if !d.application_uri.is_empty() {
+                        println!("  URI:         {}", d.application_uri);
+                    }
+                    println!("  Endpoints:   {}", d.endpoints.len());
+                    crate::display::print_success("OPC-UA server responded.");
+                }
+            }
+        }
+        Protocol::Iec104 => {
+            use crate::vendors::iec104::client;
+            let iec_port = if port == 0 { client::IEC104_PORT } else { port };
+            let pb = crate::display::spinner_start(&format!(
+                "Probing IEC 60870-5-104 at {ip}:{iec_port}…"
+            ));
+            let alive = client::probe(ip, iec_port);
+            pb.finish_and_clear();
+            if alive {
+                crate::display::print_success("IEC 104 outstation responded to TESTFR.");
+            } else {
+                crate::display::print_warn("No IEC 104 outstation responded.");
+            }
+        }
+        Protocol::Modbus => {
+            use crate::vendors::schneider::scan::{self, Transport};
+            let pb =
+                crate::display::spinner_start(&format!("Scanning Modbus TCP at {ip}…"));
+            let devs = scan::scan_ip_with_transport(ip, timeout, false, port, Transport::Tcp)?;
+            pb.finish_and_clear();
+            if devs.is_empty() {
+                crate::display::print_warn("No Modbus TCP device responded.");
+            } else {
+                for d in &devs {
+                    if let Some(name) = &d.name {
+                        println!("  Name:     {name}");
+                    }
+                    if let Some(fw) = &d.firmware {
+                        println!("  Firmware: {fw}");
+                    }
+                }
+                crate::display::print_success(&format!("Found {} Modbus device(s).", devs.len()));
+            }
+        }
         p => {
             crate::display::print_info(&format!(
                 "Use 'get info --protocol {p:?}' for device details."
@@ -919,11 +1027,8 @@ fn run_get(
                 Ok(vals) => {
                     println!("  {:<8}  {:<8}  Hex", "Address", "Dec");
                     for (i, &v) in vals.iter().enumerate() {
-                        println!(
-                            "  DM{:<6}  {:<8}  {v:#06x}",
-                            start + u16::try_from(i).unwrap_or(u16::MAX),
-                            v
-                        );
+                        let addr = u32::from(start) + u32::try_from(i).unwrap_or(u32::MAX);
+                        println!("  DM{addr:<6}  {v:<8}  {v:#06x}");
                     }
                     crate::display::print_success(&format!("{} word(s).", vals.len()));
                 }
@@ -1155,6 +1260,7 @@ fn run_get(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Result<()> {
     match proto {
         Some(Protocol::Siemens) => {
@@ -1248,6 +1354,119 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
                     }
                 }
                 Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+        Some(Protocol::Bacnet) => {
+            use crate::vendors::bacnet::client;
+            let pb = crate::display::spinner_start(&format!("Querying BACnet/IP at {ip}…"));
+            let dev = client::scan_ip(ip, timeout);
+            pb.finish_and_clear();
+            let Some(d) = dev else {
+                crate::display::print_error("No BACnet device found.");
+                return Ok(());
+            };
+            println!("  Instance:  {}", d.instance_id);
+            println!("  Vendor ID: {}", d.vendor_id);
+            println!("  Max APDU:  {}", d.max_apdu);
+            println!("  Name:      {}", d.object_name);
+            if !d.vendor_name.is_empty() {
+                println!("  Vendor:    {}", d.vendor_name);
+            }
+            if !d.description.is_empty() {
+                println!("  Desc:      {}", d.description);
+            }
+            if !d.firmware_revision.is_empty() {
+                println!("  Firmware:  {}", d.firmware_revision);
+            }
+        }
+        Some(Protocol::Dnp3) => {
+            use std::time::Duration;
+            use crate::vendors::dnp3::client;
+            let pb = crate::display::spinner_start(&format!("Querying DNP3 at {ip}…"));
+            let dev = client::detect(ip, Duration::from_secs(timeout));
+            pb.finish_and_clear();
+            let Some(d) = dev else {
+                crate::display::print_error("No DNP3 outstation found.");
+                return Ok(());
+            };
+            println!("  Outstation: 0x{:04x}", d.outstation_addr);
+            for (k, v) in &d.device_attributes {
+                println!("  {k}: {v}");
+            }
+        }
+        Some(Protocol::OpcUa) => {
+            use std::time::Duration;
+            use crate::vendors::opcua::client;
+            let opcua_port = if port == 0 { 4840 } else { port };
+            let pb = crate::display::spinner_start(&format!(
+                "Querying OPC-UA server at {ip}:{opcua_port}…"
+            ));
+            let dev = client::detect(ip, opcua_port, Duration::from_secs(timeout));
+            pb.finish_and_clear();
+            let Some(d) = dev else {
+                crate::display::print_error("No OPC-UA server found.");
+                return Ok(());
+            };
+            println!("  Application: {}", d.application_name);
+            if !d.application_uri.is_empty() {
+                println!("  URI:         {}", d.application_uri);
+            }
+            if !d.product_uri.is_empty() {
+                println!("  Product URI: {}", d.product_uri);
+            }
+            println!("  Endpoints:   {}", d.endpoints.len());
+        }
+        Some(Protocol::Iec104) => {
+            use crate::vendors::iec104::client;
+            let iec_port = if port == 0 { client::IEC104_PORT } else { port };
+            let pb = crate::display::spinner_start(&format!(
+                "Querying IEC 60870-5-104 at {ip}:{iec_port}…"
+            ));
+            let session = client::connect(ip, iec_port);
+            pb.finish_and_clear();
+            let mut session = match session {
+                Ok(s) => s,
+                Err(e) => {
+                    crate::display::print_error(&format!("IEC 104 connection failed: {e}"));
+                    return Ok(());
+                }
+            };
+            match client::general_interrogation(&mut session) {
+                Ok(objs) => {
+                    println!("  Port:    {iec_port}");
+                    println!("  Objects: {}", objs.len());
+                    for obj in objs.iter().take(5) {
+                        println!("  IOA {:>6}: {}", obj.ioa, obj.decoded);
+                    }
+                    if objs.len() > 5 {
+                        println!("  … and {} more", objs.len() - 5);
+                    }
+                }
+                Err(e) => {
+                    crate::display::print_error(&format!("General interrogation failed: {e}"));
+                }
+            }
+        }
+        Some(Protocol::Modbus) => {
+            use crate::vendors::schneider::scan::{self, Transport};
+            let pb =
+                crate::display::spinner_start(&format!("Querying Modbus TCP at {ip}…"));
+            let devs = scan::scan_ip_with_transport(ip, timeout, false, port, Transport::Tcp)?;
+            pb.finish_and_clear();
+            if devs.is_empty() {
+                crate::display::print_error("No Modbus TCP device responded.");
+            } else {
+                for d in &devs {
+                    if let Some(name) = &d.name {
+                        println!("  Name:     {name}");
+                    }
+                    if let Some(fw) = &d.firmware {
+                        println!("  Firmware: {fw}");
+                    }
+                    if let Some(uid) = d.modbus_unit_id {
+                        println!("  Unit ID:  {uid}");
+                    }
+                }
             }
         }
         Some(p) => bail!("{p:?} does not support 'get info'"),
@@ -1445,7 +1664,13 @@ fn run_set(
         }
         SetNoun::Coil { address, state } => {
             use crate::vendors::schneider::modbus;
-            let on = !state.eq_ignore_ascii_case("off");
+            let on = if state.eq_ignore_ascii_case("on") {
+                true
+            } else if state.eq_ignore_ascii_case("off") {
+                false
+            } else {
+                anyhow::bail!("Unknown coil state '{state}': use 'on' or 'off'");
+            };
             crate::display::print_info(&format!(
                 "Writing coil {address} = {} on {ip}…",
                 if on { "ON" } else { "OFF" }
@@ -1594,7 +1819,13 @@ fn run_set(
         SetNoun::Sc { ioa, state } => {
             use crate::vendors::iec104::client;
             let iec_port = if port == 0 { 2404 } else { port };
-            let on = !state.eq_ignore_ascii_case("off");
+            let on = if state.eq_ignore_ascii_case("on") {
+                true
+            } else if state.eq_ignore_ascii_case("off") {
+                false
+            } else {
+                anyhow::bail!("Unknown single-command state '{state}': use 'on' or 'off'");
+            };
             let mut sess = client::connect(ip, iec_port)?;
             match client::single_command(&mut sess, ioa, on) {
                 Ok(true) => crate::display::print_success(&format!(
@@ -1630,6 +1861,7 @@ fn run_set(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn set_state(
     ip: &str,
     port: u16,
@@ -1674,7 +1906,16 @@ fn set_state(
         Some(Protocol::Omron) => {
             use crate::vendors::omron::fins;
             let fins_port = if port == 0 { 9600 } else { port };
-            let run = !state.eq_ignore_ascii_case("stop");
+            let run = if state.eq_ignore_ascii_case("run") {
+                true
+            } else if state.eq_ignore_ascii_case("stop") {
+                false
+            } else {
+                crate::display::print_error(&format!(
+                    "Unknown state '{state}': use 'run' or 'stop'."
+                ));
+                return Ok(());
+            };
             match fins::set_cpu_mode(ip, fins_port, 0, run) {
                 Ok(true) => crate::display::print_success(&format!("CPU set to {state}.")),
                 Ok(false) => crate::display::print_warn("FINS error: mode change rejected."),
@@ -2071,6 +2312,30 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
         }
         // ModbusServer is handled before run_run() in the Verb::Run dispatch.
         RunCmd::ModbusServer { .. } => unreachable!(),
+        RunCmd::Pcap { file, iface, output, count } => {
+            use crate::core::capture;
+            match file {
+                Some(path) => {
+                    let obs = capture::ingest_file(&path)?;
+                    capture::print_table(&obs);
+                }
+                None => {
+                    #[cfg(feature = "capture")]
+                    {
+                        capture::live_capture(iface.as_deref(), output.as_deref(), count)?;
+                    }
+                    #[cfg(not(feature = "capture"))]
+                    {
+                        let _ = (iface, output, count);
+                        anyhow::bail!(
+                            "Live capture requires Npcap and the 'capture' feature.\n\
+                             Rebuild with: cargo build --features capture\n\
+                             Npcap download: https://npcap.com/"
+                        );
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -2177,8 +2442,41 @@ fn hex_encode(b: &[u8]) -> String {
 
 fn parse_hex(s: &str) -> Vec<u8> {
     let s = s.trim().trim_start_matches("0x");
+    if !s.len().is_multiple_of(2) {
+        return vec![];
+    }
     s.as_bytes()
         .chunks(2)
         .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_hex;
+
+    #[test]
+    fn parse_hex_odd_length_returns_empty() {
+        // Regression: odd-length input "abc" previously produced [0xab, 0x0c] because
+        // .chunks(2) on "abc" yields ["ab", "c"] and "c" parses as 0x0c.
+        // Fix: reject any input whose stripped length is not a multiple of 2.
+        assert!(parse_hex("abc").is_empty(), "odd 3-char hex must be rejected");
+        assert!(parse_hex("a").is_empty(), "single nibble must be rejected");
+        assert!(parse_hex("abcde").is_empty(), "odd 5-char hex must be rejected");
+        assert!(parse_hex("0xabc").is_empty(), "0x-prefixed odd hex must be rejected");
+    }
+
+    #[test]
+    fn parse_hex_even_length_parses_correctly() {
+        assert_eq!(parse_hex("abcd"), vec![0xab, 0xcd]);
+        assert_eq!(parse_hex("0x0102"), vec![0x01, 0x02]);
+        assert_eq!(parse_hex("ff00"), vec![0xff, 0x00]);
+    }
+
+    #[test]
+    fn parse_hex_empty_returns_empty() {
+        assert!(parse_hex("").is_empty());
+        assert!(parse_hex("0x").is_empty());
+        assert!(parse_hex("   ").is_empty());
+    }
 }

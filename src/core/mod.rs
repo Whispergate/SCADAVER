@@ -1,4 +1,5 @@
 pub mod autodetect;
+pub mod capture;
 pub mod bytes;
 pub mod httpcreds;
 pub mod modbus;

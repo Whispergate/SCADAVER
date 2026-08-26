@@ -25,12 +25,16 @@ pub fn run_shell(host: Option<&str>, port: u16) -> Result<()> {
     println!("  Type 'help' at any prompt.  'exit' exits the current level.");
     println!();
 
+    let cfg = crate::config::load();
     let mut ms = MainState::default();
     let mut cs = ConnState::default();
+    if let Some(p) = cfg.mqtt.port {
+        cs.port = p;
+    }
     if let Some(h) = host {
         cs.host = h.to_string();
     }
-    if port != 0 && port != 1883 {
+    if port != 0 {
         cs.port = port;
     }
     main_console(&mut ms, &mut cs)
@@ -66,6 +70,7 @@ impl Default for ConnState {
 
 impl ConnState {
     fn to_connect_options(&self, ms: &MainState) -> ConnectOptions {
+        let cfg = crate::config::load();
         ConnectOptions {
             host: self.host.clone(),
             port: self.port,
@@ -75,6 +80,7 @@ impl ConnState {
             username: self.username.clone(),
             password: self.password.clone(),
             will: self.will.clone(),
+            tls: cfg.mqtt.tls.unwrap_or(false),
             ..ConnectOptions::default()
         }
     }

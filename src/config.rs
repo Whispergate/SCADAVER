@@ -6,8 +6,6 @@ use std::path::PathBuf;
 pub struct ConfigFile {
     #[serde(default)] pub defaults: DefaultsConfig,
     #[serde(default)] pub web: WebConfig,
-    // Consumed by MQTT TLS feature (session.rs integration pending).
-    #[allow(dead_code)]
     #[serde(default)] pub mqtt: MqttConfig,
 }
 
@@ -29,8 +27,6 @@ pub struct WebConfig {
     pub api_key: Option<String>,
 }
 
-// Fields consumed by the MQTT TLS feature (session.rs integration pending).
-#[allow(dead_code)]
 #[derive(Deserialize, Default)]
 pub struct MqttConfig {
     /// Default MQTT broker port (default: 1883)

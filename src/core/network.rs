@@ -101,7 +101,7 @@ pub fn create_udp_broadcast_socket(bind_ip: &str, timeout_secs: u64) -> Result<U
     let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     sock.set_reuse_address(true)?;
     sock.set_broadcast(true)?;
-    sock.set_read_timeout(Some(Duration::from_secs(timeout_secs)))?;
+    sock.set_read_timeout(Some(Duration::from_secs(timeout_secs.max(1))))?;
 
     let bind_addr: SocketAddr = SocketAddr::new(bind_ip.parse::<Ipv4Addr>()?.into(), 0);
     sock.bind(&bind_addr.into())?;

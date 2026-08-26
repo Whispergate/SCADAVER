@@ -68,3 +68,13 @@ fn loopback_snmp_get_sys_descr() {
     assert!(result.is_ok(), "GET sysDescr.0 should succeed: {:?}", result.err());
     assert_eq!(result.unwrap().display(), "scadaver CI");
 }
+
+#[test]
+fn snmp_no_response_returns_err() {
+    let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = sock.local_addr().unwrap().port();
+    // No mock — nobody calls recv_from. Client must return Err, not panic or hang forever.
+    let result = client::get("127.0.0.1", port, "public", oids::SYS_DESCR);
+    assert!(result.is_err(), "SNMP GET with no response must return Err, got: {:?}", result.ok());
+    drop(sock);
+}

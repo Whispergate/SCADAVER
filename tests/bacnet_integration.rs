@@ -6,6 +6,8 @@ use std::thread;
 use std::time::Duration;
 use scadaver::vendors::bacnet::client::{self, scan_ip, BACNET_PORT, PROP_OBJECT_NAME};
 
+static BACNET_PORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // Static I-Am response: device instance 1, vendor-id 5, max-APDU 480.
 // Bytes verified against parse_i_am_valid_packet unit test in client.rs.
 const I_AM_RESPONSE: &[u8] = &[
@@ -74,6 +76,7 @@ fn bacnet_port_constant() {
 
 #[test]
 fn loopback_bacnet_scan_ip_returns_device() {
+    let _lock = BACNET_PORT_LOCK.lock().unwrap();
     // client hardcodes BACNET_PORT — must bind same port; skip if busy
     let sock = match UdpSocket::bind("127.0.0.1:47808") {
         Ok(s) => s,
@@ -90,10 +93,14 @@ fn loopback_bacnet_scan_ip_returns_device() {
     assert_eq!(dev.instance_id, 1);
     assert_eq!(dev.vendor_id, 5);
     assert_eq!(dev.object_name, "ci");
+    assert_eq!(dev.vendor_name, "ci");
+    assert_eq!(dev.description, "ci");
+    assert_eq!(dev.firmware_revision, "ci");
 }
 
 #[test]
 fn loopback_bacnet_read_object_name() {
+    let _lock = BACNET_PORT_LOCK.lock().unwrap();
     let sock = match UdpSocket::bind("127.0.0.1:47808") {
         Ok(s) => s,
         Err(_) => return,
@@ -109,4 +116,16 @@ fn loopback_bacnet_read_object_name() {
     let name = client::read_property("127.0.0.1", dev.instance_id, PROP_OBJECT_NAME, Duration::from_secs(2));
     assert!(name.is_some(), "read_property(object-name) should return a value");
     assert_eq!(name.unwrap(), "ci");
+}
+
+#[test]
+fn loopback_bacnet_no_response_returns_none() {
+    let _lock = BACNET_PORT_LOCK.lock().unwrap();
+    let _sock = match UdpSocket::bind("127.0.0.1:47808") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    // Port is bound but no mock thread spawned — client must time out cleanly.
+    let result = scan_ip("127.0.0.1", 1);
+    assert!(result.is_none(), "BACnet scan_ip with no response must return None");
 }

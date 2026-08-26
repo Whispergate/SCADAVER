@@ -90,7 +90,13 @@ pub fn get_device_info(
 
         match result {
             Ok(resp) => {
-                let data = resp.into_string().unwrap_or_default();
+                let data = match resp.into_string() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        println!("Error reading response for user '{user}': {e}");
+                        continue;
+                    }
+                };
                 let parts: Vec<&str> = data.split(';').collect();
                 let state_map = |s: &str| match s {
                     "0" => "ERROR",

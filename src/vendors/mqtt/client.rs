@@ -149,9 +149,16 @@ fn read_sys_publish(stream: &mut TcpStream) -> Option<String> {
 
         let remaining_len = decode_remaining_length(stream).ok()?;
         if remaining_len > 4096 {
-            // Drain to keep stream in sync before returning.
-            let mut discard = vec![0u8; remaining_len.min(4096)];
-            let _ = stream.read_exact(&mut discard);
+            // Drain all bytes in 4096-byte chunks to keep the stream in sync.
+            let mut drained = 0;
+            let mut discard = [0u8; 4096];
+            while drained < remaining_len {
+                let chunk = (remaining_len - drained).min(4096);
+                if stream.read_exact(&mut discard[..chunk]).is_err() {
+                    break;
+                }
+                drained += chunk;
+            }
             return None;
         }
         let mut body = vec![0u8; remaining_len];
@@ -196,9 +203,16 @@ fn probe_sparkplug(stream: &mut TcpStream) -> bool {
         let packet_type = (type_byte[0] >> 4) & 0x0F;
         let Ok(remaining_len) = decode_remaining_length(stream) else { return false };
         if remaining_len > 4096 {
-            // Drain to keep stream in sync before returning.
-            let mut discard = vec![0u8; remaining_len.min(4096)];
-            let _ = stream.read_exact(&mut discard);
+            // Drain all bytes in 4096-byte chunks to keep the stream in sync.
+            let mut drained = 0;
+            let mut discard = [0u8; 4096];
+            while drained < remaining_len {
+                let chunk = (remaining_len - drained).min(4096);
+                if stream.read_exact(&mut discard[..chunk]).is_err() {
+                    break;
+                }
+                drained += chunk;
+            }
             return false;
         }
         let mut body = vec![0u8; remaining_len];
