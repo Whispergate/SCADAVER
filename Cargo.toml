@@ -13,6 +13,7 @@ repository = "https://github.com/Whispergate/SCADAVER"
 keywords = ["ics", "scada", "pentest", "modbus", "redteam"]
 categories = ["network-programming", "command-line-utilities"]
 license-file = "LICENSE"
+exclude = ["tests/"]
 readme = "README.md"
 
 [[bin]]
