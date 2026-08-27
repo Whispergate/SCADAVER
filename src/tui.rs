@@ -8387,6 +8387,7 @@ mod tests {
             tag_write_ip: String::new(),
             tag_write_port: 0,
             tag_write_vendor: String::new(),
+            tag_write_pending: false,
             scan_timestamp: None,
             output_from_cache: false,
             pending_tag_write: None,
