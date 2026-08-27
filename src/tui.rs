@@ -34,6 +34,7 @@ enum ScanEvent {
     MqttLine(String),
     MqttDone(String),
     CredFound { ip: String, username: String, password: String },
+    TagLeaves { ip: String, port: u16, vendor: String, leaves: Vec<(String, bool)> },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -563,6 +564,7 @@ enum Mode {
     Help,
     References,
     OutputZoom,
+    CacheRescanPrompt,
     MqttMonitor,
     MqttClientIdInput,
     MqttCredInput,
@@ -583,6 +585,22 @@ impl Default for MqttConnSettings {
     }
 }
 
+/// Saved output state for one device — swapped in/out as the selection changes.
+#[derive(Default)]
+struct DeviceOutput {
+    output_lines: Vec<String>,
+    output_scroll: usize,
+    tag_leaves: Vec<(String, bool)>,
+    tag_leaf_line_indices: Vec<(usize, usize)>,
+    output_leaf_cursor: Option<usize>,
+    output_line_backup: Option<Vec<String>>,
+    tag_write_ip: String,
+    tag_write_port: u16,
+    tag_write_vendor: String,
+    scan_timestamp: Option<std::time::Instant>,
+}
+
+#[allow(clippy::struct_excessive_bools)]
 struct App {
     devices: Vec<DeviceRecord>,
     list_state: ListState,
@@ -624,6 +642,19 @@ struct App {
     mqtt_conn: MqttConnSettings,
     wordlist_path: Option<String>,
     export_format: ExportFormat,
+    tag_leaves: Vec<(String, bool)>,
+    tag_leaf_line_indices: Vec<(usize, usize)>,
+    tag_write_ip: String,
+    tag_write_port: u16,
+    tag_write_vendor: String,
+    output_leaf_cursor: Option<usize>,
+    tag_write_pending: bool,
+    output_from_cache: bool,
+    scan_timestamp: Option<std::time::Instant>,
+    output_line_backup: Option<Vec<String>>,
+    pending_tag_write: Option<(String, bool)>,
+    per_device_output: std::collections::HashMap<String, DeviceOutput>,
+    current_output_ip: String,
 }
 
 impl App {
@@ -677,6 +708,19 @@ impl App {
             mqtt_conn: MqttConnSettings::default(),
             wordlist_path: None,
             export_format: ExportFormat::default(),
+            tag_leaves: Vec::new(),
+            tag_write_ip: String::new(),
+            tag_write_port: 0,
+            tag_write_vendor: String::new(),
+            output_leaf_cursor: None,
+            tag_leaf_line_indices: Vec::new(),
+            tag_write_pending: false,
+            output_from_cache: false,
+            scan_timestamp: None,
+            output_line_backup: None,
+            pending_tag_write: None,
+            per_device_output: std::collections::HashMap::new(),
+            current_output_ip: String::new(),
         }
     }
 
@@ -831,7 +875,7 @@ impl App {
                     self.active_jobs = self.active_jobs.saturating_sub(1);
                 }
                 ScanEvent::Output(line) => {
-                    if self.output_lines.len() >= 500 {
+                    if self.output_lines.len() >= 100_000 {
                         self.output_lines.remove(0);
                     }
                     self.output_lines.push(line);
@@ -854,7 +898,93 @@ impl App {
                     }
                     self.output_lines.push(format!("[+] Credentials saved for {ip}: {username}"));
                 }
+                ScanEvent::TagLeaves { ip, port, vendor, leaves } => {
+                    self.output_from_cache = false;
+                    self.output_line_backup = None;
+                    self.scan_timestamp = Some(std::time::Instant::now());
+                    self.tag_write_ip = ip.clone();
+                    self.tag_write_port = port;
+                    self.tag_write_vendor = vendor.clone();
+                    self.tag_leaves = leaves;
+                    // Persist struct member leaves (dotted paths) for offline Overview expansion.
+                    let members: Vec<(&str, bool)> = self.tag_leaves
+                        .iter()
+                        .filter(|(p, _)| p.contains('.'))
+                        .map(|(p, w)| (p.as_str(), *w))
+                        .collect();
+                    if !members.is_empty() {
+                        let _ = db.upsert_members(&ip, &members);
+                    }
+                    self.tag_leaf_line_indices =
+                        build_leaf_line_indices(&self.output_lines, &self.tag_leaves);
+                    self.output_leaf_cursor =
+                        if self.tag_leaf_line_indices.is_empty() { None } else { Some(0) };
+                    if let Some(&(first_line, _)) = self.tag_leaf_line_indices.first() {
+                        self.scroll_to_output_line(first_line);
+                    }
+                    // Persist output so it survives device-list navigation.
+                    self.current_output_ip = ip.clone();
+                    self.per_device_output.insert(ip, DeviceOutput {
+                        output_lines: self.output_lines.clone(),
+                        output_scroll: self.output_scroll,
+                        tag_leaves: self.tag_leaves.clone(),
+                        tag_leaf_line_indices: self.tag_leaf_line_indices.clone(),
+                        output_leaf_cursor: self.output_leaf_cursor,
+                        output_line_backup: None,
+                        tag_write_ip: self.tag_write_ip.clone(),
+                        tag_write_port: self.tag_write_port,
+                        tag_write_vendor: self.tag_write_vendor.clone(),
+                        scan_timestamp: self.scan_timestamp,
+                    });
+                }
             }
+        }
+    }
+
+    /// Swap output buffers when the selected device changes so each device's
+    /// previous scan results are instantly visible without re-running exploits.
+    fn sync_device_output(&mut self) {
+        let selected_ip = self
+            .selected_device()
+            .map(|d| d.ip.clone())
+            .unwrap_or_default();
+        if selected_ip == self.current_output_ip {
+            return;
+        }
+        // Save current output to the old device's slot.
+        let old_ip = std::mem::take(&mut self.current_output_ip);
+        if !old_ip.is_empty() {
+            self.per_device_output.insert(old_ip, DeviceOutput {
+                output_lines: std::mem::take(&mut self.output_lines),
+                output_scroll: std::mem::replace(&mut self.output_scroll, 0),
+                tag_leaves: std::mem::take(&mut self.tag_leaves),
+                tag_leaf_line_indices: std::mem::take(&mut self.tag_leaf_line_indices),
+                output_leaf_cursor: self.output_leaf_cursor.take(),
+                output_line_backup: self.output_line_backup.take(),
+                tag_write_ip: std::mem::take(&mut self.tag_write_ip),
+                tag_write_port: std::mem::replace(&mut self.tag_write_port, 0),
+                tag_write_vendor: std::mem::take(&mut self.tag_write_vendor),
+                scan_timestamp: std::mem::take(&mut self.scan_timestamp),
+            });
+        }
+        self.current_output_ip = selected_ip.clone();
+        // Restore the new device's output if we have a snapshot.
+        if let Some(cached) = self.per_device_output.remove(&selected_ip) {
+            self.output_lines = cached.output_lines;
+            self.output_scroll = cached.output_scroll;
+            self.tag_leaves = cached.tag_leaves;
+            self.tag_leaf_line_indices = cached.tag_leaf_line_indices;
+            self.output_leaf_cursor = cached.output_leaf_cursor;
+            self.output_line_backup = cached.output_line_backup;
+            self.tag_write_ip = cached.tag_write_ip;
+            self.tag_write_port = cached.tag_write_port;
+            self.tag_write_vendor = cached.tag_write_vendor;
+            self.scan_timestamp = cached.scan_timestamp;
+            self.output_from_cache = !self.tag_leaves.is_empty();
+        } else {
+            self.output_from_cache = false;
+            // No cached output — auto-load DB overview so the panel isn't blank.
+            maybe_auto_load_tags(self);
         }
     }
 
@@ -930,7 +1060,12 @@ impl App {
             self.exploit_sel = 0;
             self.exploit_list_state = ListState::default();
             self.exploit_list_state.select(Some(0));
-            self.mode = Mode::ExploitMenu;
+            if vendor == "multi" {
+                self.vendor_pick_sel = 0;
+                self.mode = Mode::VendorPicker;
+            } else {
+                self.mode = Mode::ExploitMenu;
+            }
         }
     }
 
@@ -952,6 +1087,33 @@ impl App {
 
     fn exit_zoom(&mut self) {
         self.mode = self.zoom_from.clone();
+    }
+
+    fn scroll_to_output_line(&mut self, line_idx: usize) {
+        let total = self.output_lines.len();
+        let end = (line_idx + 1).min(total);
+        self.output_scroll = total.saturating_sub(end);
+    }
+
+    fn leaf_cursor_next(&mut self) {
+        if let Some(n) = self.output_leaf_cursor {
+            let max = self.tag_leaf_line_indices.len().saturating_sub(1);
+            let new_n = (n + 1).min(max);
+            self.output_leaf_cursor = Some(new_n);
+            if let Some(&(li, _)) = self.tag_leaf_line_indices.get(new_n) {
+                self.scroll_to_output_line(li);
+            }
+        }
+    }
+
+    fn leaf_cursor_prev(&mut self) {
+        if let Some(n) = self.output_leaf_cursor {
+            let new_n = n.saturating_sub(1);
+            self.output_leaf_cursor = Some(new_n);
+            if let Some(&(li, _)) = self.tag_leaf_line_indices.get(new_n) {
+                self.scroll_to_output_line(li);
+            }
+        }
     }
 }
 
@@ -1563,7 +1725,9 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
                 port,
                 schneider_transport(transport),
             ) {
-                if let Some(dev) = devs.into_iter().next() {
+                if let Some(dev) = devs.into_iter().find(|d| {
+                    d.identity_match || d.name.is_some() || d.firmware.is_some()
+                }) {
                     let name = dev
                         .name
                         .clone()
@@ -1822,16 +1986,36 @@ fn scan_broadcast_ewon(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
 
 // ─── Exploit runners ─────────────────────────────────────────────────────────
 
+/// Classify a Rockwell tag by its I/O suffix.
+/// Returns "Input", "Output", "Config", or "User".
+fn tag_access_class(name: &str) -> &'static str {
+    if let Some(pos) = name.rfind(':') {
+        let suffix = &name[pos + 1..];
+        let mut chars = suffix.chars();
+        let first = chars.next().unwrap_or('_');
+        let rest_digits = chars.all(|c| c.is_ascii_digit());
+        if rest_digits {
+            match first {
+                'I' => return "Input",
+                'O' => return "Output",
+                'C' => return "Config",
+                _ => {}
+            }
+        }
+    }
+    "User"
+}
+
 /// Column header + rule for the Rockwell tag table.
 fn tag_header() -> [String; 2] {
     [
         format!(
-            "  {:>6}  {:<42}  {:<14}  {:<4}  {:<18}  {}",
-            "#", "Name", "Type", "Dims", "Value", "Type Word"
+            "  {:>6}  {:<42}  {:<14}  {:<4}  {:<18}  {:<9}  {}",
+            "#", "Name", "Type", "Dims", "Value", "Type Word", "Access"
         ),
         format!(
-            "  {:─>6}  {:─<42}  {:─<14}  {:─<4}  {:─<18}  {:─<9}",
-            "", "", "", "", "", ""
+            "  {:─>6}  {:─<42}  {:─<14}  {:─<4}  {:─<18}  {:─<9}  {:─<6}",
+            "", "", "", "", "", "", ""
         ),
     ]
 }
@@ -1850,9 +2034,14 @@ fn fmt_tag_row(
     value: &str,
     raw: i64,
 ) -> String {
+    let access = tag_access_class(name);
     format!(
-        "  {instance_id:>6}  {name:<42}  {base:<14}  {dims:<4}  {value:<18}  0x{raw:04x}"
+        "  {instance_id:>6}  {name:<42}  {base:<14}  {dims:<4}  {value:<18}  0x{raw:04x}  {access:<6}"
     )
+}
+
+fn fmt_leaf_row(member_name: &str, value: &str, pad: usize) -> String {
+    format!("           {member_name:<pad$}  {value}")
 }
 
 fn run_exploit_for(
@@ -1919,7 +2108,15 @@ fn dispatch_exploit(
         ("phoenix", 4) => exploit_phoenix_info(ip, port, &out),
         ("ewon", 0) => exploit_ewon_creds(ip, port, input, &out),
         ("rockwell" | "enip", 0) => exploit_rockwell_identity(ip, port, &out),
-        ("rockwell" | "enip", 1) => exploit_rockwell_tags(ip, port, &out),
+        ("rockwell" | "enip", 1) => {
+            let leaves = exploit_rockwell_tags(ip, port, &out);
+            let _ = tx.send(ScanEvent::TagLeaves {
+                ip: ip.to_string(),
+                port,
+                vendor: vendor.to_string(),
+                leaves,
+            });
+        }
         ("rockwell" | "enip", 2) => exploit_rockwell_read(ip, port, input, &out),
         ("rockwell" | "enip", 3) => exploit_rockwell_write(ip, port, input, &out),
         ("mitsubishi", 0) => exploit_mitsubishi_info(ip, &out),
@@ -2506,16 +2703,17 @@ fn exploit_rockwell_identity(ip: &str, port: u16, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
+fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) -> Vec<(String, bool)> {
     use crate::vendors::rockwell::driver;
     use std::collections::HashMap;
 
+    let mut leaves_out: Vec<(String, bool)> = Vec::new();
     out(&format!("[*] Enumerating tags on {ip}..."));
     let tags = match driver::enumerate_tags(ip, port) {
         Ok(t) => t,
         Err(e) => {
             out(&format!("[-] {e}"));
-            return;
+            return leaves_out;
         }
     };
     out(&format!(
@@ -2529,7 +2727,7 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
     // Bulk-read all scalar (non-array, non-struct) tags in one session
     let scalar_names: Vec<&str> = tags
         .iter()
-        .filter(|t| t.tag_type & 0x8000 == 0 && t.dimensions == 0)
+        .filter(|t| !driver::is_struct_like(t.tag_type) && t.dimensions == 0)
         .map(|t| t.name.as_str())
         .collect();
     let raw_values = driver::read_tags_bulk(ip, port, &scalar_names);
@@ -2554,7 +2752,7 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
     // Bulk-read element [0] for 1D non-struct arrays
     let array1d_tags: Vec<(&str, u16)> = tags
         .iter()
-        .filter(|t| t.tag_type & 0x8000 == 0 && t.dimensions == 1)
+        .filter(|t| !driver::is_struct_like(t.tag_type) && t.dimensions == 1)
         .map(|t| (t.name.as_str(), t.tag_type))
         .collect();
     let array1d_subscript_names: Vec<String> = array1d_tags
@@ -2578,24 +2776,18 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
         })
         .collect();
 
-    // Bulk-read scalar struct tags and decode with templates
+    // Bulk-read scalar struct tags — keep raw bytes for flatten_struct expansion
     let struct_tags: Vec<(&str, u16)> = tags
         .iter()
-        .filter(|t| t.tag_type & 0x8000 != 0 && t.dimensions == 0)
+        .filter(|t| driver::is_struct_like(t.tag_type) && t.dimensions == 0)
         .map(|t| (t.name.as_str(), t.tag_type))
         .collect();
     let struct_names: Vec<&str> = struct_tags.iter().map(|(n, _)| *n).collect();
     let struct_raw = driver::read_tags_bulk(ip, port, &struct_names);
-    let struct_map: HashMap<&str, String> = struct_tags
+    let struct_raw_map: HashMap<&str, Vec<u8>> = struct_tags
         .iter()
         .zip(struct_raw.iter())
-        .map(|((name, tag_type), opt)| {
-            let val = match opt {
-                Some(data) => driver::decode_value(*tag_type, data, Some(&templates)),
-                None => driver::type_name(*tag_type),
-            };
-            (*name, val)
-        })
+        .filter_map(|((name, _), opt)| opt.as_ref().map(|data| (*name, data.clone())))
         .collect();
 
     let [hdr, sep] = tag_header();
@@ -2603,36 +2795,78 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
     out(&sep);
     for t in &tags {
         let (base, dims) = driver::type_parts(t.tag_type);
-        let value = if t.tag_type & 0x8000 != 0 {
-            struct_map
-                .get(t.name.as_str())
-                .cloned()
-                .unwrap_or_else(|| driver::type_name(t.tag_type))
-        } else if t.dimensions == 1 {
-            array1d_map
-                .get(t.name.as_str())
-                .cloned()
-                .unwrap_or_else(|| "[array]".to_string())
-        } else if t.dimensions > 1 {
-            format!("[{}D array]", t.dimensions)
+        if driver::is_struct_like(t.tag_type) && t.dimensions == 0 {
+            let template_id = t.tag_type & 0x0FFF;
+            if let Some(raw) = struct_raw_map.get(t.name.as_str()) {
+                let body = driver::struct_body(raw);
+                let leaves = driver::flatten_struct(body, template_id, Some(&templates));
+                if leaves.is_empty() {
+                    out(&fmt_tag_row(
+                        i64::from(t.instance_id),
+                        &t.name,
+                        &base,
+                        dims,
+                        &driver::type_name(t.tag_type),
+                        i64::from(t.tag_type),
+                    ));
+                } else {
+                    out(&fmt_tag_row(
+                        i64::from(t.instance_id),
+                        &t.name,
+                        &base,
+                        dims,
+                        "",
+                        i64::from(t.tag_type),
+                    ));
+                    let pad = leaves
+                        .iter()
+                        .map(|l| l.path.len() + 1)
+                        .max()
+                        .unwrap_or(10);
+                    for leaf in &leaves {
+                        out(&fmt_leaf_row(&format!(".{}", leaf.path), &leaf.value, pad));
+                        leaves_out.push((format!("{}.{}", t.name, leaf.path), leaf.writable));
+                    }
+                }
+            } else {
+                out(&fmt_tag_row(
+                    i64::from(t.instance_id),
+                    &t.name,
+                    &base,
+                    dims,
+                    &driver::type_name(t.tag_type),
+                    i64::from(t.tag_type),
+                ));
+            }
         } else {
-            value_map
-                .get(t.name.as_str())
-                .cloned()
-                .unwrap_or_else(|| "-".to_string())
-        };
-        out(&fmt_tag_row(
-            i64::from(t.instance_id),
-            &t.name,
-            &base,
-            dims,
-            &value,
-            i64::from(t.tag_type),
-        ));
+            let value = match t.dimensions {
+                1 => array1d_map
+                    .get(t.name.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| "[array]".to_string()),
+                2.. => format!("[{}D array]", t.dimensions),
+                _ => value_map
+                    .get(t.name.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| "-".to_string()),
+            };
+            out(&fmt_tag_row(
+                i64::from(t.instance_id),
+                &t.name,
+                &base,
+                dims,
+                &value,
+                i64::from(t.tag_type),
+            ));
+            if t.dimensions == 0 && driver::is_writable_type(t.tag_type) {
+                leaves_out.push((t.name.clone(), true));
+            }
+        }
     }
     out(&sep);
     out(&format!("[+] {} tag(s)", tags.len()));
     save_tags_and_diff(ip, &tags, out);
+    leaves_out
 }
 
 fn save_tags_and_diff(
@@ -2644,9 +2878,21 @@ fn save_tags_and_diff(
     use crate::vendors::rockwell::driver;
     match Database::open(&Database::default_path()) {
         Ok(db) => {
+            // Normalize BOOL bit-position variants (low byte 0x00..0x1F = bit N of a word)
+            // to the standard BOOL code 0xC1 so that scan-to-scan encoding variations
+            // (PLC sometimes returns bit-offset form, sometimes the canonical form) don't
+            // produce spurious [~CHG] diffs.
             let data: Vec<(i64, &str, i64)> = tags
                 .iter()
-                .map(|t| (i64::from(t.instance_id), t.name.as_str(), i64::from(t.tag_type)))
+                .map(|t| {
+                    let raw = t.tag_type;
+                    let norm = if raw & 0x8000 == 0 && (raw & 0xFF) <= 0x1F {
+                        (raw & 0x6000) | 0x00C1
+                    } else {
+                        raw
+                    };
+                    (i64::from(t.instance_id), t.name.as_str(), i64::from(norm))
+                })
                 .collect();
             match db.upsert_tags(ip, &data) {
                 Ok(diff) if diff.is_empty() => {
@@ -2747,17 +2993,20 @@ fn exploit_rockwell_read(ip: &str, port: u16, tag: &str, out: &impl Fn(&str)) {
 
 fn exploit_rockwell_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use crate::vendors::rockwell::driver;
-    let (tag_name, hex_val) = input.split_once('=').unwrap_or((input, "00"));
+    let (tag_name, raw_val) = input.split_once('=').unwrap_or((input, "00"));
+    let hex_val = raw_val.trim().trim_start_matches("0x").trim_start_matches("0X");
     let value_bytes: Vec<u8> = hex_val
         .as_bytes()
         .chunks(2)
         .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
         .collect();
-    let type_code: u16 = if value_bytes.len() == 1 {
-        0x00C1
-    } else {
-        0x00C4
-    };
+    if value_bytes.is_empty() {
+        out(&format!(
+            "[-] {tag_name}: \"{raw_val}\" could not be parsed — use hex digits, e.g. 01 or 0x01"
+        ));
+        return;
+    }
+    let type_code: u16 = if value_bytes.len() == 1 { 0x00C1 } else { 0x00C4 };
     match driver::write_tag(ip, port, tag_name, type_code, &value_bytes) {
         Ok(()) => out(&format!("[+] {tag_name}: written")),
         Err(e) => out(&format!("[-] {tag_name}: {e}")),
@@ -4576,6 +4825,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Mode::References => draw_references(frame, size, app),
         Mode::ExploitInput => draw_exploit_input_popup(frame, size, app),
         Mode::ExploitConfirm => draw_exploit_confirm_popup(frame, size, app),
+        Mode::CacheRescanPrompt => draw_cache_rescan_popup(frame, size, app),
         Mode::VendorPicker => draw_vendor_picker(frame, size, app),
         _ => {}
     }
@@ -4595,7 +4845,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let title = format!(" SCADAver ICS Red Team Tool v1.0{scan_tag}{stealth_tag} ");
     let keys = match app.mode {
         Mode::Normal =>
-            " [A] Add IP  [S] Scan  [E] Exploit  [M] MQTT  [U] Creds  [B] Refs  [I] Import  [W] WL  [R] Rescan  [D] Delete  [/] Search  [O] Zoom  [C] Clear  [F] Fmt  [X] Export  [Z] Stealth  [?] Help  [Q] Quit",
+            " [A] Add  [S] Scan  [E] Exploit  [I] Cursor  [O] Zoom  [M] MQTT  [U] Creds  [B] Refs  [R] Rescan  [D] Del  [/] Search  [C] Clear  [F] Fmt  [X] Export  [Z] Stealth  [?] Help  [Q] Quit",
         Mode::MqttMonitor =>
             " [j/k] Nav  [a] ACL  [r] Retain  [s] Session  [c] Clear  [/] Clear filter  [ESC/M] Disconnect",
         Mode::MqttClientIdInput => " Enter ClientID to hijack \u{2014} [ENTER] run  [ESC] cancel",
@@ -4609,6 +4859,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         Mode::References => " [J/K/\u{2191}\u{2193}] Scroll  [B/ESC] Close",
         Mode::ImportInput => " nmap XML path \u{2014} [ENTER] import  [ESC] cancel",
         Mode::WordlistInput => " Wordlist path (empty = built-in defaults) \u{2014} [ENTER] save  [ESC] cancel",
+        Mode::CacheRescanPrompt => " [Y] Rescan first  [N] Write with cached data  [ESC] cancel",
         _ => " [ESC / ?] back",
     };
 
@@ -4982,6 +5233,9 @@ fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     };
     let title = match &app.vendor_override {
+        None if vendor == "multi" => {
+            format!(" Exploits \u{2014} MULTI  [V] Select a protocol to continue ")
+        }
         None => format!(" Exploits \u{2014} {}{port_label} ", vendor.to_uppercase()),
         Some(ov) => {
             let stored = app
@@ -5051,6 +5305,83 @@ fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &mut App) {
     );
 }
 
+/// Build a map from leaf cursor position → absolute output line index.
+/// Matches both struct leaf rows (`"           .field"` prefix) and flat scalar tag
+/// rows (numeric instance-id at columns 2-8, tag name at columns 10-52).
+/// Scans only lines from the most recent tag listing (found via the INST header).
+/// Map output lines to their corresponding leaf index.
+/// Returns `(line_idx, leaf_idx)` pairs in document order.
+///
+/// Uses contextual matching: INST table rows establish which struct tag owns the
+/// subsequent member lines, forming the full path `StructTag.Field` for lookup.
+/// This correctly handles multiple struct tags that share identically-named fields.
+fn build_leaf_line_indices(
+    lines: &[String],
+    leaves: &[(String, bool)],
+) -> Vec<(usize, usize)> {
+    if leaves.is_empty() {
+        return Vec::new();
+    }
+    // Start from the most recent tag-table header — identified by the "#  Name" column label
+    // produced by tag_header(). Using rposition ensures only the last (live) listing is scanned
+    // even when a DB snapshot section appears earlier in output_lines.
+    let table_start = lines
+        .iter()
+        .rposition(|l| l.contains("#  Name"))
+        .unwrap_or(0);
+
+    // Build a lookup: full symbolic path → leaf index.
+    let mut path_to_leaf: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::with_capacity(leaves.len());
+    for (i, (path, _)) in leaves.iter().enumerate() {
+        path_to_leaf.entry(path.as_str()).or_insert(i);
+    }
+
+    let mut result: Vec<(usize, usize)> = Vec::new();
+    let mut used_leaves: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // Name of the struct tag whose members we are currently reading.
+    let mut current_struct: Option<String> = None;
+
+    for (offset, line) in lines[table_start..].iter().enumerate() {
+        let abs = table_start + offset;
+
+        if line.starts_with("           .") {
+            // Struct member line: "           .FieldOrPath  value"
+            let after_dot = &line["           .".len()..];
+            let field_end = after_dot
+                .find(|c: char| c.is_whitespace())
+                .unwrap_or(after_dot.len());
+            let field = &after_dot[..field_end];
+            if let Some(ref parent) = current_struct {
+                let full_path = format!("{parent}.{field}");
+                if let Some(&leaf_idx) = path_to_leaf.get(full_path.as_str()) {
+                    if !used_leaves.contains(&leaf_idx) {
+                        used_leaves.insert(leaf_idx);
+                        result.push((abs, leaf_idx));
+                    }
+                }
+            }
+        } else if line.get(2..8).is_some_and(|s| s.trim().parse::<u64>().is_ok())
+            && line.is_char_boundary(10)
+            && line.is_char_boundary(line.len().min(52))
+        {
+            // INST table row: "  {id:>6}  {name:<42}  type  dims  value  typeword"
+            let name = line[10..line.len().min(52)].trim_end().to_string();
+            // Check if this is a flat scalar leaf (path has no dot).
+            if let Some(&leaf_idx) = path_to_leaf.get(name.as_str()) {
+                if !used_leaves.contains(&leaf_idx) {
+                    used_leaves.insert(leaf_idx);
+                    result.push((abs, leaf_idx));
+                }
+            }
+            // Update struct context for the member lines that follow.
+            current_struct = Some(name);
+        }
+    }
+
+    result
+}
+
 fn draw_output_zoom(frame: &mut Frame, area: Rect, app: &App) {
     let visible = area.height.saturating_sub(2) as usize;
     let total = app.output_lines.len();
@@ -5059,50 +5390,126 @@ fn draw_output_zoom(frame: &mut Frame, area: Rect, app: &App) {
         .max(visible.min(total));
     let start = end.saturating_sub(visible);
 
+    let cursor_abs: Option<usize> = app
+        .output_leaf_cursor
+        .and_then(|n| app.tag_leaf_line_indices.get(n).map(|&(li, _)| li));
+
     let text: Vec<Line> = app.output_lines[start..end]
         .iter()
-        .map(|l| {
-            let c = if l.starts_with("══") {
-                Color::Cyan
-            } else if l.trim_start().starts_with("──") {
-                Color::DarkGray
-            } else if l.starts_with("[+]") {
-                Color::Green
-            } else if l.starts_with("[-]") {
-                Color::Red
-            } else if l.starts_with("[!]") {
-                Color::Yellow
-            } else {
-                Color::White
-            };
+        .enumerate()
+        .map(|(i, l)| {
+            let abs = start + i;
+            if cursor_abs == Some(abs) {
+                return Line::from(Span::styled(
+                    l.as_str(),
+                    Style::default().fg(Color::Black).bg(Color::Cyan),
+                ));
+            }
+            let c = output_line_color(l);
             Line::from(Span::styled(l.as_str(), Style::default().fg(c)))
         })
         .collect();
 
-    let title = if total == 0 {
-        " Output (empty) ".to_string()
+    let is_overview = app.output_from_cache && app.scan_timestamp.is_none();
+    let is_stale = app.output_from_cache
+        && app.scan_timestamp.is_some_and(|t| {
+            t.elapsed() > std::time::Duration::from_secs(24 * 3600)
+        });
+    let out_label = if is_overview { "Overview" } else if is_stale { "Output \u{26a0}" } else { "Output" };
+    let c_hint = if app.output_line_backup.is_some() { "[C] restore" } else { "[C] clear" };
+
+    // Access class of the currently selected leaf (for the cursor mode title).
+    let current_access: &str = app.output_leaf_cursor
+        .and_then(|n| app.tag_leaf_line_indices.get(n).map(|&(_, li)| li))
+        .and_then(|li| app.tag_leaves.get(li))
+        .map(|(path, _)| {
+            let top = path.find('.').map_or(path.as_str(), |i| &path[..i]);
+            tag_access_class(top)
+        })
+        .unwrap_or("User");
+
+    let title = if app.output_leaf_cursor.is_some() && !app.tag_leaves.is_empty() {
+        let n = app.output_leaf_cursor.unwrap_or(0);
+        let warn = if is_overview || is_stale { " \u{2014} \u{26a0} tags may have changed" } else { "" };
+        let access_note = match current_access {
+            "Input"  => "  [Input \u{2014} hardware owned]",
+            "Output" => "  [Output \u{2014} PLC overrides in Run mode]",
+            "Config" => "  [Config \u{2014} writable in Program mode]",
+            _        => "",
+        };
+        format!(
+            " {out_label} \u{2014} leaf {}/{}{access_note}{warn} \u{2014} [J/K] navigate  [W] write  {c_hint}  [O/ESC] close ",
+            n + 1,
+            app.tag_leaves.len()
+        )
+    } else if !app.tag_leaves.is_empty() {
+        let warn = if is_overview { " \u{2014} \u{26a0} DB snapshot" } else if is_stale { " \u{2014} \u{26a0} >24h old" } else { "" };
+        format!(
+            " {out_label} \u{2014} {} navigable tags{warn} \u{2014} [I] interactive  [J/K] navigate  [W] write  {c_hint}  [O/ESC] close ",
+            app.tag_leaves.len()
+        )
+    } else if total == 0 && app.output_line_backup.is_some() {
+        format!(" {out_label} (cleared) \u{2014} {c_hint} to restore  [O/ESC] close ")
+    } else if total == 0 {
+        " Output (empty) \u{2014} run [List Tags] first to enable [W] write ".to_string()
     } else if app.output_scroll == 0 {
-        format!(" Output \u{2014} {total} lines \u{2014} [O/ESC] close ")
+        format!(" {out_label} \u{2014} {total} lines \u{2014} {c_hint}  [O/ESC] close ")
     } else {
         format!(
-            " Output \u{2014} {}\u{2013}{}/{} \u{2014} [O/ESC] close ",
+            " {out_label} \u{2014} {}\u{2013}{}/{} \u{2014} [O/ESC] close ",
             start + 1,
             end,
             total
         )
     };
 
+    let legend = Line::from(vec![
+        Span::raw(" "),
+        Span::styled("\u{25a0}", Style::default().fg(Color::White)),
+        Span::raw(" User  "),
+        Span::styled("\u{25a0}", Style::default().fg(Color::Yellow)),
+        Span::raw(" Input (hw)  "),
+        Span::styled("\u{25a0}", Style::default().fg(Color::Cyan)),
+        Span::raw(" Output (PLC)  "),
+        Span::styled("\u{25a0}", Style::default().fg(Color::Magenta)),
+        Span::raw(" Config "),
+    ]);
+
     frame.render_widget(
         Paragraph::new(text)
             .block(
                 Block::default()
                     .title(title)
+                    .title_bottom(legend)
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Cyan)),
             )
             .wrap(Wrap { trim: false }),
         area,
     );
+}
+
+/// Colour for one output line.  Shared by the zoom view and the sidebar widget.
+fn output_line_color(l: &str) -> Color {
+    if l.starts_with("══") {
+        Color::Cyan
+    } else if l.trim_start().starts_with("──") {
+        Color::DarkGray
+    } else if l.starts_with("[+]") {
+        Color::Green
+    } else if l.starts_with("[-]") {
+        Color::Red
+    } else if l.starts_with("[!]") {
+        Color::Yellow
+    } else if l.ends_with("Input ") || l.ends_with("Input") {
+        Color::Yellow
+    } else if l.ends_with("Output") {
+        Color::Cyan
+    } else if l.ends_with("Config") {
+        Color::Magenta
+    } else {
+        Color::White
+    }
 }
 
 fn output_widget(lines: &[String], height: u16, scroll: usize) -> Paragraph<'_> {
@@ -5116,19 +5523,7 @@ fn output_widget(lines: &[String], height: u16, scroll: usize) -> Paragraph<'_> 
     let text: Vec<Line> = lines[start..end]
         .iter()
         .map(|l| {
-            let c = if l.starts_with("══") {
-                Color::Cyan
-            } else if l.trim_start().starts_with("──") {
-                Color::DarkGray
-            } else if l.starts_with("[+]") {
-                Color::Green
-            } else if l.starts_with("[-]") {
-                Color::Red
-            } else if l.starts_with("[!]") {
-                Color::Yellow
-            } else {
-                Color::White
-            };
+            let c = output_line_color(l);
             Line::from(Span::styled(l.as_str(), Style::default().fg(c)))
         })
         .collect();
@@ -5826,6 +6221,10 @@ fn handle_key(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers) -
             handle_output_zoom(app, code, mods);
             false
         }
+        Mode::CacheRescanPrompt => {
+            handle_cache_rescan_prompt(app, code);
+            false
+        }
         Mode::MqttMonitor => {
             handle_mqtt_monitor(app, code);
             false
@@ -5854,11 +6253,98 @@ fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Esc | KeyCode::Char('o' | 'O') => app.exit_zoom(),
         KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => app.exit_zoom(),
         KeyCode::Char('c' | 'C') => {
-            app.output_lines.clear();
-            app.output_scroll = 0;
+            if let Some(backup) = app.output_line_backup.take() {
+                app.output_lines = backup;
+                app.output_scroll = 0;
+                app.output_leaf_cursor = None;
+                app.tag_leaf_line_indices =
+                    build_leaf_line_indices(&app.output_lines, &app.tag_leaves);
+                if let Some(&(first_line, _)) = app.tag_leaf_line_indices.first() {
+                    app.scroll_to_output_line(first_line);
+                }
+            } else {
+                if !app.output_lines.is_empty() {
+                    app.output_line_backup = Some(app.output_lines.clone());
+                }
+                app.output_lines.clear();
+                app.output_scroll = 0;
+                app.output_leaf_cursor = None;
+            }
         }
-        KeyCode::Char('j') | KeyCode::Down => app.scroll_output_down(1),
-        KeyCode::Char('k') | KeyCode::Up => app.scroll_output_up(1),
+        KeyCode::Char('i' | 'I') => {
+            if app.output_from_cache && app.scan_timestamp.is_none() {
+                // Overview (DB snapshot) — trigger a live scan to expand structs.
+                fire_overview_list_tags(app);
+            } else if !app.tag_leaves.is_empty() {
+                app.tag_leaf_line_indices =
+                    build_leaf_line_indices(&app.output_lines, &app.tag_leaves);
+                if !app.tag_leaf_line_indices.is_empty() {
+                    app.output_leaf_cursor = Some(0);
+                    if let Some(&(first_line, _)) = app.tag_leaf_line_indices.first() {
+                        app.scroll_to_output_line(first_line);
+                    }
+                    if let Some(cached) = app.per_device_output.get_mut(&app.tag_write_ip) {
+                        cached.tag_leaf_line_indices = app.tag_leaf_line_indices.clone();
+                        cached.output_leaf_cursor = app.output_leaf_cursor;
+                    }
+                }
+            }
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if app.output_leaf_cursor.is_some() {
+                app.leaf_cursor_next();
+            } else {
+                app.scroll_output_down(1);
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if app.output_leaf_cursor.is_some() {
+                app.leaf_cursor_prev();
+            } else {
+                app.scroll_output_up(1);
+            }
+        }
+        KeyCode::Char('w' | 'W') => {
+            if let Some(n) = app.output_leaf_cursor {
+                let leaf_idx = app.tag_leaf_line_indices.get(n).map(|&(_, li)| li);
+                if let Some((path, writable)) =
+                    leaf_idx.and_then(|i| app.tag_leaves.get(i)).cloned()
+                {
+                    if writable {
+                        // Struct member leaves from DB have no CIP type word — a live
+                        // rescan is required before we can write safely.
+                        if path.contains('.')
+                            && app.output_from_cache
+                            && app.scan_timestamp.is_none()
+                        {
+                            app.output_lines.push(
+                                "[!] Struct member writes need a live rescan first — press [I]"
+                                    .to_string(),
+                            );
+                        } else if app.output_from_cache {
+                            // Tags are from a previous scan — ask before writing.
+                            app.pending_tag_write = Some((path, true));
+                            app.mode = Mode::CacheRescanPrompt;
+                        } else {
+                            let label = format!("Write Tag: {path}");
+                            app.pending_exploit = Some(PendingExploit {
+                                vendor: app.tag_write_vendor.clone(),
+                                idx: 3,
+                                ip: app.tag_write_ip.clone(),
+                                port: app.tag_write_port,
+                                input: String::new(),
+                                label,
+                            });
+                            app.input_buf = format!("{path}=");
+                            app.tag_write_pending = true;
+                            app.mode = Mode::ExploitInput;
+                        }
+                    } else {
+                        app.output_lines.push("[!] This leaf is read-only".to_string());
+                    }
+                }
+            }
+        }
         KeyCode::PageDown => app.scroll_output_down(20),
         KeyCode::PageUp => app.scroll_output_up(20),
         // g = go to top (oldest), G = go to bottom (newest / auto-scroll)
@@ -5890,6 +6376,27 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
             app.scroll_output_down(10);
         }
         KeyCode::Char('o' | 'O') => app.enter_zoom(),
+        KeyCode::Char('i' | 'I') => {
+            // Open OutputZoom and activate leaf cursor immediately.
+            if app.output_from_cache && app.scan_timestamp.is_none() {
+                // Overview (DB snapshot) — fire a live scan to expand structs, then zoom.
+                fire_overview_list_tags(app);
+            } else if !app.tag_leaves.is_empty() {
+                app.tag_leaf_line_indices =
+                    build_leaf_line_indices(&app.output_lines, &app.tag_leaves);
+                if !app.tag_leaf_line_indices.is_empty() {
+                    app.output_leaf_cursor = Some(0);
+                    if let Some(&(first_line, _)) = app.tag_leaf_line_indices.first() {
+                        app.scroll_to_output_line(first_line);
+                    }
+                    if let Some(cached) = app.per_device_output.get_mut(&app.tag_write_ip) {
+                        cached.tag_leaf_line_indices = app.tag_leaf_line_indices.clone();
+                        cached.output_leaf_cursor = app.output_leaf_cursor;
+                    }
+                }
+            }
+            app.enter_zoom();
+        }
         KeyCode::Char('j') | KeyCode::Down => app.select_next(),
         KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
         KeyCode::Char('a' | 'A') => {
@@ -5929,6 +6436,8 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
         KeyCode::Char('c' | 'C') if !mods.contains(KeyModifiers::CONTROL) => {
             app.output_lines.clear();
             app.output_scroll = 0;
+            app.output_leaf_cursor = None;
+            // tag_leaves and tag_leaf_line_indices are preserved so J can re-activate cursor
         }
         KeyCode::Char('x' | 'X') => match export_to_file(app) {
             Ok(path) => {
@@ -5947,10 +6456,6 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
                 ExportFormat::Csv => "CSV",
             };
             app.output_lines.push(format!("[*] Export format: {fmt} (press X to export)"));
-        }
-        KeyCode::Char('i' | 'I') => {
-            app.input_buf.clear();
-            app.mode = Mode::ImportInput;
         }
         KeyCode::Char('d' | 'D') => {
             if let Some(dev) = app.selected_device() {
@@ -5993,12 +6498,6 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
                 MqttVersion::V311 => MqttVersion::V5,
                 MqttVersion::V5 => MqttVersion::V311,
             };
-            let ver = match app.mqtt_conn.version {
-                MqttVersion::V311 => "3.1.1",
-                MqttVersion::V5 => "5.0",
-            };
-            app.output_lines.push(format!("[*] MQTT version: {ver} (applies on next connect)"));
-            app.output_scroll = 0;
         }
         KeyCode::Char('z' | 'Z') => {
             app.stealth = !app.stealth;
@@ -6189,16 +6688,32 @@ fn handle_exploit_menu(app: &mut App, code: KeyCode) {
 fn handle_exploit_input(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Esc => {
-            app.mode = Mode::ExploitMenu;
-            app.input_buf.clear();
+            if app.tag_write_pending {
+                app.tag_write_pending = false;
+                app.pending_exploit = None;
+                app.input_buf.clear();
+                app.mode = Mode::OutputZoom;
+            } else {
+                app.mode = Mode::ExploitMenu;
+                app.input_buf.clear();
+            }
         }
         KeyCode::Enter => {
-            let input = app.input_buf.clone();
-            fire_exploit(app, &input);
-            if app.mode != Mode::ExploitConfirm {
-                app.mode = Mode::ExploitMenu;
+            if app.tag_write_pending {
+                if let Some(ref mut p) = app.pending_exploit {
+                    p.input.clone_from(&app.input_buf);
+                }
+                app.tag_write_pending = false;
+                app.input_buf.clear();
+                app.mode = Mode::ExploitConfirm;
+            } else {
+                let input = app.input_buf.clone();
+                fire_exploit(app, &input);
+                if app.mode != Mode::ExploitConfirm {
+                    app.mode = Mode::ExploitMenu;
+                }
+                app.input_buf.clear();
             }
-            app.input_buf.clear();
         }
         KeyCode::Backspace => {
             app.input_buf.pop();
@@ -6316,44 +6831,102 @@ fn draw_vendor_picker(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(list, popup, &mut state);
 }
 
-/// Load saved tags from DB into the output panel (synchronous).
-/// Returns true if any tags were found.
-fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> bool {
-    use crate::db::Database;
+/// Load saved tags and struct members from DB into the output panel.
+/// Returns all navigable leaves: scalars from device_tags plus struct members
+/// from device_tag_members, including grouped leaves for non-Rockwell vendors.
+fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> Vec<(String, bool)> {
+    use crate::db::{Database, MemberRecord};
     use crate::vendors::rockwell::driver;
 
-    let Ok(db) = Database::open(&Database::default_path()) else { return false };
-    let Ok(tags) = db.load_tags(ip) else { return false };
-    if tags.is_empty() { return false; }
+    let Ok(db) = Database::open(&Database::default_path()) else { return Vec::new() };
+    let Ok(tags) = db.load_tags(ip) else { return Vec::new() };
+    let Ok(members) = db.load_members(ip) else { return Vec::new() };
+    if tags.is_empty() && members.is_empty() {
+        return Vec::new();
+    }
 
+    // Group members by their parent prefix (part before the first '.').
+    let mut member_map: std::collections::HashMap<&str, Vec<&MemberRecord>> =
+        std::collections::HashMap::new();
+    for m in &members {
+        let prefix = m.path.find('.').map_or(m.path.as_str(), |i| &m.path[..i]);
+        member_map.entry(prefix).or_default().push(m);
+    }
+
+    // Orphan prefixes: member prefixes with no matching top-level tag row.
+    // These represent Beckhoff ADS program/GVL groups or other non-CIP vendors.
+    let top_names: std::collections::HashSet<&str> =
+        tags.iter().map(|t| t.name.as_str()).collect();
+    let mut orphan_prefixes: Vec<&str> = member_map
+        .keys()
+        .copied()
+        .filter(|p| !top_names.contains(p))
+        .collect();
+    orphan_prefixes.sort_unstable();
+
+    let total_entries = tags.len() + orphan_prefixes.len();
     lines.push(format!(
-        "══ {} saved tags @ {ip} (DB snapshot) ══",
-        tags.len()
+        "══ Overview \u{2014} {total_entries} entries ({} member leaves) @ {ip} ══",
+        members.len()
     ));
     let [hdr, sep] = tag_header();
     lines.push(hdr);
     lines.push(sep.clone());
+    let mut leaves: Vec<(String, bool)> = Vec::new();
+
+    // Render top-level tags, expanding STRUCT tags with their stored members.
     for t in &tags {
         let (base, dims) = driver::type_parts(u16::try_from(t.tag_type).unwrap_or(u16::MAX));
-        lines.push(fmt_tag_row(
-            t.instance_id,
-            &t.name,
-            &base,
-            dims,
-            "-",
-            t.tag_type,
-        ));
+        lines.push(fmt_tag_row(t.instance_id, &t.name, &base, dims, "-", t.tag_type));
+        if !base.starts_with("STRUCT") && dims == "-" {
+            leaves.push((t.name.clone(), true));
+        } else if base.starts_with("STRUCT") {
+            if let Some(struct_members) = member_map.get(t.name.as_str()) {
+                for m in &*struct_members {
+                    let field = m.path.find('.').map_or(m.path.as_str(), |i| &m.path[i + 1..]);
+                    let access = tag_access_class(&m.path);
+                    lines.push(format!(
+                        "           .{field:<40}  {:<14}  {:<4}  {:<18}  {:<9}  {access:<6}",
+                        "(stored)", "-", "(cached)", "\u{2014}"
+                    ));
+                    leaves.push((m.path.clone(), m.writable));
+                }
+            }
+        }
     }
+
+    // Render orphan prefix groups (Beckhoff ADS / other vendors with no device_tags rows).
+    // A synthetic INST row is used so build_leaf_line_indices sets current_struct correctly.
+    for (idx, prefix) in orphan_prefixes.iter().enumerate() {
+        if let Some(group) = member_map.get(prefix) {
+            lines.push(fmt_tag_row(idx as i64, prefix, "GROUP", "-", "-", 0));
+            for m in &*group {
+                let field = m.path.find('.').map_or(m.path.as_str(), |i| &m.path[i + 1..]);
+                let access = tag_access_class(&m.path);
+                lines.push(format!(
+                    "           .{field:<40}  {:<14}  {:<4}  {:<18}  {:<9}  {access:<6}",
+                    "(stored)", "-", "(cached)", "\u{2014}"
+                ));
+                leaves.push((m.path.clone(), m.writable));
+            }
+        }
+    }
+
     lines.push(sep);
-    lines.push(format!("[+] {} tag(s) loaded from database", tags.len()));
-    true
+    lines.push(format!(
+        "[+] {} top-level tag(s), {} member leaf/leaves loaded from database",
+        tags.len() + orphan_prefixes.len(),
+        members.len()
+    ));
+    leaves
 }
 
 /// Called when the exploit menu opens for Rockwell/enip with an empty output panel.
-/// Shows saved DB tags immediately, then starts a background live-check for changes.
+/// Loads saved DB tags and synthesizes navigable leaves — no background network access.
 fn maybe_auto_load_tags(app: &mut App) {
     let Some(vendor) = app.selected_vendor() else { return };
-    if !matches!(vendor.to_lowercase().as_str(), "rockwell" | "enip") {
+    let vendor_lc = vendor.to_lowercase();
+    if !matches!(vendor_lc.as_str(), "rockwell" | "enip" | "beckhoff") {
         return;
     }
     if !app.output_lines.is_empty() {
@@ -6361,30 +6934,127 @@ fn maybe_auto_load_tags(app: &mut App) {
     }
     let Some(ip) = app.selected_device_ip() else { return };
 
-    let has_tags = load_db_tags_to_output(&ip, &mut app.output_lines);
-
-    if has_tags {
-        app.output_lines
-            .push(format!("── checking live tags @ {ip}... ──"));
-        app.active_jobs += 1;
-        let tx = app.scan_tx.clone();
-        std::thread::spawn(move || {
-            background_tag_check(&ip, &tx);
-        });
+    let leaves = load_db_tags_to_output(&ip, &mut app.output_lines);
+    if !leaves.is_empty() {
+        app.tag_leaves = leaves;
+        app.tag_leaf_line_indices =
+            build_leaf_line_indices(&app.output_lines, &app.tag_leaves);
+        app.output_leaf_cursor = None;
+        app.output_from_cache = true;
+        app.scan_timestamp = None;
+        app.tag_write_ip = ip;
+        app.tag_write_port = if vendor_lc == "beckhoff" { 48898 } else { 44818 };
+        app.tag_write_vendor = vendor;
     }
 }
 
-/// Background worker: enumerates live tags, diffs vs DB, reports changes.
-fn background_tag_check(ip: &str, tx: &mpsc::Sender<ScanEvent>) {
-    use crate::vendors::rockwell::driver;
-    let out = |msg: &str| {
-        let _ = tx.send(ScanEvent::Output(msg.to_string()));
-    };
-    match driver::enumerate_tags(ip, 0) {
-        Ok(tags) => save_tags_and_diff(ip, &tags, &out),
-        Err(e) => out(&format!("[-] Live tag check failed: {e}")),
+/// Fire "List Tags" directly (bypassing the confirmation dialog) when the user
+/// presses I on Overview data to request struct expansion.
+fn fire_overview_list_tags(app: &mut App) {
+    let Some(vendor) = app.selected_vendor() else { return };
+    let vendor_lc = vendor.to_ascii_lowercase();
+    if !matches!(vendor_lc.as_str(), "rockwell" | "enip" | "beckhoff") {
+        return;
     }
-    let _ = tx.send(ScanEvent::Done(format!("tag refresh @ {ip}")));
+    let exploit_label =
+        if vendor_lc == "beckhoff" { "Enumerate Symbols (ADS)" } else { "List Tags" };
+    app.exploit_defs = exploits_for(&vendor);
+    let Some(idx) = app.exploit_defs.iter().position(|e| e.label == exploit_label) else {
+        return;
+    };
+    app.exploit_sel = idx;
+    let Some(ip) = app.selected_device_ip() else { return };
+    let port = app.action_port(&vendor, idx);
+    let pending = PendingExploit {
+        vendor,
+        idx,
+        ip,
+        port,
+        input: String::new(),
+        label: exploit_label.to_string(),
+    };
+    execute_pending_exploit(app, &pending);
+}
+
+fn draw_cache_rescan_popup(frame: &mut Frame, area: Rect, app: &App) {
+    let popup = centered_rect(62, 30, area);
+    frame.render_widget(Clear, popup);
+    let tag_name = app
+        .pending_tag_write
+        .as_ref()
+        .map(|(p, _)| p.as_str())
+        .unwrap_or("(unknown)");
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            " Tags are from a previous scan.",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(Span::styled(
+            " Values may be stale — write could target the wrong state.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" Tag: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(tag_name, Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            " [Y] Rescan first   [N] Write with cached data   [ESC] Cancel",
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(""),
+    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Cached Tag Data ")
+        .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .border_style(Style::default().fg(Color::Yellow));
+    let para = Paragraph::new(text)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, popup);
+}
+
+fn handle_cache_rescan_prompt(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+            app.pending_tag_write = None;
+            app.mode = Mode::OutputZoom;
+            // Fire "List Tags" for the current device automatically.
+            app.open_exploit_menu();
+            let list_tags_idx = app.exploit_defs.iter().position(|e| e.label == "List Tags");
+            if let Some(idx) = list_tags_idx {
+                app.exploit_sel = idx;
+                fire_exploit(app, "");
+            }
+            app.mode = Mode::Normal;
+        }
+        KeyCode::Char('n' | 'N') => {
+            if let Some((path, _)) = app.pending_tag_write.take() {
+                let label = format!("Write Tag: {path}");
+                app.pending_exploit = Some(PendingExploit {
+                    vendor: app.tag_write_vendor.clone(),
+                    idx: 3,
+                    ip: app.tag_write_ip.clone(),
+                    port: app.tag_write_port,
+                    input: String::new(),
+                    label,
+                });
+                app.input_buf = format!("{path}=");
+                app.tag_write_pending = true;
+                app.mode = Mode::ExploitInput;
+            } else {
+                app.mode = Mode::OutputZoom;
+            }
+        }
+        KeyCode::Esc => {
+            app.pending_tag_write = None;
+            app.mode = Mode::OutputZoom;
+        }
+        _ => {}
+    }
 }
 
 fn fire_exploit(app: &mut App, input: &str) {
@@ -6479,7 +7149,8 @@ pub fn run(db: &Database) -> Result<()> {
 
 fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, db: &Database) -> Result<()> {
     loop {
-        app.drain_scan_events(db);
+        app.drain_scan_events(db);  // flush queued events before swapping device buffers
+        app.sync_device_output();
         app.drain_mqtt_messages();
         terminal.draw(|f| draw(f, app))?;
 

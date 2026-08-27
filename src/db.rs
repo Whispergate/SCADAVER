@@ -75,6 +75,12 @@ impl DataDiff {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MemberRecord {
+    pub path: String,
+    pub writable: bool,
+}
+
 pub struct Database {
     conn: Connection,
 }
@@ -115,6 +121,15 @@ impl Database {
                  first_seen INTEGER NOT NULL DEFAULT 0,
                  last_seen  INTEGER NOT NULL DEFAULT 0,
                  UNIQUE(ip, protocol, address)
+             );
+             CREATE TABLE IF NOT EXISTS device_tag_members (
+                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                 ip         TEXT    NOT NULL,
+                 path       TEXT    NOT NULL,
+                 writable   INTEGER NOT NULL DEFAULT 1,
+                 first_seen INTEGER NOT NULL DEFAULT 0,
+                 last_seen  INTEGER NOT NULL DEFAULT 0,
+                 UNIQUE(ip, path)
              );
              CREATE TABLE IF NOT EXISTS log (
                  id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -255,6 +270,39 @@ impl Database {
                 instance_id: r.get(0)?,
                 name: r.get(1)?,
                 tag_type: r.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Replace all stored struct-member leaves for `ip` with `members`.
+    /// Full replacement: deletes existing rows then inserts the new set.
+    pub fn upsert_members(&self, ip: &str, members: &[(&str, bool)]) -> Result<()> {
+        let now = now_unix();
+        self.conn.execute("DELETE FROM device_tag_members WHERE ip=?1", params![ip])?;
+        for &(path, writable) in members {
+            self.conn.execute(
+                "INSERT INTO device_tag_members (ip, path, writable, first_seen, last_seen)
+                 VALUES (?1, ?2, ?3, ?4, ?4)",
+                params![ip, path, writable as i64, now],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Load all struct-member leaves for `ip`, ordered by path.
+    pub fn load_members(&self, ip: &str) -> Result<Vec<MemberRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, writable FROM device_tag_members WHERE ip=?1 ORDER BY path",
+        )?;
+        let rows = stmt.query_map(params![ip], |r| {
+            Ok(MemberRecord {
+                path: r.get(0)?,
+                writable: r.get::<_, i64>(1)? != 0,
             })
         })?;
         let mut out = Vec::new();
