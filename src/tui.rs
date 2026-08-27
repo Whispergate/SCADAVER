@@ -2691,8 +2691,6 @@ fn save_tags_and_diff(
 
 fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: &Arc<AtomicBool>) {
     use crate::vendors::rockwell::driver;
-    use chrono::Local;
-
     out(&format!("[*] Tag monitor started for {ip}"));
     out("[*] Fetching baseline tags...");
 
@@ -2724,7 +2722,11 @@ fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: &Arc
             return;
         }
 
-        let ts = Local::now().format("%H:%M:%S").to_string();
+        let ts = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let s = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            format!("{:02}:{:02}:{:02} UTC", (s / 3600) % 24, (s / 60) % 60, s % 60)
+        };
         out(&format!("[*] Poll #{poll} at {ts}"));
 
         match driver::enumerate_tags(ip, port) {

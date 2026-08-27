@@ -16,14 +16,12 @@ pub struct DeviceRecord {
 
 impl DeviceRecord {
     pub fn last_seen_str(&self) -> String {
-        use chrono::{Local, TimeZone};
         if self.last_seen == 0 {
             return "never".to_string();
         }
-        match Local.timestamp_opt(self.last_seen, 0) {
-            chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
-            _ => "?".to_string(),
-        }
+        chrono::DateTime::from_timestamp(self.last_seen, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+            .unwrap_or_else(|| "?".to_string())
     }
 
 }
