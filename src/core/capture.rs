@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::BufReader;
 
 /// A single ICS device observed in packet traffic.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DeviceObservation {
     pub ip: String,
     pub port: u16,
