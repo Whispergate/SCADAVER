@@ -8380,6 +8380,18 @@ mod tests {
             mqtt_attack_running: false,
             wordlist_path: None,
             export_format: ExportFormat::default(),
+            tag_leaves: Vec::new(),
+            tag_leaf_line_indices: Vec::new(),
+            output_leaf_cursor: None,
+            output_line_backup: None,
+            tag_write_ip: String::new(),
+            tag_write_port: 0,
+            tag_write_vendor: String::new(),
+            scan_timestamp: None,
+            output_from_cache: false,
+            pending_tag_write: None,
+            per_device_output: std::collections::HashMap::new(),
+            current_output_ip: String::new(),
         }
     }
 
