@@ -1,0 +1,121 @@
+# SCADAver Detection Rules — Snort / Suricata
+# These rules detect network traffic produced by the SCADAver ICS red team tool.
+# Unauthorized use of SCADAver against your environment will trigger these signatures.
+#
+# Import into Snort: include $RULE_PATH/scadaver.rules
+# Import into Suricata: add detection/scadaver.rules to suricata.yaml rule-files
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── EtherNet/IP (CIP) — primary watermark ────────────────────────────────────
+#
+# Every EIP packet sent by SCADAver carries the ASCII string "SCADAVER"
+# (0x53 43 41 44 41 56 45 52) in the 8-byte Sender Context field at
+# offset 12 of the EIP encapsulation header. This appears in:
+#   - Register Session requests (command 0x6500)
+#   - ListIdentity requests    (command 0x6300, TCP and UDP)
+#   - SendRRData requests      (command 0x6F00, all CIP tag operations)
+
+alert tcp any any -> any 44818 (
+    msg:"SCADAVER EIP watermark — Register Session";
+    flow:to_server,established;
+    content:"|65 00|"; offset:0; depth:2;
+    content:"SCADAVER"; offset:12; depth:8;
+    sid:9100001; rev:1;
+    metadata:tool scadaver, protocol enip;
+)
+
+alert tcp any any -> any 44818 (
+    msg:"SCADAVER EIP watermark — ListIdentity TCP";
+    flow:to_server,established;
+    content:"|63 00|"; offset:0; depth:2;
+    content:"SCADAVER"; offset:12; depth:8;
+    sid:9100002; rev:1;
+    metadata:tool scadaver, protocol enip;
+)
+
+alert tcp any any -> any 44818 (
+    msg:"SCADAVER EIP watermark — SendRRData (tag operation)";
+    flow:to_server,established;
+    content:"|6F 00|"; offset:0; depth:2;
+    content:"SCADAVER"; offset:12; depth:8;
+    sid:9100003; rev:1;
+    metadata:tool scadaver, protocol enip;
+)
+
+alert udp any any -> any 44818 (
+    msg:"SCADAVER EIP watermark — ListIdentity UDP broadcast";
+    content:"|63 00|"; offset:0; depth:2;
+    content:"SCADAVER"; offset:12; depth:8;
+    sid:9100004; rev:1;
+    metadata:tool scadaver, protocol enip;
+)
+
+# ── EtherNet/IP — behavioral signatures (watermark-independent) ───────────────
+#
+# SCADAver enumerates all tags via CIP Symbol Class (0x6B) Get Attributes.
+# This sequence — Register Session followed immediately by Symbol Object reads —
+# is not produced by any standard HMI or engineering workstation in normal operation.
+
+alert tcp any any -> any 44818 (
+    msg:"SCADAVER EIP — CIP Symbol Object enumeration (class 0x6B)";
+    flow:to_server,established;
+    content:"|6F 00|"; offset:0; depth:2;
+    content:"|20 6B|"; within:60;
+    sid:9100010; rev:1;
+    metadata:tool scadaver, protocol cip;
+)
+
+# ── Modbus — behavioral signatures ───────────────────────────────────────────
+#
+# SCADAver issues Modbus FC43 (Read Device Identification, 0x2B 0x0E) requests.
+# This function code is rarely used by legitimate PLCs or HMIs.
+
+alert tcp any any -> any 502 (
+    msg:"SCADAVER Modbus — FC43 Device Identification request";
+    flow:to_server,established;
+    content:"|2B 0E|"; offset:7; depth:2;
+    sid:9100020; rev:1;
+    metadata:tool scadaver, protocol modbus;
+)
+
+# ── Beckhoff ADS — behavioral signatures ─────────────────────────────────────
+#
+# SCADAver issues an ADS Symbol Upload Info request (IndexGroup 0xF00F, IndexOffset 0)
+# to enumerate all PLC symbols. This is unusual in production traffic.
+
+alert tcp any any -> any 48898 (
+    msg:"SCADAVER Beckhoff ADS — Symbol Upload Info (full symbol enumeration)";
+    flow:to_server,established;
+    content:"|0F F0 00 00 00 00 00 00|"; offset:32; depth:8;
+    sid:9100030; rev:1;
+    metadata:tool scadaver, protocol ads;
+)
+
+# ── S7comm — behavioral signatures ───────────────────────────────────────────
+#
+# SCADAver probes Siemens PLCs with an S7comm COTP CR (Connection Request) to port 102
+# followed immediately by S7 Setup Communication. The combination is tool-like
+# (no HMI connects then immediately reads SZL lists without a project context).
+
+alert tcp any any -> any 102 (
+    msg:"SCADAVER S7 — SZL list read (diagnostic data enumeration)";
+    flow:to_server,established;
+    content:"|32 07|"; offset:17; depth:2;
+    content:"|00 1C|"; within:20;
+    sid:9100040; rev:1;
+    metadata:tool scadaver, protocol s7;
+)
+
+# ── DNP3 — behavioral signatures ─────────────────────────────────────────────
+#
+# SCADAver sends a DNP3 Class 0 Integrity Poll (FC 0x01 with all class objects)
+# from a source address that is not a known RTU/master address.
+
+alert tcp any any -> any 20000 (
+    msg:"SCADAVER DNP3 — Integrity Poll (Class 0 data request)";
+    flow:to_server,established;
+    content:"|05 64|"; offset:0; depth:2;
+    content:"|3C 02 06 3C 03 06 3C 04 06 3C 01 06|"; within:40;
+    sid:9100050; rev:1;
+    metadata:tool scadaver, protocol dnp3;
+)

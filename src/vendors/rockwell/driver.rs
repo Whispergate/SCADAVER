@@ -13,7 +13,7 @@ const REG_SESSION: &[u8] = &[
     0x04, 0x00, // Length: 4
     0x00, 0x00, 0x00, 0x00, // Session Handle
     0x00, 0x00, 0x00, 0x00, // Status
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Sender Context
+    b'S', b'C', b'A', b'D', b'A', b'V', b'E', b'R', // Sender Context (IOC watermark)
     0x00, 0x00, 0x00, 0x00, // Options
     0x01, 0x00, // Protocol version
     0x00, 0x00, // Options flags
@@ -300,7 +300,7 @@ impl EipSession {
         packet.extend_from_slice(&payload_len_u16.to_le_bytes());
         packet.extend_from_slice(&handle_bytes);
         packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // status
-        packet.extend_from_slice(&[0x00; 8]); // sender context
+        packet.extend_from_slice(b"SCADAVER"); // sender context (IOC watermark)
         packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // options
 
         // CPF (Common Packet Format)
@@ -765,6 +765,14 @@ pub fn is_struct_type(tag_type: u16) -> bool {
     tag_type & 0x8000 != 0 && tag_type & 0x1000 == 0
 }
 
+/// Like `is_struct_type` but also catches non-standard encodings where some firmware
+/// omits bit 15 for struct tags. A type without bit 15 that `cip_type_size` cannot
+/// size is treated as a struct with template id = lower 12 bits.
+pub fn is_struct_like(tag_type: u16) -> bool {
+    is_struct_type(tag_type)
+        || (tag_type & 0x8000 == 0 && cip_type_size(tag_type).is_none())
+}
+
 /// Download UDT templates for every struct-typed tag and return the resulting map.
 ///
 /// Opens its own EIP session. Errors on individual templates are silently skipped;
@@ -775,10 +783,11 @@ pub fn enumerate_templates(ip: &str, port: u16, tags: &[LogixTag]) -> TemplateMa
 
     let mut map = TemplateMap::new();
 
-    // Only user UDTs: bit 15 set, bit 12 clear. The template id is bits 11-0.
+    // Struct-like types: bit 15 set (standard UDTs) OR bit 15 clear with no known primitive
+    // size (non-standard firmware). Template id is bits 11-0.
     let mut pending: Vec<u16> = tags
         .iter()
-        .filter(|t| is_struct_type(t.tag_type))
+        .filter(|t| is_struct_like(t.tag_type))
         .map(|t| t.tag_type & 0x0FFF)
         .collect();
     pending.sort_unstable();
@@ -837,11 +846,12 @@ fn list_identity_tcp(ip: &str, port: u16) -> Result<RockwellDevice> {
     .context("TCP connect failed")?;
     stream.set_read_timeout(Some(Duration::from_secs(DEFAULT_TIMEOUT)))?;
 
-    // List Identity request: command 0x63, zero payload
+    // List Identity request: command 0x63, zero payload.
+    // Bytes 12-19 are the EIP Sender Context — set to "SCADAVER" as an IOC watermark.
     let req = [
         0x63u8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, b'S', b'C', b'A', b'D',
+        b'A', b'V', b'E', b'R', 0x00, 0x00, 0x00, 0x00,
     ];
     stream.write_all(&req)?;
 

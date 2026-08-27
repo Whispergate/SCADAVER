@@ -5,7 +5,8 @@ use std::time::Duration;
 use crate::core::network::NetworkInterface;
 use crate::vendors::enip::enums::{device_type_name, vendor_name};
 
-const DISCOVERY_PACKET: &str = "630000000000000000000000000000000000000000000000";
+// EIP ListIdentity broadcast. Bytes 12-19 = Sender Context = "SCADAVER" (IOC watermark).
+const DISCOVERY_PACKET: &str = "630000000000000000000000534341444156455200000000";
 const DEST_PORT: u16 = 44818;
 
 /// An EtherNet/IP device identified via a List Identity response (product name, vendor, revision).
