@@ -231,6 +231,9 @@ pub enum SetNoun {
     Tag {
         /// NAME=HEXVALUE, e.g. MAIN.valve=01
         assignment: String,
+        /// Rockwell CIP data type: bool | sint | int | dint | lint | real (default: auto-detect)
+        #[arg(long, default_value = "auto")]
+        r#type: String,
     },
     /// Write a Modbus holding register FC6
     Register {
@@ -1605,6 +1608,21 @@ fn get_tag(ip: &str, port: u16, _timeout: u64, name: &str, proto: Option<Protoco
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
+        Some(Protocol::Beckhoff) => {
+            use crate::vendors::beckhoff::{ads, scan};
+            let local_netid = ads::build_local_netid(&local_ip_for(ip));
+            let pb = crate::display::spinner_start(&format!("Discovering {ip}…"));
+            let devs = scan::discover_ip_with_port(ip, _timeout, true, port).unwrap_or_default();
+            pb.finish_and_clear();
+            let Some(dev) = devs.into_iter().next() else {
+                crate::display::print_error("No Beckhoff device found.");
+                return Ok(());
+            };
+            match scan::read_symbol_value(&dev, &local_netid, name, port) {
+                Ok(val) => println!("  {name} = {val}"),
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
         Some(Protocol::Phoenix) => {
             use crate::vendors::phoenix::webvisit;
             let (_, tags) = webvisit::get_tags(ip, port)?;
@@ -1635,7 +1653,7 @@ fn run_set(
 ) -> Result<()> {
     match noun {
         SetNoun::State { state } => set_state(ip, port, timeout, &state, protocol),
-        SetNoun::Tag { assignment } => set_tag(ip, port, timeout, &assignment, protocol),
+        SetNoun::Tag { assignment, r#type } => set_tag(ip, port, timeout, &assignment, &r#type, protocol),
         SetNoun::Register { address, value } => {
             use crate::vendors::schneider::modbus;
             crate::display::print_info(&format!(
@@ -1977,6 +1995,7 @@ fn set_tag(
     port: u16,
     timeout: u64,
     assignment: &str,
+    type_hint: &str,
     proto: Option<Protocol>,
 ) -> Result<()> {
     let Some((name, hex_val)) = assignment.split_once('=') else {
@@ -1990,7 +2009,16 @@ fn set_tag(
             if value_bytes.is_empty() {
                 bail!("Invalid hex value '{hex_val}'");
             }
-            let type_code: u16 = if value_bytes.len() == 1 { 0x00C1 } else { 0x00C4 };
+            let type_code: u16 = match type_hint.to_lowercase().as_str() {
+                "bool"       => 0x00C1,
+                "sint"       => 0x00C2,
+                "int"        => 0x00C3,
+                "dint"       => 0x00C4,
+                "lint"       => 0x00C5,
+                "real"       => 0x00CA,
+                "auto"       => if value_bytes.len() == 1 { 0x00C1 } else { 0x00C4 },
+                other        => bail!("Unknown --type '{other}': use bool, sint, int, dint, lint, real"),
+            };
             match driver::write_tag(ip, enip_port, name, type_code, &value_bytes) {
                 Ok(()) => crate::display::print_success(&format!("{name}: written")),
                 Err(e) => crate::display::print_error(&format!("{name}: {e}")),

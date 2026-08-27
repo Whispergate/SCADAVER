@@ -786,6 +786,55 @@ fn hex_str(bytes: &[u8]) -> String {
     })
 }
 
+/// Read one named symbol from the device's symbol table and return a decoded string.
+/// Pass `port = 0` to use the default ADS port (48898).
+pub fn read_symbol_value(
+    device: &BeckhoffDevice,
+    local_netid: &str,
+    symbol_name: &str,
+    port: u16,
+) -> Result<String> {
+    let effective_port = effective_ads_port(port);
+    let addr = format!("{}:{effective_port}", device.ip).parse()?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+
+    let upload_size = read_upload_info(&mut stream, device, local_netid)
+        .ok_or_else(|| anyhow::anyhow!("ADS: failed to read symbol upload info"))?;
+    let blob = read_symbol_blob(&mut stream, device, local_netid, upload_size)
+        .ok_or_else(|| anyhow::anyhow!("ADS: failed to read symbol blob"))?;
+    let symbols = parse_symbol_entries(&blob);
+
+    let sym = symbols
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(symbol_name))
+        .ok_or_else(|| anyhow::anyhow!("ADS symbol '{symbol_name}' not found on device"))?;
+
+    let pkt = construct_ams_packet(
+        &AmsRoute {
+            remote_netid: &device.netid,
+            remote_port: 10000,
+            local_netid,
+            local_port: 31337,
+        },
+        2,
+        &AdsParams::Read(sym.index_group, sym.index_offset, sym.size),
+        None,
+        true,
+    );
+    let resp = send_recv_ams(&mut stream, &hex_decode(&pkt))
+        .ok_or_else(|| anyhow::anyhow!("ADS read: no response from device"))?;
+    let ams = parse_ams_response(&resp)
+        .ok_or_else(|| anyhow::anyhow!("ADS read: failed to parse AMS response"))?;
+    let (error_code, data_hex) = parse_ads_response(&ams.ads_data)
+        .ok_or_else(|| anyhow::anyhow!("ADS read: failed to parse ADS response"))?;
+    if error_code != "00000000" {
+        anyhow::bail!("ADS read error code: {error_code}");
+    }
+    let bytes = hex_decode(&data_hex);
+    Ok(decode_ads_value(&sym.type_name, &bytes))
+}
+
 /// Write raw bytes to a symbol looked up by name from the device's symbol table.
 /// Pass `port = 0` to use the default ADS port (48898).
 pub fn write_symbol_value(
