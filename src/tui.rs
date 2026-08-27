@@ -568,6 +568,7 @@ enum Mode {
     MqttMonitor,
     MqttClientIdInput,
     MqttCredInput,
+    #[allow(dead_code)]
     ImportInput,
     WordlistInput,
 }
@@ -902,9 +903,9 @@ impl App {
                     self.output_from_cache = false;
                     self.output_line_backup = None;
                     self.scan_timestamp = Some(std::time::Instant::now());
-                    self.tag_write_ip = ip.clone();
+                    self.tag_write_ip.clone_from(&ip);
                     self.tag_write_port = port;
-                    self.tag_write_vendor = vendor.clone();
+                    self.tag_write_vendor.clone_from(&vendor);
                     self.tag_leaves = leaves;
                     // Persist struct member leaves (dotted paths) for offline Overview expansion.
                     let members: Vec<(&str, bool)> = self.tag_leaves
@@ -923,7 +924,7 @@ impl App {
                         self.scroll_to_output_line(first_line);
                     }
                     // Persist output so it survives device-list navigation.
-                    self.current_output_ip = ip.clone();
+                    self.current_output_ip.clone_from(&ip);
                     self.per_device_output.insert(ip, DeviceOutput {
                         output_lines: self.output_lines.clone(),
                         output_scroll: self.output_scroll,
@@ -967,7 +968,7 @@ impl App {
                 scan_timestamp: std::mem::take(&mut self.scan_timestamp),
             });
         }
-        self.current_output_ip = selected_ip.clone();
+        self.current_output_ip.clone_from(&selected_ip);
         // Restore the new device's output if we have a snapshot.
         if let Some(cached) = self.per_device_output.remove(&selected_ip) {
             self.output_lines = cached.output_lines;
@@ -2970,7 +2971,7 @@ fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: &Arc
 
         let ts = {
             use std::time::{SystemTime, UNIX_EPOCH};
-            let s = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
             format!("{:02}:{:02}:{:02} UTC", (s / 3600) % 24, (s / 60) % 60, s % 60)
         };
         out(&format!("[*] Poll #{poll} at {ts}"));
@@ -5234,7 +5235,7 @@ fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &mut App) {
     };
     let title = match &app.vendor_override {
         None if vendor == "multi" => {
-            format!(" Exploits \u{2014} MULTI  [V] Select a protocol to continue ")
+            " Exploits \u{2014} MULTI  [V] Select a protocol to continue ".to_string()
         }
         None => format!(" Exploits \u{2014} {}{port_label} ", vendor.to_uppercase()),
         Some(ov) => {
@@ -5345,9 +5346,8 @@ fn build_leaf_line_indices(
     for (offset, line) in lines[table_start..].iter().enumerate() {
         let abs = table_start + offset;
 
-        if line.starts_with("           .") {
+        if let Some(after_dot) = line.strip_prefix("           .") {
             // Struct member line: "           .FieldOrPath  value"
-            let after_dot = &line["           .".len()..];
             let field_end = after_dot
                 .find(|c: char| c.is_whitespace())
                 .unwrap_or(after_dot.len());
@@ -5422,11 +5422,10 @@ fn draw_output_zoom(frame: &mut Frame, area: Rect, app: &App) {
     let current_access: &str = app.output_leaf_cursor
         .and_then(|n| app.tag_leaf_line_indices.get(n).map(|&(_, li)| li))
         .and_then(|li| app.tag_leaves.get(li))
-        .map(|(path, _)| {
+        .map_or("User", |(path, _)| {
             let top = path.find('.').map_or(path.as_str(), |i| &path[..i]);
             tag_access_class(top)
-        })
-        .unwrap_or("User");
+        });
 
     let title = if app.output_leaf_cursor.is_some() && !app.tag_leaves.is_empty() {
         let n = app.output_leaf_cursor.unwrap_or(0);
@@ -5499,9 +5498,7 @@ fn output_line_color(l: &str) -> Color {
         Color::Green
     } else if l.starts_with("[-]") {
         Color::Red
-    } else if l.starts_with("[!]") {
-        Color::Yellow
-    } else if l.ends_with("Input ") || l.ends_with("Input") {
+    } else if l.starts_with("[!]") || l.ends_with("Input ") || l.ends_with("Input") {
         Color::Yellow
     } else if l.ends_with("Output") {
         Color::Cyan
@@ -6284,7 +6281,7 @@ fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
                         app.scroll_to_output_line(first_line);
                     }
                     if let Some(cached) = app.per_device_output.get_mut(&app.tag_write_ip) {
-                        cached.tag_leaf_line_indices = app.tag_leaf_line_indices.clone();
+                        cached.tag_leaf_line_indices.clone_from(&app.tag_leaf_line_indices);
                         cached.output_leaf_cursor = app.output_leaf_cursor;
                     }
                 }
@@ -6390,7 +6387,7 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
                         app.scroll_to_output_line(first_line);
                     }
                     if let Some(cached) = app.per_device_output.get_mut(&app.tag_write_ip) {
-                        cached.tag_leaf_line_indices = app.tag_leaf_line_indices.clone();
+                        cached.tag_leaf_line_indices.clone_from(&app.tag_leaf_line_indices);
                         cached.output_leaf_cursor = app.output_leaf_cursor;
                     }
                 }
@@ -6832,8 +6829,8 @@ fn draw_vendor_picker(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Load saved tags and struct members from DB into the output panel.
-/// Returns all navigable leaves: scalars from device_tags plus struct members
-/// from device_tag_members, including grouped leaves for non-Rockwell vendors.
+/// Returns all navigable leaves: scalars from `device_tags` plus struct members
+/// from `device_tag_members`, including grouped leaves for non-Rockwell vendors.
 fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> Vec<(String, bool)> {
     use crate::db::{Database, MemberRecord};
     use crate::vendors::rockwell::driver;
@@ -6882,7 +6879,7 @@ fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> Vec<(String, boo
             leaves.push((t.name.clone(), true));
         } else if base.starts_with("STRUCT") {
             if let Some(struct_members) = member_map.get(t.name.as_str()) {
-                for m in &*struct_members {
+                for m in struct_members {
                     let field = m.path.find('.').map_or(m.path.as_str(), |i| &m.path[i + 1..]);
                     let access = tag_access_class(&m.path);
                     lines.push(format!(
@@ -6899,8 +6896,8 @@ fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> Vec<(String, boo
     // A synthetic INST row is used so build_leaf_line_indices sets current_struct correctly.
     for (idx, prefix) in orphan_prefixes.iter().enumerate() {
         if let Some(group) = member_map.get(prefix) {
-            lines.push(fmt_tag_row(idx as i64, prefix, "GROUP", "-", "-", 0));
-            for m in &*group {
+            lines.push(fmt_tag_row(i64::try_from(idx).unwrap_or(i64::MAX), prefix, "GROUP", "-", "-", 0));
+            for m in group {
                 let field = m.path.find('.').map_or(m.path.as_str(), |i| &m.path[i + 1..]);
                 let access = tag_access_class(&m.path);
                 lines.push(format!(
@@ -6982,8 +6979,7 @@ fn draw_cache_rescan_popup(frame: &mut Frame, area: Rect, app: &App) {
     let tag_name = app
         .pending_tag_write
         .as_ref()
-        .map(|(p, _)| p.as_str())
-        .unwrap_or("(unknown)");
+        .map_or("(unknown)", |(p, _)| p.as_str());
     let text = vec![
         Line::from(""),
         Line::from(Span::styled(

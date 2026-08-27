@@ -20,8 +20,7 @@ impl DeviceRecord {
             return "never".to_string();
         }
         chrono::DateTime::from_timestamp(self.last_seen, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
-            .unwrap_or_else(|| "?".to_string())
+            .map_or_else(|| "?".to_string(), |dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
     }
 
 }
@@ -288,7 +287,7 @@ impl Database {
             self.conn.execute(
                 "INSERT INTO device_tag_members (ip, path, writable, first_seen, last_seen)
                  VALUES (?1, ?2, ?3, ?4, ?4)",
-                params![ip, path, writable as i64, now],
+                params![ip, path, i64::from(writable), now],
             )?;
         }
         Ok(())
