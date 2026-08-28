@@ -226,7 +226,8 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "casket"
 version = "0.1.0"
-source = "git+https://github.com/Whispergate/casket?branch=main#818bdff36706cb3f20ccf53de7b5e62bdb490cb5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b8b0a708ab03d7e20c2b684f36fc1e2c06a2f5a475cfb8ec30e9df756686eec"
 dependencies = [
  "anyhow",
  "base64",
