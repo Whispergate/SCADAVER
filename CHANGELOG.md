@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1] - 2026-08-28
+
+### Fixed
+- MQTT was absent from the TUI vendor picker (`ALL_VENDORS`) — it now appears alongside all other vendors
+- MQTT exploit entries ("Publish", "List Topics") were missing capability keys, causing them to always appear disabled; added `MqttTcp` capability key with port and field-based detection
+- Added `MqttTcp` to `check_capability` and `capability_missing_reason` to complete the gating logic
+
+## [1.5.0] - 2026-08-28
+
+### Changed
+- All ICS/OT protocol implementations moved to [casket](https://crates.io/crates/casket), a standalone library published on crates.io; scadaver now depends on `casket = "0.1"` instead of compiling the vendor code directly
+- Network interface selection (`select_interface`) kept in scadaver as CLI-specific tooling in `src/net.rs`
+- `scadaver-macros` workspace crate removed; the `IntoDeviceInfo` derive macro now lives in `casket-macros`
+
+### Added
+- `capture` feature flag to opt into pcap-based capture via `casket/capture`
+
+### Removed
+- `src/core/`, `src/vendors/`, `src/prelude.rs`, `src/references.rs` — all protocol logic is now in casket
+- `scadaver-macros/` workspace crate
+
 ## [1.1.1] - 2026-08-16
 
 ### Fixed

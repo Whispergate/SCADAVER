@@ -84,6 +84,7 @@ enum CapabilityKey {
     SnmpUdp,
     SnmpWrite,
     SnmpApc,
+    MqttTcp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,8 +351,12 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
             ExploitDef::with_input("Try Auth Bypass", "endpoint index (default 0)"),
         ],
         "mqtt" => vec![
-            ExploitDef::with_input("Publish", "topic:payload").risk(ExploitRisk::WriteControl),
-            ExploitDef::new("List Topics").risk(ExploitRisk::SensitiveRead),
+            ExploitDef::with_input("Publish", "topic:payload")
+                .risk(ExploitRisk::WriteControl)
+                .capability(CapabilityKey::MqttTcp),
+            ExploitDef::new("List Topics")
+                .risk(ExploitRisk::SensitiveRead)
+                .capability(CapabilityKey::MqttTcp),
         ],
         _ => vec![ExploitDef::new("Auto-detect / rescan")],
     };
@@ -375,6 +380,7 @@ const ALL_VENDORS: &[&str] = &[
     "bacnet",
     "dnp3",
     "opcua",
+    "mqtt",
 ];
 
 const SCAN_ITEMS: &[&str] = &[
@@ -1269,6 +1275,10 @@ fn capability_availability(dev: &DeviceRecord, capability: CapabilityKey) -> Act
         CapabilityKey::SnmpApc => {
             field_bool_value(fields, "cap_snmp_apc").unwrap_or(false)
         }
+        CapabilityKey::MqttTcp => {
+            field_bool_value(fields, "cap_mqtt_tcp")
+                .unwrap_or_else(|| has_port(&["mqtt_port"]) || vendor == "mqtt")
+        }
     };
 
     ActionAvailability {
@@ -1299,6 +1309,7 @@ fn capability_missing_reason(capability: CapabilityKey) -> &'static str {
         CapabilityKey::Iec104Tcp => "IEC 104 TCP has not been confirmed",
         CapabilityKey::SnmpUdp | CapabilityKey::SnmpWrite => "SNMP UDP has not been confirmed",
         CapabilityKey::SnmpApc => "APC UPS not identified via SNMP sysObjectID",
+        CapabilityKey::MqttTcp => "MQTT TCP has not been confirmed",
     }
 }
 
