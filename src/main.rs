@@ -5,11 +5,9 @@ mod import;
 mod db;
 mod display;
 mod mqtt_shell;
+mod net;
 mod tui;
 mod web;
-
-pub use scadaver::core;
-pub use scadaver::vendors;
 
 fn print_disclaimer() {
     eprintln!("SCADAVER \u{2014} authorized security research tool. For lab and CTF use only.");

@@ -463,7 +463,7 @@ pub fn run(args: Args, cfg: &crate::config::ConfigFile) -> Result<()> {
     let stealth = args.stealth || cfg.defaults.stealth.unwrap_or(false);
     crate::display::print_banner();
     if stealth {
-        crate::core::autodetect::set_stealth(true);
+        casket::core::autodetect::set_stealth(true);
     }
     let Some(command) = args.command else { return Ok(()); };
     match command {
@@ -490,7 +490,7 @@ pub fn run(args: Args, cfg: &crate::config::ConfigFile) -> Result<()> {
         Verb::Run { exploit } => match exploit {
             // ModbusServer binds locally: no target IP needed.
             RunCmd::ModbusServer { port, reg_value, coil_value } => {
-                crate::core::modbus_server::serve(port, reg_value, coil_value == 1)
+                casket::core::modbus_server::serve(port, reg_value, coil_value == 1)
             }
             other => {
                 let ip = require_ip(args.ip.as_ref(), "run")?;
@@ -560,7 +560,7 @@ fn scan_network(cidr: &str, timeout: u64) -> Result<()> {
         }
 
         std::thread::spawn(move || {
-            let outcomes = crate::core::autodetect::sweep(&ip_str, timeout);
+            let outcomes = casket::core::autodetect::sweep(&ip_str, timeout);
             for o in outcomes {
                 if let Some(dev) = o.device {
                     let model = dev
@@ -658,7 +658,7 @@ fn scan_auto(ip: &str, timeout: u64) {
     use colored::Colorize;
     crate::display::print_info(&format!("Scanning {ip} across all protocols…"));
     println!();
-    let outcomes = crate::core::autodetect::sweep(ip, timeout);
+    let outcomes = casket::core::autodetect::sweep(ip, timeout);
     for outcome in &outcomes {
         let (tag, detail) = match &outcome.device {
             Some(dev) => ("[+]".green().bold(), summarize_device(dev).normal()),
@@ -678,36 +678,37 @@ fn scan_auto(ip: &str, timeout: u64) {
 }
 
 fn scan_broadcast(proto: Protocol, timeout: u64) -> Result<()> {
-    use crate::core::network::{get_interfaces, select_interface};
+    use casket::core::network::get_interfaces;
+    use crate::net::select_interface;
     match proto {
         Protocol::Enip => {
             let ifaces = get_interfaces();
             let iface = select_interface(&ifaces)?;
-            let devs = crate::vendors::enip::scan::scan(&iface, timeout, false)?;
+            let devs = casket::vendors::enip::scan::scan(&iface, timeout, false)?;
             crate::display::print_success(&format!("Found {} EtherNet/IP device(s).", devs.len()));
         }
         Protocol::Ewon => {
             let ifaces = get_interfaces();
             let iface = select_interface(&ifaces)?;
-            let devs = crate::vendors::ewon::scan::scan(&iface, timeout, false)?;
+            let devs = casket::vendors::ewon::scan::scan(&iface, timeout, false)?;
             crate::display::print_success(&format!("Found {} eWON response(s).", devs.len()));
         }
         Protocol::Schneider => {
             let ifaces = get_interfaces();
             let iface = select_interface(&ifaces)?;
-            let devs = crate::vendors::schneider::scan::scan(&iface, timeout, false)?;
+            let devs = casket::vendors::schneider::scan::scan(&iface, timeout, false)?;
             crate::display::print_success(&format!("Found {} Schneider device(s).", devs.len()));
         }
         Protocol::Mitsubishi => {
             let ifaces = get_interfaces();
             let iface = select_interface(&ifaces)?;
-            let devs = crate::vendors::mitsubishi::scan::scan(&iface, timeout, false)?;
+            let devs = casket::vendors::mitsubishi::scan::scan(&iface, timeout, false)?;
             crate::display::print_success(&format!("Found {} Mitsubishi device(s).", devs.len()));
         }
         Protocol::Beckhoff => {
             let ifaces = get_interfaces();
             let iface = select_interface(&ifaces)?;
-            let devs = crate::vendors::beckhoff::scan::discover(&iface, timeout, false)?;
+            let devs = casket::vendors::beckhoff::scan::discover(&iface, timeout, false)?;
             crate::display::print_success(&format!("Found {} Beckhoff device(s).", devs.len()));
         }
         p => bail!("{p:?} does not support broadcast scan: provide '-i <IP>'"),
@@ -719,36 +720,36 @@ fn scan_broadcast(proto: Protocol, timeout: u64) -> Result<()> {
 fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<()> {
     match proto {
         Protocol::Enip => {
-            let devs = crate::vendors::enip::scan::scan_ip(ip, timeout, false)?;
+            let devs = casket::vendors::enip::scan::scan_ip(ip, timeout, false)?;
             if devs.is_empty() {
                 crate::display::print_warn("No EtherNet/IP response.");
             }
         }
         Protocol::Ewon => {
-            let devs = crate::vendors::ewon::scan::scan_ip(ip, timeout, false)?;
+            let devs = casket::vendors::ewon::scan::scan_ip(ip, timeout, false)?;
             if devs.is_empty() {
                 crate::display::print_warn("No eWON response.");
             }
         }
         Protocol::Schneider => {
-            let devs = crate::vendors::schneider::scan::scan_ip_with_transport(
+            let devs = casket::vendors::schneider::scan::scan_ip_with_transport(
                 ip,
                 timeout,
                 false,
                 port,
-                crate::vendors::schneider::scan::Transport::Both,
+                casket::vendors::schneider::scan::Transport::Both,
             )?;
             if devs.is_empty() {
                 crate::display::print_warn("No Schneider response.");
             }
         }
         Protocol::Mitsubishi => {
-            let devs = crate::vendors::mitsubishi::scan::scan_ip_with_transport(
+            let devs = casket::vendors::mitsubishi::scan::scan_ip_with_transport(
                 ip,
                 timeout,
                 false,
                 port,
-                crate::vendors::mitsubishi::scan::Transport::Both,
+                casket::vendors::mitsubishi::scan::Transport::Both,
             )?;
             if devs.is_empty() {
                 crate::display::print_warn("No Mitsubishi MELSEC response.");
@@ -756,14 +757,14 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
         }
         Protocol::Beckhoff => {
             let devs =
-                crate::vendors::beckhoff::scan::discover_ip_with_port(ip, timeout, false, port)?;
+                casket::vendors::beckhoff::scan::discover_ip_with_port(ip, timeout, false, port)?;
             if devs.is_empty() {
                 crate::display::print_warn("No Beckhoff TwinCAT response.");
             }
         }
         Protocol::Siemens => {
-            use crate::vendors::siemens::scan;
-            use crate::vendors::snmp::{client as snmp_client, enumerate as snmp_enum};
+            use casket::vendors::siemens::scan;
+            use casket::vendors::snmp::{client as snmp_client, enumerate as snmp_enum};
             let dev = scan::scan_ip_with_port(ip, if port == 0 { 102 } else { port });
             println!("  IP:       {}", dev.ip);
             if let Some(hw) = &dev.hardware {
@@ -810,7 +811,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
             }
         }
         Protocol::Snmp => {
-            use crate::vendors::snmp::{client, oids};
+            use casket::vendors::snmp::{client, oids};
             let snmp_port = if port == 0 { 161 } else { port };
             let pb =
                 crate::display::spinner_start(&format!("Scanning SNMP communities on {ip}…"));
@@ -838,7 +839,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
             let pb = crate::display::spinner_start(&format!(
                 "Probing MQTT broker at {ip}:{mqtt_port}…"
             ));
-            let result = crate::vendors::mqtt::client::probe(ip, mqtt_port);
+            let result = casket::vendors::mqtt::client::probe(ip, mqtt_port);
             pb.finish_and_clear();
             match result {
                 None => crate::display::print_warn("No MQTT broker response."),
@@ -853,7 +854,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
             }
         }
         Protocol::Bacnet => {
-            use crate::vendors::bacnet::client;
+            use casket::vendors::bacnet::client;
             let pb = crate::display::spinner_start(&format!("Scanning BACnet/IP at {ip}…"));
             let dev = client::scan_ip(ip, timeout);
             pb.finish_and_clear();
@@ -872,7 +873,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
         }
         Protocol::Dnp3 => {
             use std::time::Duration;
-            use crate::vendors::dnp3::client;
+            use casket::vendors::dnp3::client;
             let pb = crate::display::spinner_start(&format!("Scanning DNP3 at {ip}…"));
             let dev = client::detect(ip, Duration::from_secs(timeout));
             pb.finish_and_clear();
@@ -889,7 +890,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
         }
         Protocol::OpcUa => {
             use std::time::Duration;
-            use crate::vendors::opcua::client;
+            use casket::vendors::opcua::client;
             let opcua_port = if port == 0 { 4840 } else { port };
             let pb = crate::display::spinner_start(&format!(
                 "Scanning OPC-UA at {ip}:{opcua_port}…"
@@ -909,7 +910,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
             }
         }
         Protocol::Iec104 => {
-            use crate::vendors::iec104::client;
+            use casket::vendors::iec104::client;
             let iec_port = if port == 0 { client::IEC104_PORT } else { port };
             let pb = crate::display::spinner_start(&format!(
                 "Probing IEC 60870-5-104 at {ip}:{iec_port}…"
@@ -923,7 +924,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
             }
         }
         Protocol::Modbus => {
-            use crate::vendors::schneider::scan::{self, Transport};
+            use casket::vendors::schneider::scan::{self, Transport};
             let pb =
                 crate::display::spinner_start(&format!("Scanning Modbus TCP at {ip}…"));
             let devs = scan::scan_ip_with_transport(ip, timeout, false, port, Transport::Tcp)?;
@@ -943,7 +944,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
             }
         }
         Protocol::Omron => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let fins_port = if port == 0 { fins::FINS_TCP_PORT } else { port };
             let pb =
                 crate::display::spinner_start(&format!("Scanning Omron FINS at {ip}:{fins_port}…"));
@@ -960,7 +961,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
             }
         }
         Protocol::Phoenix => {
-            use crate::vendors::phoenix::control;
+            use casket::vendors::phoenix::control;
             let pb =
                 crate::display::spinner_start(&format!("Scanning Phoenix Contact at {ip}…"));
             let result = control::get_device_info(ip, port, true);
@@ -980,7 +981,7 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
             }
         }
         Protocol::Rockwell => {
-            use crate::vendors::rockwell::driver;
+            use casket::vendors::rockwell::driver;
             let enip_port = if port == 0 { 44818 } else { port };
             let pb = crate::display::spinner_start(&format!(
                 "Scanning Rockwell EtherNet/IP at {ip}:{enip_port}…"
@@ -1022,7 +1023,7 @@ fn run_get(
         GetNoun::Tags => get_tags(ip, port, timeout, protocol),
         GetNoun::Tag { name } => get_tag(ip, port, timeout, &name, protocol),
         GetNoun::Register { start, count } => {
-            use crate::vendors::schneider::modbus;
+            use casket::vendors::schneider::modbus;
             crate::display::print_info(&format!(
                 "Reading {count} holding registers from {ip} (start={start})…"
             ));
@@ -1038,7 +1039,7 @@ fn run_get(
             Ok(())
         }
         GetNoun::InputRegister { start, count } => {
-            use crate::vendors::schneider::modbus;
+            use casket::vendors::schneider::modbus;
             crate::display::print_info(&format!(
                 "Reading {count} input registers from {ip} (start={start})…"
             ));
@@ -1054,7 +1055,7 @@ fn run_get(
             Ok(())
         }
         GetNoun::Coil { start, count } => {
-            use crate::vendors::schneider::modbus;
+            use casket::vendors::schneider::modbus;
             crate::display::print_info(&format!(
                 "Reading {count} coils from {ip} (start={start})…"
             ));
@@ -1070,7 +1071,7 @@ fn run_get(
             Ok(())
         }
         GetNoun::Dm { start, count } => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let fins_port = if port == 0 { 9600 } else { port };
             let pb = crate::display::spinner_start(&format!(
                 "Reading DM{start}..DM{} from {ip}…",
@@ -1097,7 +1098,7 @@ fn run_get(
             len,
             password,
         } => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let s7_port = if port == 0 { 102 } else { port };
             let pb = crate::display::spinner_start(&format!(
                 "Reading DB{db}:{offset}+{len} from {ip}…"
@@ -1121,7 +1122,7 @@ fn run_get(
             Ok(())
         }
         GetNoun::D { start, count } => {
-            use crate::vendors::mitsubishi::slmp;
+            use casket::vendors::mitsubishi::slmp;
             let slmp_port = if port == 0 { 5007 } else { port };
             crate::display::print_info(&format!(
                 "Reading {count} D register(s) from {ip} starting at D{start}…"
@@ -1138,7 +1139,7 @@ fn run_get(
             Ok(())
         }
         GetNoun::M { start, count } => {
-            use crate::vendors::mitsubishi::slmp;
+            use casket::vendors::mitsubishi::slmp;
             let slmp_port = if port == 0 { 5007 } else { port };
             crate::display::print_info(&format!(
                 "Reading {count} M bit(s) from {ip} starting at M{start}…"
@@ -1155,7 +1156,7 @@ fn run_get(
             Ok(())
         }
         GetNoun::Community => {
-            use crate::vendors::snmp::{client, oids};
+            use casket::vendors::snmp::{client, oids};
             let snmp_port = if port == 0 { 161 } else { port };
             let pb = crate::display::spinner_start(&format!("Scanning communities on {ip}…"));
             let mut found = Vec::new();
@@ -1179,14 +1180,14 @@ fn run_get(
             Ok(())
         }
         GetNoun::Oid { oid, community } => {
-            use crate::vendors::snmp::client;
+            use casket::vendors::snmp::client;
             let snmp_port = if port == 0 { 161 } else { port };
             let val = client::get(ip, snmp_port, &community, &oid)?;
             println!("  {oid} = {}", val.display());
             Ok(())
         }
         GetNoun::Walk { oid, community } => {
-            use crate::vendors::snmp::client;
+            use casket::vendors::snmp::client;
             let snmp_port = if port == 0 { 161 } else { port };
             let pb = crate::display::spinner_start(&format!("Walking {oid} on {ip}…"));
             let entries = client::walk(ip, snmp_port, &community, &oid)?;
@@ -1202,7 +1203,7 @@ fn run_get(
             Ok(())
         }
         GetNoun::Enum { community } => {
-            use crate::vendors::snmp::enumerate;
+            use casket::vendors::snmp::enumerate;
             let snmp_port = if port == 0 { 161 } else { port };
             let pb = crate::display::spinner_start(&format!("Enumerating {ip}…"));
             let info = enumerate::get_system_info(ip, snmp_port, &community)?;
@@ -1252,7 +1253,7 @@ fn run_get(
             Ok(())
         }
         GetNoun::Gi => {
-            use crate::vendors::iec104::client;
+            use casket::vendors::iec104::client;
             let iec_port = if port == 0 { 2404 } else { port };
             let pb =
                 crate::display::spinner_start(&format!("Connecting to IEC 104 at {ip}…"));
@@ -1282,7 +1283,7 @@ fn run_get(
             Ok(())
         }
         GetNoun::Creds { max_users } => {
-            use crate::vendors::ewon::exploit;
+            use casket::vendors::ewon::exploit;
             crate::display::print_info(&format!("Extracting credentials from {ip}…"));
             let users = exploit::exploit(ip, port, "adm", max_users);
             if users.is_empty() {
@@ -1296,7 +1297,7 @@ fn run_get(
             Ok(())
         }
         GetNoun::Session => {
-            use crate::vendors::schneider::session_hijack;
+            use casket::vendors::schneider::session_hijack;
             let pb =
                 crate::display::spinner_start(&format!("Fetching session from {ip}…"));
             let session = session_hijack::get_session_cookie(ip, port);
@@ -1319,7 +1320,7 @@ fn run_get(
 fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Result<()> {
     match proto {
         Some(Protocol::Siemens) => {
-            use crate::vendors::siemens::scan;
+            use casket::vendors::siemens::scan;
             let dev = scan::scan_ip_with_port(ip, if port == 0 { 102 } else { port });
             println!("  IP:       {}", dev.ip);
             if let Some(hw) = &dev.hardware {
@@ -1333,7 +1334,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             }
         }
         Some(Protocol::Rockwell) => {
-            use crate::vendors::rockwell::driver;
+            use casket::vendors::rockwell::driver;
             let enip_port = if port == 0 { 44818 } else { port };
             let pb = crate::display::spinner_start(&format!("Connecting to {ip}…"));
             let result = driver::get_device_info(ip, enip_port);
@@ -1351,7 +1352,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             }
         }
         Some(Protocol::Beckhoff) => {
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::vendors::beckhoff::{ads, scan};
             let local_ip = local_ip_for(ip);
             let local_netid = ads::build_local_netid(&local_ip);
             let pb = crate::display::spinner_start(&format!("Discovering {ip}…"));
@@ -1378,7 +1379,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             }
         }
         Some(Protocol::Omron) => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let fins_port = if port == 0 { 9600 } else { port };
             let pb =
                 crate::display::spinner_start(&format!("Querying Omron FINS at {ip}…"));
@@ -1394,7 +1395,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             }
         }
         Some(Protocol::Phoenix) => {
-            use crate::vendors::phoenix::control;
+            use casket::vendors::phoenix::control;
             let pb = crate::display::spinner_start(&format!("Querying {ip}…"));
             let result = control::get_device_info(ip, port, false);
             pb.finish_and_clear();
@@ -1412,7 +1413,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             }
         }
         Some(Protocol::Bacnet) => {
-            use crate::vendors::bacnet::client;
+            use casket::vendors::bacnet::client;
             let pb = crate::display::spinner_start(&format!("Querying BACnet/IP at {ip}…"));
             let dev = client::scan_ip(ip, timeout);
             pb.finish_and_clear();
@@ -1436,7 +1437,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
         }
         Some(Protocol::Dnp3) => {
             use std::time::Duration;
-            use crate::vendors::dnp3::client;
+            use casket::vendors::dnp3::client;
             let pb = crate::display::spinner_start(&format!("Querying DNP3 at {ip}…"));
             let dev = client::detect(ip, Duration::from_secs(timeout));
             pb.finish_and_clear();
@@ -1451,7 +1452,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
         }
         Some(Protocol::OpcUa) => {
             use std::time::Duration;
-            use crate::vendors::opcua::client;
+            use casket::vendors::opcua::client;
             let opcua_port = if port == 0 { 4840 } else { port };
             let pb = crate::display::spinner_start(&format!(
                 "Querying OPC-UA server at {ip}:{opcua_port}…"
@@ -1472,7 +1473,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             println!("  Endpoints:   {}", d.endpoints.len());
         }
         Some(Protocol::Iec104) => {
-            use crate::vendors::iec104::client;
+            use casket::vendors::iec104::client;
             let iec_port = if port == 0 { client::IEC104_PORT } else { port };
             let pb = crate::display::spinner_start(&format!(
                 "Querying IEC 60870-5-104 at {ip}:{iec_port}…"
@@ -1503,7 +1504,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             }
         }
         Some(Protocol::Modbus) => {
-            use crate::vendors::schneider::scan::{self, Transport};
+            use casket::vendors::schneider::scan::{self, Transport};
             let pb =
                 crate::display::spinner_start(&format!("Querying Modbus TCP at {ip}…"));
             let devs = scan::scan_ip_with_transport(ip, timeout, false, port, Transport::Tcp)?;
@@ -1525,7 +1526,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             }
         }
         Some(Protocol::Ewon) => {
-            use crate::vendors::ewon::scan;
+            use casket::vendors::ewon::scan;
             let pb = crate::display::spinner_start(&format!("Scanning eWON at {ip}…"));
             let devs = scan::scan_ip(ip, timeout, false).unwrap_or_default();
             pb.finish_and_clear();
@@ -1544,7 +1545,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             }
         }
         Some(Protocol::Mqtt) => {
-            use crate::vendors::mqtt::client;
+            use casket::vendors::mqtt::client;
             let mqtt_port = if port == 0 { client::MQTT_PORT } else { port };
             let pb = crate::display::spinner_start(&format!("Probing MQTT broker at {ip}:{mqtt_port}…"));
             let result = client::probe(ip, mqtt_port);
@@ -1568,13 +1569,13 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
 fn get_state(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Result<()> {
     match proto {
         Some(Protocol::Siemens) => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let s7_port = if port == 0 { 102 } else { port };
             let state = s7comm::get_cpu_state(ip, s7_port, 5, None);
             crate::display::print_info(&format!("CPU state: {state}"));
         }
         Some(Protocol::Omron) => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let fins_port = if port == 0 { 9600 } else { port };
             match fins::get_cpu_state(ip, fins_port, 0) {
                 Ok(state) => crate::display::print_success(&format!("CPU state: {state}")),
@@ -1582,7 +1583,7 @@ fn get_state(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Res
             }
         }
         Some(Protocol::Beckhoff) => {
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let devs =
                 scan::discover_ip_with_port(ip, 3, true, port).unwrap_or_default();
@@ -1597,7 +1598,7 @@ fn get_state(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Res
             }
         }
         Some(Protocol::Mitsubishi) => {
-            use crate::vendors::mitsubishi::scan::{self, Transport};
+            use casket::vendors::mitsubishi::scan::{self, Transport};
             let slmp_port = if port == 0 { 5006 } else { port };
             let pb = crate::display::spinner_start(&format!("Probing Mitsubishi MELSEC at {ip}…"));
             let devs = scan::scan_ip_with_transport(ip, 5, true, slmp_port, Transport::Both)
@@ -1616,7 +1617,7 @@ fn get_state(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Res
             }
         }
         Some(Protocol::Phoenix) => {
-            use crate::vendors::phoenix::control;
+            use casket::vendors::phoenix::control;
             let pb = crate::display::spinner_start(&format!("Probing Phoenix Contact at {ip}…"));
             let result = control::get_device_info(ip, port, true);
             pb.finish_and_clear();
@@ -1640,7 +1641,7 @@ fn get_state(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Res
 }
 
 fn get_io(ip: &str, port: u16, password: Option<&str>) {
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::siemens::s7comm;
     let s7_port = if port == 0 { 102 } else { port };
     let pb = crate::display::spinner_start(&format!("Reading I/O from {ip}…"));
     let data = s7comm::read_all_data(ip, s7_port, 5, password);
@@ -1665,7 +1666,7 @@ fn get_io(ip: &str, port: u16, password: Option<&str>) {
 fn get_tags(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Result<()> {
     match proto {
         Some(Protocol::Rockwell) => {
-            use crate::vendors::rockwell::driver;
+            use casket::vendors::rockwell::driver;
             let enip_port = if port == 0 { 44818 } else { port };
             let pb =
                 crate::display::spinner_start(&format!("Enumerating tags on {ip}…"));
@@ -1685,7 +1686,7 @@ fn get_tags(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Resu
             }
         }
         Some(Protocol::Beckhoff) => {
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let devs =
                 scan::discover_ip_with_port(ip, 3, true, port).unwrap_or_default();
@@ -1704,7 +1705,7 @@ fn get_tags(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Resu
             }
         }
         Some(Protocol::Phoenix) => {
-            use crate::vendors::phoenix::webvisit;
+            use casket::vendors::phoenix::webvisit;
             let (project, tags) = webvisit::get_tags(ip, port)?;
             let values = webvisit::read_tag_values(ip, port, &tags)?;
             println!("  Project: {project}");
@@ -1723,7 +1724,7 @@ fn get_tags(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Resu
 }
 
 fn get_tags_ewon(ip: &str, port: u16) {
-    use crate::vendors::ewon::scan;
+    use casket::vendors::ewon::scan;
     let pb = crate::display::spinner_start(&format!("Reading eWON tags from {ip}…"));
     let result = scan::read_tag_values(ip, port, None);
     pb.finish_and_clear();
@@ -1743,7 +1744,7 @@ fn get_tags_ewon(ip: &str, port: u16) {
 }
 
 fn get_tags_mqtt(ip: &str, port: u16) -> Result<()> {
-    use crate::vendors::mqtt::{client, session::{ConnectOptions, MqttSession}};
+    use casket::vendors::mqtt::{client, session::{ConnectOptions, MqttSession}};
     let mqtt_port = if port == 0 { client::MQTT_PORT } else { port };
     let pb = crate::display::spinner_start(
         &format!("Subscribing to MQTT broker at {ip}:{mqtt_port}…"),
@@ -1779,7 +1780,7 @@ fn get_tags_mqtt(ip: &str, port: u16) -> Result<()> {
 }
 
 fn get_tags_iec104(ip: &str, port: u16) {
-    use crate::vendors::iec104::client;
+    use casket::vendors::iec104::client;
     let iec_port = if port == 0 { client::IEC104_PORT } else { port };
     let pb = crate::display::spinner_start(
         &format!("Enumerating IEC 104 objects on {ip}:{iec_port}…"),
@@ -1801,7 +1802,7 @@ fn get_tags_iec104(ip: &str, port: u16) {
 fn get_tag(ip: &str, port: u16, timeout: u64, name: &str, proto: Option<Protocol>) -> Result<()> {
     match proto {
         Some(Protocol::Rockwell) => {
-            use crate::vendors::rockwell::driver;
+            use casket::vendors::rockwell::driver;
             let enip_port = if port == 0 { 44818 } else { port };
             let pb = crate::display::spinner_start(&format!("Reading {name}…"));
             let result = driver::read_tag(ip, enip_port, name);
@@ -1812,7 +1813,7 @@ fn get_tag(ip: &str, port: u16, timeout: u64, name: &str, proto: Option<Protocol
             }
         }
         Some(Protocol::Beckhoff) => {
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let pb = crate::display::spinner_start(&format!("Discovering {ip}…"));
             let devs = scan::discover_ip_with_port(ip, timeout, true, port).unwrap_or_default();
@@ -1827,7 +1828,7 @@ fn get_tag(ip: &str, port: u16, timeout: u64, name: &str, proto: Option<Protocol
             }
         }
         Some(Protocol::Phoenix) => {
-            use crate::vendors::phoenix::webvisit;
+            use casket::vendors::phoenix::webvisit;
             let (_, tags) = webvisit::get_tags(ip, port)?;
             let values = webvisit::read_tag_values(ip, port, &tags)?;
             if let Some((_, val)) = values.iter().find(|(k, _)| k == name) {
@@ -1858,7 +1859,7 @@ fn run_set(
         SetNoun::State { state } => set_state(ip, port, timeout, &state, protocol),
         SetNoun::Tag { assignment, r#type } => set_tag(ip, port, timeout, &assignment, &r#type, protocol),
         SetNoun::Register { address, value } => {
-            use crate::vendors::schneider::modbus;
+            use casket::vendors::schneider::modbus;
             crate::display::print_info(&format!(
                 "Writing register {address} = {value} on {ip}…"
             ));
@@ -1869,7 +1870,7 @@ fn run_set(
             Ok(())
         }
         SetNoun::Registers { start, values } => {
-            use crate::vendors::schneider::modbus;
+            use casket::vendors::schneider::modbus;
             let parsed: Vec<u16> = values
                 .split(',')
                 .filter_map(|s| s.trim().parse::<u16>().ok())
@@ -1884,7 +1885,7 @@ fn run_set(
             Ok(())
         }
         SetNoun::Coil { address, state } => {
-            use crate::vendors::schneider::modbus;
+            use casket::vendors::schneider::modbus;
             let on = if state.eq_ignore_ascii_case("on") {
                 true
             } else if state.eq_ignore_ascii_case("off") {
@@ -1903,7 +1904,7 @@ fn run_set(
             Ok(())
         }
         SetNoun::Output { bits, password } => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let s7_port = if port == 0 { 102 } else { port };
             crate::display::print_info(&format!("Writing outputs to {ip}…"));
             if s7comm::set_outputs(ip, &bits, s7_port, 5, password.as_deref()) {
@@ -1917,7 +1918,7 @@ fn run_set(
             bits_offset,
             password,
         } => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let s7_port = if port == 0 { 102 } else { port };
             let parts: Vec<&str> = bits_offset.splitn(2, ',').collect();
             let bits = parts[0];
@@ -1931,7 +1932,7 @@ fn run_set(
             Ok(())
         }
         SetNoun::Dm { start, values } => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let fins_port = if port == 0 { 9600 } else { port };
             let parsed: Vec<u16> = values
                 .split(',')
@@ -1955,7 +1956,7 @@ fn run_set(
             data,
             password,
         } => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let s7_port = if port == 0 { 102 } else { port };
             let bytes = parse_hex(&data);
             if bytes.is_empty() {
@@ -1974,7 +1975,7 @@ fn run_set(
             Ok(())
         }
         SetNoun::D { start, values } => {
-            use crate::vendors::mitsubishi::slmp;
+            use casket::vendors::mitsubishi::slmp;
             let slmp_port = if port == 0 { 5007 } else { port };
             let parsed: Vec<u16> = values
                 .split(',')
@@ -1993,7 +1994,7 @@ fn run_set(
             Ok(())
         }
         SetNoun::M { start, bits } => {
-            use crate::vendors::mitsubishi::slmp;
+            use casket::vendors::mitsubishi::slmp;
             let slmp_port = if port == 0 { 5007 } else { port };
             let parsed: Vec<bool> = bits
                 .trim()
@@ -2023,7 +2024,7 @@ fn run_set(
             r#type,
             confirm,
         } => {
-            use crate::vendors::snmp::client;
+            use casket::vendors::snmp::client;
             if !confirm {
                 bail!("Add --confirm to confirm you intend to write to {ip}");
             }
@@ -2038,7 +2039,7 @@ fn run_set(
             Ok(())
         }
         SetNoun::Sc { ioa, state } => {
-            use crate::vendors::iec104::client;
+            use casket::vendors::iec104::client;
             let iec_port = if port == 0 { 2404 } else { port };
             let on = if state.eq_ignore_ascii_case("on") {
                 true
@@ -2061,7 +2062,7 @@ fn run_set(
             Ok(())
         }
         SetNoun::Dc { ioa, state } => {
-            use crate::vendors::iec104::client;
+            use casket::vendors::iec104::client;
             let iec_port = if port == 0 { 2404 } else { port };
             let state_name = match state {
                 1 => "OFF",
@@ -2092,7 +2093,7 @@ fn set_state(
 ) -> Result<()> {
     match proto {
         Some(Protocol::Siemens) => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let s7_port = if port == 0 { 102 } else { port };
             if state.eq_ignore_ascii_case("flip") {
                 if s7comm::change_cpu_state(ip, s7_port, 5) {
@@ -2125,7 +2126,7 @@ fn set_state(
             }
         }
         Some(Protocol::Omron) => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let fins_port = if port == 0 { 9600 } else { port };
             let run = if state.eq_ignore_ascii_case("run") {
                 true
@@ -2144,7 +2145,7 @@ fn set_state(
             }
         }
         Some(Protocol::Beckhoff) => {
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let devs =
                 scan::discover_ip_with_port(ip, timeout, true, port).unwrap_or_default();
@@ -2158,8 +2159,8 @@ fn set_state(
             }
         }
         Some(Protocol::Mitsubishi) => {
-            use crate::core::network::NetworkInterface;
-            use crate::vendors::mitsubishi::control;
+            use casket::core::network::NetworkInterface;
+            use casket::vendors::mitsubishi::control;
             let iface = NetworkInterface {
                 name: "auto".into(),
                 ip: local_ip_for(ip),
@@ -2172,7 +2173,7 @@ fn set_state(
             }
         }
         Some(Protocol::Phoenix) => {
-            use crate::vendors::phoenix::control;
+            use casket::vendors::phoenix::control;
             let pb = crate::display::spinner_start(&format!("Sending {state} to {ip}…"));
             let action = if state.eq_ignore_ascii_case("stop") { "stop" } else { "start" };
             let start_type = match state.to_lowercase().as_str() {
@@ -2206,7 +2207,7 @@ fn set_tag(
     };
     match proto {
         Some(Protocol::Rockwell) => {
-            use crate::vendors::rockwell::driver;
+            use casket::vendors::rockwell::driver;
             let enip_port = if port == 0 { 44818 } else { port };
             let value_bytes = parse_hex(hex_val);
             if value_bytes.is_empty() {
@@ -2228,7 +2229,7 @@ fn set_tag(
             }
         }
         Some(Protocol::Beckhoff) => {
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let value_bytes = parse_hex(hex_val);
             if value_bytes.is_empty() {
@@ -2249,12 +2250,12 @@ fn set_tag(
             }
         }
         Some(Protocol::Phoenix) => {
-            use crate::vendors::phoenix::webvisit;
+            use casket::vendors::phoenix::webvisit;
             webvisit::write_tag_value(ip, port, name, hex_val)?;
             crate::display::print_success(&format!("Wrote {name} = {hex_val}"));
         }
         Some(Protocol::Mqtt) => {
-            use crate::vendors::mqtt::{client, session::{ConnectOptions, MqttSession}};
+            use casket::vendors::mqtt::{client, session::{ConnectOptions, MqttSession}};
             let mqtt_port = if port == 0 { client::MQTT_PORT } else { port };
             let opts = ConnectOptions {
                 host: ip.to_string(),
@@ -2277,7 +2278,7 @@ fn set_tag(
 }
 
 fn set_tag_iec104(ip: &str, port: u16, name: &str, hex_val: &str) -> Result<()> {
-    use crate::vendors::iec104::client as iec;
+    use casket::vendors::iec104::client as iec;
     let ioa: u32 = name
         .parse()
         .map_err(|_| anyhow::anyhow!("IOA must be a number, e.g. 10001"))?;
@@ -2296,7 +2297,7 @@ fn set_tag_iec104(ip: &str, port: u16, name: &str, hex_val: &str) -> Result<()> 
 }
 
 fn set_tag_siemens(ip: &str, port: u16, timeout: u64, name: &str, hex_val: &str) -> Result<()> {
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::siemens::s7comm;
     if let Some(rest) = name.strip_prefix("DB") {
         let (db_str, off_str) = rest
             .split_once('.')
@@ -2344,7 +2345,7 @@ fn set_tag_siemens(ip: &str, port: u16, timeout: u64, name: &str, hex_val: &str)
 fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
     match cmd {
         RunCmd::Reboot => {
-            use crate::vendors::beckhoff::webcontrol;
+            use casket::vendors::beckhoff::webcontrol;
             crate::display::print_info(&format!("Sending reboot to {ip}…"));
             match webcontrol::reboot(ip, port) {
                 Ok(true) => crate::display::print_success("Reboot command sent."),
@@ -2353,7 +2354,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::AddUser { credentials } => {
-            use crate::vendors::beckhoff::webcontrol;
+            use casket::vendors::beckhoff::webcontrol;
             let (username, password) = credentials
                 .split_once(':')
                 .unwrap_or((&credentials, "Sc4d4v3r!"));
@@ -2365,7 +2366,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::WriteSymbol { input } => {
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let Some((sym_name, hex_val)) = input.split_once('=') else {
                 bail!("Symbol assignment must be NAME=HEXBYTES, e.g. MAIN.valve=01");
@@ -2390,7 +2391,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::FlashLed => {
-            use crate::vendors::schneider::flash_led;
+            use casket::vendors::schneider::flash_led;
             crate::display::print_info(&format!("Sending Flash LED to {ip}…"));
             match flash_led::flash_led_ip(ip) {
                 Ok(()) => crate::display::print_success("Flash LED command sent."),
@@ -2398,7 +2399,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::SessionStop | RunCmd::SessionRun => {
-            use crate::vendors::schneider::session_hijack;
+            use casket::vendors::schneider::session_hijack;
             let action = if matches!(cmd, RunCmd::SessionStop) { "stop" } else { "run" };
             let pb = crate::display::spinner_start(&format!("Fetching session from {ip}…"));
             let session = session_hijack::get_session_cookie(ip, port);
@@ -2424,7 +2425,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::Fc90Stop { model } => {
-            use crate::vendors::schneider::modicon_fc90;
+            use casket::vendors::schneider::modicon_fc90;
             crate::display::print_info(&format!("FC90 STOP ({model}) to {ip}…"));
             let result = if model.eq_ignore_ascii_case("tm221") {
                 modicon_fc90::stop_tm221(ip, port)
@@ -2438,7 +2439,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::Fc90Start { model } => {
-            use crate::vendors::schneider::modicon_fc90;
+            use casket::vendors::schneider::modicon_fc90;
             crate::display::print_info(&format!("FC90 START ({model}) to {ip}…"));
             let result = if model.eq_ignore_ascii_case("tm221") {
                 modicon_fc90::start_tm221(ip, port)
@@ -2452,7 +2453,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::Fc90Force { output, state } => {
-            use crate::vendors::schneider::modicon_fc90::{self, ForceState};
+            use casket::vendors::schneider::modicon_fc90::{self, ForceState};
             let output_byte =
                 u8::from_str_radix(output.trim().trim_start_matches("0x"), 16).unwrap_or(0x11);
             let force_state = match state.to_lowercase().as_str() {
@@ -2470,7 +2471,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::Passwords => {
-            use crate::vendors::phoenix::webvisit;
+            use casket::vendors::phoenix::webvisit;
             let pb =
                 crate::display::spinner_start(&format!("Retrieving passwords from {ip}…"));
             let result = webvisit::retrieve_passwords(ip, port);
@@ -2496,7 +2497,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::EwonCreds { max_users } => {
-            use crate::vendors::ewon::exploit;
+            use casket::vendors::ewon::exploit;
             crate::display::print_info(&format!("Extracting credentials from {ip}…"));
             let users = exploit::exploit(ip, port, "adm", max_users);
             if users.is_empty() {
@@ -2509,7 +2510,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::Portscan { ports } => {
-            use crate::core::portscan::scan_ot_ports;
+            use casket::core::portscan::scan_ot_ports;
             use colored::Colorize;
             let extra: Vec<u16> = ports
                 .as_deref()
@@ -2541,7 +2542,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::Shellshock { http_port } => {
-            use crate::core::shellshock::test_shellshock;
+            use casket::core::shellshock::test_shellshock;
             use colored::Colorize;
             crate::display::print_info(&format!(
                 "Testing Shellshock (CVE-2014-6271) on {ip}:{http_port}…"
@@ -2567,7 +2568,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::DefaultCreds { path, http_port, wordlist } => {
-            use crate::core::httpcreds::test_http_basic;
+            use casket::core::httpcreds::test_http_basic;
             let mut extra_creds: Vec<(String, String)> = Vec::new();
             // creds.toml HTTP pairs
             let creds_cfg = crate::creds::load();
@@ -2601,7 +2602,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             }
         }
         RunCmd::Fdi { address, value, target, interval, count } => {
-            use crate::core::modbus_fdi::{fdi_loop, FdiTarget};
+            use casket::core::modbus_fdi::{fdi_loop, FdiTarget};
             let fdi_target = match target.to_lowercase().as_str() {
                 "coil" => FdiTarget::Coil,
                 _ => FdiTarget::Register,
@@ -2621,7 +2622,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
         // ModbusServer is handled before run_run() in the Verb::Run dispatch.
         RunCmd::ModbusServer { .. } => unreachable!(),
         RunCmd::Pcap { file, iface, output, count } => {
-            use crate::core::capture;
+            use casket::core::capture;
             match file {
                 Some(path) => {
                     let obs = capture::ingest_file(&path)?;
@@ -2670,7 +2671,7 @@ fn run_db(cmd: DbCmd) -> Result<()> {
             crate::display::print_success(&format!("Removed device id={id}"));
         }
         DbCmd::Refs { vendor } => {
-            use scadaver::references;
+            use casket::references;
             let entries: Vec<&references::Reference> = match vendor.as_deref() {
                 Some(v) => references::for_vendor(v),
                 None => references::all().iter().collect(),
@@ -2702,7 +2703,7 @@ fn local_ip_for(target: &str) -> String {
         .map_or_else(|_| "0.0.0.0".into(), |a| a.ip().to_string())
 }
 
-fn summarize_device(info: &crate::core::autodetect::DeviceInfo) -> String {
+fn summarize_device(info: &casket::core::autodetect::DeviceInfo) -> String {
     const FIELDS: &[(&str, &str)] = &[
         ("hardware", "Hardware"),
         ("firmware", "FW"),

