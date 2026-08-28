@@ -156,7 +156,7 @@ fn loopback_s7_scan_returns_device() {
     thread::spawn(move || serve_s7_session(&listener));
     thread::sleep(Duration::from_millis(50));
 
-    let dev = scadaver::vendors::siemens::scan::scan_ip_with_port("127.0.0.1", port);
+    let dev = casket::vendors::siemens::scan::scan_ip_with_port("127.0.0.1", port);
 
     assert!(
         dev.hardware.is_some(),

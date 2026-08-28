@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
-use scadaver::core::modbus::{read_holding_registers, read_coils, DEFAULT_PORT};
+use casket::core::modbus::{read_holding_registers, read_coils, DEFAULT_PORT};
 
 // Build a Modbus TCP response frame.
 // MBAP length field = unit_id(1) + fc(1) + pdu_data.len()
@@ -112,7 +112,7 @@ fn live_modbus_read_device_id_runs_without_panic() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_PORT);
-    let client = scadaver::core::modbus::ModbusTcpClient::new(&host).with_port(port);
+    let client = casket::core::modbus::ModbusTcpClient::new(&host).with_port(port);
     // FC 0x2B may return a Modbus exception — that's a valid response, not a test failure.
     let _ = client.read_device_id();
 }

@@ -66,6 +66,9 @@ crossterm = { version = "0.28", optional = true }
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }
 chrono = { version = "0.4", optional = true, default-features = false, features = ["std"] }
 
+[dev-dependencies]
+casket-macros = "0.1"
+
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"

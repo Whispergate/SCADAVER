@@ -2,18 +2,18 @@
 // Each test exercises the public surface as an external crate would:
 // using scadaver:: paths, not crate:: paths.
 
-use scadaver::core::autodetect::{DeviceInfo, ProbeInfo, SweepOutcome};
-use scadaver::core::bytes;
-use scadaver::vendors::beckhoff::ads;
-use scadaver::vendors::enip::enums;
-use scadaver::vendors::ewon::exploit;
-use scadaver::vendors::mitsubishi::slmp::SlmpValue;
-use scadaver::vendors::omron::fins::{OmronDevice, AREA_DM_WORD, FINS_TCP_PORT};
-use scadaver::vendors::rockwell::driver;
-use scadaver::vendors::schneider::session_hijack::{SchneiderDeviceInfo, SchneiderSession};
-use scadaver::vendors::siemens::scan as siemens_scan;
-use scadaver::vendors::mqtt::client::{self, MqttDevice, MQTT_PORT};
-use scadaver::vendors::snmp::oids;
+use casket::core::autodetect::{DeviceInfo, ProbeInfo, SweepOutcome};
+use casket::core::bytes;
+use casket::vendors::beckhoff::ads;
+use casket::vendors::enip::enums;
+use casket::vendors::ewon::exploit;
+use casket::vendors::mitsubishi::slmp::SlmpValue;
+use casket::vendors::omron::fins::{OmronDevice, AREA_DM_WORD, FINS_TCP_PORT};
+use casket::vendors::rockwell::driver;
+use casket::vendors::schneider::session_hijack::{SchneiderDeviceInfo, SchneiderSession};
+use casket::vendors::siemens::scan as siemens_scan;
+use casket::vendors::mqtt::client::{self, MqttDevice, MQTT_PORT};
+use casket::vendors::snmp::oids;
 
 // ── core::bytes ──────────────────────────────────────────────────────────────
 
@@ -613,7 +613,7 @@ fn fins_device_struct_fields_accessible() {
 
 #[test]
 fn slmp_default_port() {
-    assert_eq!(scadaver::vendors::mitsubishi::slmp::DEFAULT_PORT, 5007);
+    assert_eq!(casket::vendors::mitsubishi::slmp::DEFAULT_PORT, 5007);
 }
 
 #[test]
@@ -752,14 +752,14 @@ fn mqtt_try_credential_unreachable_returns_none() {
 
 #[test]
 fn iec104_port_constant() {
-    assert_eq!(scadaver::vendors::iec104::client::IEC104_PORT, 2404);
+    assert_eq!(casket::vendors::iec104::client::IEC104_PORT, 2404);
 }
 
 // ── phoenix::control ─────────────────────────────────────────────────────────
 
 #[test]
 fn phoenix_device_struct_fields_accessible() {
-    let dev = scadaver::vendors::phoenix::control::PhoenixDevice {
+    let dev = casket::vendors::phoenix::control::PhoenixDevice {
         plc_type: "ILC 131 ETH".into(),
         firmware: Some("V2.0".into()),
         build: Some("Build-20240101".into()),
@@ -773,19 +773,19 @@ fn phoenix_device_struct_fields_accessible() {
 
 #[test]
 fn bacnet_port_constant() {
-    use scadaver::vendors::bacnet::client::BACNET_PORT;
+    use casket::vendors::bacnet::client::BACNET_PORT;
     assert_eq!(BACNET_PORT, 0xBAC0);
     assert_eq!(BACNET_PORT, 47808);
 }
 
 #[test]
 fn bacnet_prop_object_name_constant() {
-    assert_eq!(scadaver::vendors::bacnet::client::PROP_OBJECT_NAME, 77);
+    assert_eq!(casket::vendors::bacnet::client::PROP_OBJECT_NAME, 77);
 }
 
 #[test]
 fn bacnet_device_struct_fields_accessible() {
-    let dev = scadaver::vendors::bacnet::client::BacnetDevice {
+    let dev = casket::vendors::bacnet::client::BacnetDevice {
         ip: "192.168.1.5".into(),
         instance_id: 1000,
         vendor_id: 999,
@@ -804,13 +804,13 @@ fn bacnet_device_struct_fields_accessible() {
 
 #[test]
 fn dnp3_port_constant() {
-    assert_eq!(scadaver::vendors::dnp3::client::DNP3_PORT, 20000);
+    assert_eq!(casket::vendors::dnp3::client::DNP3_PORT, 20000);
 }
 
 #[test]
 fn dnp3_device_struct_fields_accessible() {
     use std::collections::HashMap;
-    let dev = scadaver::vendors::dnp3::client::Dnp3Device {
+    let dev = casket::vendors::dnp3::client::Dnp3Device {
         ip: "10.0.0.100".into(),
         outstation_addr: 1,
         device_attributes: HashMap::new(),
@@ -824,12 +824,12 @@ fn dnp3_device_struct_fields_accessible() {
 
 #[test]
 fn opcua_port_constant() {
-    assert_eq!(scadaver::vendors::opcua::client::OPCUA_PORT, 4840);
+    assert_eq!(casket::vendors::opcua::client::OPCUA_PORT, 4840);
 }
 
 #[test]
 fn opcua_server_struct_fields_accessible() {
-    let server = scadaver::vendors::opcua::client::OpcuaServer {
+    let server = casket::vendors::opcua::client::OpcuaServer {
         ip: "10.0.0.50".into(),
         port: 4840,
         application_name: "CIServer".into(),
@@ -845,7 +845,7 @@ fn opcua_server_struct_fields_accessible() {
 
 #[test]
 fn opcua_endpoint_info_struct_fields_accessible() {
-    let ep = scadaver::vendors::opcua::client::EndpointInfo {
+    let ep = casket::vendors::opcua::client::EndpointInfo {
         url: "opc.tcp://10.0.0.50:4840".into(),
         security_mode: "None".into(),
         security_policy: "None".into(),

@@ -41,8 +41,8 @@ fn loopback_schneider_udp_discovers_device() {
     thread::sleep(Duration::from_millis(50));
 
     // scan_ip_with_transport(ip, timeout, silent, port, Transport::Udp) — UDP only
-    use scadaver::vendors::schneider::scan::Transport;
-    let result = scadaver::vendors::schneider::scan::scan_ip_with_transport(
+    use casket::vendors::schneider::scan::Transport;
+    let result = casket::vendors::schneider::scan::scan_ip_with_transport(
         "127.0.0.1", 2, true, 0, Transport::Udp,
     );
     // Either the mock response or the client's own probe arrives; in both cases the

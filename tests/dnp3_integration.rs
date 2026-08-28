@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
-use scadaver::vendors::dnp3::client::{detect, DNP3_PORT};
+use casket::vendors::dnp3::client::{detect, DNP3_PORT};
 
 // Reimplemented here because crc16_dnp is private in client.rs.
 fn crc16_dnp(data: &[u8]) -> u16 {

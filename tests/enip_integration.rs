@@ -53,7 +53,7 @@ fn loopback_enip_list_identity_parse() {
     });
     thread::sleep(Duration::from_millis(50));
 
-    let result = scadaver::vendors::enip::scan::scan_ip("127.0.0.1", 2, true);
+    let result = casket::vendors::enip::scan::scan_ip("127.0.0.1", 2, true);
     assert!(result.is_ok(), "EtherNet/IP scan_ip should return Ok");
     let devs = result.unwrap();
     assert_eq!(devs.len(), 1, "should find exactly one device");

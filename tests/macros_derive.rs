@@ -1,5 +1,5 @@
-use scadaver::core::autodetect::IntoDeviceInfo as IntoDeviceInfoTrait;
-use scadaver_macros::IntoDeviceInfo;
+use casket::core::autodetect::IntoDeviceInfo as IntoDeviceInfoTrait;
+use casket_macros::IntoDeviceInfo;
 
 // Mirror of MqttDevice shape: String and Option<String> fields map through the macro;
 // non-String fields (port, bool flags) use #[device_info(skip)].

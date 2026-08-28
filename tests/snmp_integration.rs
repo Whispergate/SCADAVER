@@ -3,7 +3,7 @@
 use std::net::UdpSocket;
 use std::thread;
 use std::time::Duration;
-use scadaver::vendors::snmp::{client, oids};
+use casket::vendors::snmp::{client, oids};
 
 // Hand-crafted SNMPv2c GetResponse (community "public", req-id 1, error-status 0)
 // OID 1.3.6.1.2.1.1.1.0 = OCTET STRING "scadaver CI"

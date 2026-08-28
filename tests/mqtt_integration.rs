@@ -6,8 +6,8 @@
 // Run locally:
 //   $env:TEST_MQTT_HOST="localhost"; cargo test --test mqtt_integration
 
-use scadaver::vendors::mqtt::client::{self, MQTT_PORT};
-use scadaver::vendors::mqtt::session::{ConnectOptions, MqttSession};
+use casket::vendors::mqtt::client::{self, MQTT_PORT};
+use casket::vendors::mqtt::session::{ConnectOptions, MqttSession};
 use std::thread;
 use std::time::Duration;
 

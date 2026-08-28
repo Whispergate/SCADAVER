@@ -4,7 +4,7 @@
 use std::net::UdpSocket;
 use std::thread;
 use std::time::Duration;
-use scadaver::vendors::bacnet::client::{self, scan_ip, BACNET_PORT, PROP_OBJECT_NAME};
+use casket::vendors::bacnet::client::{self, scan_ip, BACNET_PORT, PROP_OBJECT_NAME};
 
 static BACNET_PORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

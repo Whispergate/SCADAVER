@@ -40,7 +40,7 @@ fn loopback_slmp_read_word_succeeds() {
     thread::sleep(Duration::from_millis(50));
 
     let result =
-        scadaver::vendors::mitsubishi::slmp::read_word_devices("127.0.0.1", port, "D", 0, 1);
+        casket::vendors::mitsubishi::slmp::read_word_devices("127.0.0.1", port, "D", 0, 1);
     assert!(result.is_ok(), "SLMP word read should succeed: {:?}", result.err());
     let words = result.unwrap();
     assert_eq!(words.len(), 1);

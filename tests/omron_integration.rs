@@ -52,7 +52,7 @@ fn loopback_omron_fins_device_info() {
     thread::spawn(move || serve_fins_tcp(listener));
     thread::sleep(Duration::from_millis(50));
 
-    let result = scadaver::vendors::omron::fins::get_device_info_tcp("127.0.0.1", port);
+    let result = casket::vendors::omron::fins::get_device_info_tcp("127.0.0.1", port);
     assert!(result.is_ok(), "FINS device info should succeed: {:?}", result.err());
     let dev = result.unwrap();
     assert_eq!(dev.node_addr, 1);

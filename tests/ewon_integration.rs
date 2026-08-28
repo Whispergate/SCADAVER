@@ -45,7 +45,7 @@ fn loopback_ewon_scan_ip_finds_device() {
     thread::sleep(Duration::from_millis(50));
 
     // scan_ip sends two discovery packets then listens on port 1506 (or random fallback).
-    let result = scadaver::vendors::ewon::scan::scan_ip("127.0.0.1", 2, true);
+    let result = casket::vendors::ewon::scan::scan_ip("127.0.0.1", 2, true);
     assert!(result.is_ok(), "eWON scan_ip should return Ok: {:?}", result.err());
     let devs = result.unwrap();
     // At least one device should be discovered

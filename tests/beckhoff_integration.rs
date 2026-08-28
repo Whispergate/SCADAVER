@@ -46,7 +46,7 @@ fn loopback_beckhoff_discover_ip_finds_device() {
     thread::sleep(Duration::from_millis(50));
 
     let result =
-        scadaver::vendors::beckhoff::scan::discover_ip("127.0.0.1", 2, true);
+        casket::vendors::beckhoff::scan::discover_ip("127.0.0.1", 2, true);
     assert!(result.is_ok(), "discover_ip should return Ok: {:?}", result.err());
     let devs = result.unwrap();
     assert_eq!(devs.len(), 1, "should discover exactly one Beckhoff device");

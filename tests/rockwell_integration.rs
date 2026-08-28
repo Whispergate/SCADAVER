@@ -48,7 +48,7 @@ fn serve_list_identity(listener: &TcpListener) {
 #[test]
 fn rockwell_no_server_returns_err() {
     // Port 1 is reserved and unreachable — get_device_info must return Err.
-    let result = scadaver::vendors::rockwell::driver::get_device_info("127.0.0.1", 1);
+    let result = casket::vendors::rockwell::driver::get_device_info("127.0.0.1", 1);
     assert!(result.is_err(), "get_device_info with no server must return Err");
 }
 
@@ -59,7 +59,7 @@ fn loopback_rockwell_list_identity_returns_device() {
     thread::spawn(move || serve_list_identity(&listener));
     thread::sleep(Duration::from_millis(50));
 
-    let result = scadaver::vendors::rockwell::driver::get_device_info("127.0.0.1", port);
+    let result = casket::vendors::rockwell::driver::get_device_info("127.0.0.1", port);
     assert!(result.is_ok(), "list_identity_tcp should succeed: {:?}", result.err());
     let dev = result.unwrap();
     assert_eq!(dev.product_name, "PLC");

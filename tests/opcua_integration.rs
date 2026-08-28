@@ -1,7 +1,7 @@
 // OPC-UA integration tests — require TEST_OPCUA_HOST env var.
 // In CI, this points at an asyncua simulator (scripts/sim_opcua.py).
 use std::time::Duration;
-use scadaver::vendors::opcua::client::{detect, get_endpoints, OPCUA_PORT};
+use casket::vendors::opcua::client::{detect, get_endpoints, OPCUA_PORT};
 
 fn opcua_host() -> Option<String> {
     std::env::var("TEST_OPCUA_HOST").ok()

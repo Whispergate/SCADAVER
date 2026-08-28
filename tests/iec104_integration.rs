@@ -18,6 +18,6 @@ fn loopback_iec104_probe_returns_true() {
         }
     });
     thread::sleep(Duration::from_millis(50));
-    let result = scadaver::vendors::iec104::client::probe("127.0.0.1", port);
+    let result = casket::vendors::iec104::client::probe("127.0.0.1", port);
     assert!(result, "IEC104 TESTFR_ACT/CON handshake should succeed against loopback");
 }

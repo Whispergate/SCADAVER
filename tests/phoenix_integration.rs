@@ -53,7 +53,7 @@ fn loopback_phoenix_get_device_info() {
     thread::spawn(move || serve_phoenix(listener));
     thread::sleep(Duration::from_millis(50));
 
-    let result = scadaver::vendors::phoenix::control::get_device_info("127.0.0.1", port, true);
+    let result = casket::vendors::phoenix::control::get_device_info("127.0.0.1", port, true);
     assert!(result.is_ok(), "Phoenix get_device_info should succeed: {:?}", result.err());
     let dev = result.unwrap();
     assert!(
