@@ -135,7 +135,7 @@ pub enum GetNoun {
     },
     /// Tag/symbol list (--protocol: rockwell | beckhoff | phoenix)
     Tags,
-    /// Read one named tag (--protocol: rockwell | beckhoff)
+    /// Read one named tag (--protocol: rockwell | beckhoff | phoenix)
     Tag {
         name: String,
     },
@@ -942,10 +942,62 @@ fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol) -> Result<(
                 crate::display::print_success(&format!("Found {} Modbus device(s).", devs.len()));
             }
         }
-        p => {
-            crate::display::print_info(&format!(
-                "Use 'get info --protocol {p:?}' for device details."
+        Protocol::Omron => {
+            use crate::vendors::omron::fins;
+            let fins_port = if port == 0 { fins::FINS_TCP_PORT } else { port };
+            let pb =
+                crate::display::spinner_start(&format!("Scanning Omron FINS at {ip}:{fins_port}…"));
+            let result = fins::get_device_info_tcp(ip, fins_port);
+            pb.finish_and_clear();
+            match result {
+                Err(e) => crate::display::print_error(&format!("{e}")),
+                Ok(dev) => {
+                    println!("  Node:    {}", dev.node_addr);
+                    println!("  Model:   {}", dev.model);
+                    println!("  Version: {}", dev.version);
+                    crate::display::print_success("Omron FINS device responded.");
+                }
+            }
+        }
+        Protocol::Phoenix => {
+            use crate::vendors::phoenix::control;
+            let pb =
+                crate::display::spinner_start(&format!("Scanning Phoenix Contact at {ip}…"));
+            let result = control::get_device_info(ip, port, true);
+            pb.finish_and_clear();
+            match result {
+                Err(e) => crate::display::print_error(&format!("{e}")),
+                Ok(dev) => {
+                    println!("  PLC type: {}", dev.plc_type);
+                    if let Some(fw) = dev.firmware {
+                        println!("  Firmware: {fw}");
+                    }
+                    if let Some(b) = dev.build {
+                        println!("  Build:    {b}");
+                    }
+                    crate::display::print_success("Phoenix Contact device responded.");
+                }
+            }
+        }
+        Protocol::Rockwell => {
+            use crate::vendors::rockwell::driver;
+            let enip_port = if port == 0 { 44818 } else { port };
+            let pb = crate::display::spinner_start(&format!(
+                "Scanning Rockwell EtherNet/IP at {ip}:{enip_port}…"
             ));
+            let result = driver::get_device_info(ip, enip_port);
+            pb.finish_and_clear();
+            match result {
+                Err(e) => crate::display::print_error(&format!("{e}")),
+                Ok(dev) => {
+                    println!("  Vendor:   {}", dev.vendor);
+                    println!("  Product:  {}", dev.product_name);
+                    println!("  Type:     {}", dev.product_type);
+                    println!("  Revision: {}", dev.revision);
+                    println!("  Serial:   {}", dev.serial);
+                    crate::display::print_success("Rockwell EtherNet/IP device responded.");
+                }
+            }
         }
     }
     Ok(())
@@ -1472,6 +1524,41 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
                 }
             }
         }
+        Some(Protocol::Ewon) => {
+            use crate::vendors::ewon::scan;
+            let pb = crate::display::spinner_start(&format!("Scanning eWON at {ip}…"));
+            let devs = scan::scan_ip(ip, timeout, false).unwrap_or_default();
+            pb.finish_and_clear();
+            if devs.is_empty() {
+                crate::display::print_error("No eWON device responded.");
+            } else {
+                for dev in &devs {
+                    if let Some(ip_addr) = &dev.ip { println!("  IP:           {ip_addr}"); }
+                    if let Some(mac) = &dev.mac { println!("  MAC:          {mac}"); }
+                    if let Some(serial) = &dev.serial { println!("  Serial:       {serial}"); }
+                    if let Some(fw) = &dev.firmware { println!("  Firmware:     {fw}"); }
+                    if let Some(pc) = &dev.product_code { println!("  Product code: {pc}"); }
+                    if let Some(id) = &dev.identifier { println!("  Identifier:   {id}"); }
+                }
+                crate::display::print_success(&format!("{} eWON device(s).", devs.len()));
+            }
+        }
+        Some(Protocol::Mqtt) => {
+            use crate::vendors::mqtt::client;
+            let mqtt_port = if port == 0 { client::MQTT_PORT } else { port };
+            let pb = crate::display::spinner_start(&format!("Probing MQTT broker at {ip}:{mqtt_port}…"));
+            let result = client::probe(ip, mqtt_port);
+            pb.finish_and_clear();
+            match result {
+                None => crate::display::print_warn("No MQTT broker response."),
+                Some(dev) => {
+                    println!("  Anonymous:   {}", dev.anonymous);
+                    if let Some(info) = &dev.broker_info { println!("  Broker info: {info}"); }
+                    println!("  Sparkplug B: {}", dev.sparkplug);
+                    crate::display::print_success("MQTT broker responded.");
+                }
+            }
+        }
         Some(p) => bail!("{p:?} does not support 'get info'"),
         None => bail!("'--protocol <PROTO>' required for 'get info'"),
     }
@@ -1507,6 +1594,43 @@ fn get_state(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Res
             match result {
                 Some(info) => println!("  TwinCAT: {}", info.tc_version),
                 None => crate::display::print_warn("Could not read TwinCAT state."),
+            }
+        }
+        Some(Protocol::Mitsubishi) => {
+            use crate::vendors::mitsubishi::scan::{self, Transport};
+            let slmp_port = if port == 0 { 5006 } else { port };
+            let pb = crate::display::spinner_start(&format!("Probing Mitsubishi MELSEC at {ip}…"));
+            let devs = scan::scan_ip_with_transport(ip, 5, true, slmp_port, Transport::Both)
+                .unwrap_or_default();
+            pb.finish_and_clear();
+            if let Some(dev) = devs.into_iter().next() {
+                println!("  PLC type: {}", dev.plc_type);
+                if let Some(t) = dev.title {
+                    println!("  Title:    {t}");
+                }
+                crate::display::print_warn(
+                    "CPU run/stop state is not readable via SLMP discovery.",
+                );
+            } else {
+                crate::display::print_error("No Mitsubishi MELSEC device responded.");
+            }
+        }
+        Some(Protocol::Phoenix) => {
+            use crate::vendors::phoenix::control;
+            let pb = crate::display::spinner_start(&format!("Probing Phoenix Contact at {ip}…"));
+            let result = control::get_device_info(ip, port, true);
+            pb.finish_and_clear();
+            match result {
+                Ok(dev) => {
+                    println!("  PLC type: {}", dev.plc_type);
+                    if let Some(fw) = dev.firmware {
+                        println!("  Firmware: {fw}");
+                    }
+                    crate::display::print_warn(
+                        "CPU run/stop state requires a control handshake; use 'set state'.",
+                    );
+                }
+                Err(e) => crate::display::print_error(&format!("{e}")),
             }
         }
         Some(p) => bail!("{p:?} does not support 'get state'"),
@@ -1589,13 +1713,71 @@ fn get_tags(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Resu
             }
             crate::display::print_success(&format!("{} tag(s).", tags.len()));
         }
+        Some(Protocol::Ewon) => get_tags_ewon(ip, port),
+        Some(Protocol::Mqtt) => get_tags_mqtt(ip, port)?,
         Some(p) => bail!("{p:?} does not support 'get tags'"),
         None => bail!("'--protocol <PROTO>' required for 'get tags'"),
     }
     Ok(())
 }
 
-fn get_tag(ip: &str, port: u16, _timeout: u64, name: &str, proto: Option<Protocol>) -> Result<()> {
+fn get_tags_ewon(ip: &str, port: u16) {
+    use crate::vendors::ewon::scan;
+    let pb = crate::display::spinner_start(&format!("Reading eWON tags from {ip}…"));
+    let result = scan::read_tag_values(ip, port, None);
+    pb.finish_and_clear();
+    match result {
+        Err(e) => crate::display::print_error(&format!("{e}")),
+        Ok(tags) => {
+            if tags.is_empty() {
+                crate::display::print_warn("No tags returned.");
+            } else {
+                for (name, val) in &tags {
+                    println!("  {name}: {val}");
+                }
+                crate::display::print_success(&format!("{} tag(s).", tags.len()));
+            }
+        }
+    }
+}
+
+fn get_tags_mqtt(ip: &str, port: u16) -> Result<()> {
+    use crate::vendors::mqtt::{client, session::{ConnectOptions, MqttSession}};
+    let mqtt_port = if port == 0 { client::MQTT_PORT } else { port };
+    let pb = crate::display::spinner_start(
+        &format!("Subscribing to MQTT broker at {ip}:{mqtt_port}…"),
+    );
+    let opts = ConnectOptions {
+        host: ip.to_string(),
+        port: mqtt_port,
+        client_id: "scadaver-scan".to_string(),
+        ..Default::default()
+    };
+    let result = MqttSession::connect(&opts);
+    pb.finish_and_clear();
+    match result {
+        Err(e) => crate::display::print_error(&format!("{e}")),
+        Ok(mut sess) => {
+            sess.subscribe("#", 0)?;
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let msgs = sess.drain_messages();
+            let mut topics: Vec<String> = msgs.iter().map(|m| m.topic.clone()).collect();
+            topics.sort();
+            topics.dedup();
+            if topics.is_empty() {
+                crate::display::print_warn("No topics received within 2 s.");
+            } else {
+                for t in &topics {
+                    println!("  {t}");
+                }
+                crate::display::print_success(&format!("{} topic(s).", topics.len()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn get_tag(ip: &str, port: u16, timeout: u64, name: &str, proto: Option<Protocol>) -> Result<()> {
     match proto {
         Some(Protocol::Rockwell) => {
             use crate::vendors::rockwell::driver;
@@ -1612,7 +1794,7 @@ fn get_tag(ip: &str, port: u16, _timeout: u64, name: &str, proto: Option<Protoco
             use crate::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let pb = crate::display::spinner_start(&format!("Discovering {ip}…"));
-            let devs = scan::discover_ip_with_port(ip, _timeout, true, port).unwrap_or_default();
+            let devs = scan::discover_ip_with_port(ip, timeout, true, port).unwrap_or_default();
             pb.finish_and_clear();
             let Some(dev) = devs.into_iter().next() else {
                 crate::display::print_error("No Beckhoff device found.");
@@ -2050,8 +2232,85 @@ fn set_tag(
             webvisit::write_tag_value(ip, port, name, hex_val)?;
             crate::display::print_success(&format!("Wrote {name} = {hex_val}"));
         }
+        Some(Protocol::Mqtt) => {
+            use crate::vendors::mqtt::{client, session::{ConnectOptions, MqttSession}};
+            let mqtt_port = if port == 0 { client::MQTT_PORT } else { port };
+            let opts = ConnectOptions {
+                host: ip.to_string(),
+                port: mqtt_port,
+                client_id: "scadaver-pub".to_string(),
+                ..Default::default()
+            };
+            let payload = hex_val.as_bytes();
+            crate::display::print_info(&format!("Publishing to '{name}' on {ip}:{mqtt_port}…"));
+            let mut sess = MqttSession::connect(&opts)?;
+            sess.publish(name, payload, 0, false)?;
+            crate::display::print_success(&format!("Published {} byte(s) to '{name}'.", payload.len()));
+        }
+        Some(Protocol::Iec104) => set_tag_iec104(ip, port, name, hex_val)?,
+        Some(Protocol::Siemens) => set_tag_siemens(ip, port, timeout, name, hex_val)?,
         Some(p) => bail!("{p:?} does not support 'set tag'"),
         None => bail!("'--protocol <PROTO>' required for 'set tag'"),
+    }
+    Ok(())
+}
+
+fn set_tag_iec104(ip: &str, port: u16, name: &str, hex_val: &str) -> Result<()> {
+    use crate::vendors::iec104::client as iec;
+    let ioa: u32 = name
+        .parse()
+        .map_err(|_| anyhow::anyhow!("IOA must be a number, e.g. 10001"))?;
+    let on = matches!(hex_val, "1" | "on" | "true");
+    let mut sess = iec::connect(ip, port)?;
+    match iec::single_command(&mut sess, ioa, on) {
+        Ok(true) => crate::display::print_success(
+            &format!("IOA {ioa} set to {}.", if on { "ON" } else { "OFF" }),
+        ),
+        Ok(false) => crate::display::print_warn(
+            "Command sent; RTU returned negative confirmation.",
+        ),
+        Err(e) => crate::display::print_error(&format!("{e}")),
+    }
+    Ok(())
+}
+
+fn set_tag_siemens(ip: &str, port: u16, timeout: u64, name: &str, hex_val: &str) -> Result<()> {
+    use crate::vendors::siemens::s7comm;
+    if let Some(rest) = name.strip_prefix("DB") {
+        let (db_str, off_str) = rest
+            .split_once('.')
+            .ok_or_else(|| anyhow::anyhow!("DB address format: DB<num>.<offset>  e.g. DB10.0"))?;
+        let db_num: u16 = db_str.parse().map_err(|_| anyhow::anyhow!("DB number must be u16"))?;
+        let offset: u16 = off_str.parse().map_err(|_| anyhow::anyhow!("DB offset must be u16"))?;
+        let data = parse_hex(hex_val);
+        if data.is_empty() && !hex_val.is_empty() {
+            bail!("value must be hex bytes, e.g. DEADBEEF");
+        }
+        match s7comm::write_data_block(ip, db_num, offset, &data, port, timeout, None) {
+            Ok(true) => crate::display::print_success("DB write acknowledged."),
+            Ok(false) => crate::display::print_warn("Write sent; PLC did not ack."),
+            Err(e) => crate::display::print_error(&format!("{e}")),
+        }
+    } else if let Some(rest) = name.strip_prefix('Q') {
+        let (byte_str, bit_str) = rest
+            .split_once('.')
+            .ok_or_else(|| anyhow::anyhow!("Q address format: Q<byte>.<bit>  e.g. Q0.1"))?;
+        let byte_idx: u8 = byte_str.parse()?;
+        let bit_idx: u8 = bit_str.parse()?;
+        let on = matches!(hex_val, "1" | "on" | "true");
+        s7comm::write_output_bit(ip, byte_idx, bit_idx, on, port, timeout, None)?;
+        crate::display::print_success(&format!("Q{byte_idx}.{bit_idx} → {}.", if on { "1" } else { "0" }));
+    } else if let Some(rest) = name.strip_prefix('M') {
+        let (byte_str, bit_str) = rest
+            .split_once('.')
+            .ok_or_else(|| anyhow::anyhow!("M address format: M<byte>.<bit>  e.g. M1.3"))?;
+        let byte_idx: u8 = byte_str.parse()?;
+        let bit_idx: u8 = bit_str.parse()?;
+        let on = matches!(hex_val, "1" | "on" | "true");
+        s7comm::write_merker_bit(ip, byte_idx, bit_idx, on, port, timeout, None)?;
+        crate::display::print_success(&format!("M{byte_idx}.{bit_idx} → {}.", if on { "1" } else { "0" }));
+    } else {
+        bail!("Siemens address must be DB<num>.<offset>, Q<byte>.<bit>, or M<byte>.<bit>");
     }
     Ok(())
 }

@@ -137,6 +137,8 @@ pub fn build_router(api_key: String) -> Router {
         .route("/api/device/tags", post(api_device_tags))
         .route("/api/device/write", post(api_device_write))
         .route("/api/device/history", get(api_device_history))
+        .route("/api/ewon/tags", get(api_ewon_tags))
+        .route("/api/schneider/info", get(api_schneider_info))
         .route("/api/exploit/*id", post(api_exploit))
         .route("/api/export", get(api_export))
         .route("/api/run/portscan", post(api_portscan))
@@ -189,7 +191,13 @@ async fn health() -> Json<Value> {
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
-async fn api_interfaces() -> Json<Value> {
+async fn api_interfaces(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return err.into_response();
+    }
     let ifaces = tokio::task::spawn_blocking(crate::core::network::get_interfaces)
         .await
         .unwrap_or_default();
@@ -198,19 +206,27 @@ async fn api_interfaces() -> Json<Value> {
         .iter()
         .map(|i| json!({"name": i.name, "ip": i.ip, "netmask": i.netmask}))
         .collect();
-    Json(json!({"interfaces": list}))
+    Json(json!({"interfaces": list})).into_response()
 }
 
 // ─── Device persistence ───────────────────────────────────────────────────────
 
-async fn api_list_devices() -> Json<Value> {
+async fn api_list_devices(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return err.into_response();
+    }
     let result = tokio::task::spawn_blocking(|| {
         let db = crate::db::Database::open(&crate::db::Database::default_path())?;
         db.load_devices()
     })
     .await;
 
-    let Ok(Ok(devices)) = result else { return Json(json!({"devices": []})) };
+    let Ok(Ok(devices)) = result else {
+        return Json(json!({"devices": []})).into_response();
+    };
 
     let list: Vec<Value> = devices
         .iter()
@@ -224,7 +240,7 @@ async fn api_list_devices() -> Json<Value> {
             })
         })
         .collect();
-    Json(json!({"devices": list}))
+    Json(json!({"devices": list})).into_response()
 }
 
 #[derive(Deserialize, Default)]
@@ -941,6 +957,12 @@ fn write_tag_for_vendor(
         return Ok(());
     }
 
+    // ── Phoenix WebVisit ─────────────────────────────────────────────────────
+    if matches!(vendor, "phoenix" | "webvisit") {
+        crate::vendors::phoenix::webvisit::write_tag_value(ip, 0, tag, value)?;
+        return Ok(());
+    }
+
     // ── Beckhoff / Rockwell: actionable CLI guidance ──────────────────────────
     if matches!(vendor, "beckhoff" | "ads") {
         anyhow::bail!(
@@ -998,7 +1020,14 @@ fn parse_bool_value(s: &str) -> bool {
 
 // ─── History ──────────────────────────────────────────────────────────────────
 
-async fn api_device_history(Query(q): Query<HistoryQuery>) -> Json<Value> {
+async fn api_device_history(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<HistoryQuery>,
+) -> impl IntoResponse {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return err.into_response();
+    }
     let ip = q.ip.clone();
     let vendor = q.vendor.clone();
 
@@ -1014,9 +1043,90 @@ async fn api_device_history(Query(q): Query<HistoryQuery>) -> Json<Value> {
                 .iter()
                 .map(|p| json!({"address": p.address, "last_value": p.last_value}))
                 .collect();
-            Json(json!({"history": list}))
+            Json(json!({"history": list})).into_response()
         }
-        _ => Json(json!({"history": []})),
+        _ => Json(json!({"history": []})).into_response(),
+    }
+}
+
+// ─── eWON tags ────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct EwonTagsQuery {
+    ip: String,
+    #[serde(default)]
+    port: u16,
+}
+
+async fn api_ewon_tags(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<EwonTagsQuery>,
+) -> impl IntoResponse {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return err.into_response();
+    }
+    let ip = q.ip.clone();
+    let port = q.port;
+    let result = tokio::task::spawn_blocking(move || {
+        let user = device_field_str(&ip, "username");
+        let pass = device_field_str(&ip, "password");
+        let creds = user.as_deref().zip(pass.as_deref());
+        crate::vendors::ewon::scan::read_tag_values(&ip, port, creds)
+    })
+    .await;
+    match result {
+        Ok(Ok(tags)) => {
+            let list: Vec<Value> = tags
+                .into_iter()
+                .map(|(n, v)| json!({"name": n, "value": v}))
+                .collect();
+            Json(json!({"tags": list})).into_response()
+        }
+        Ok(Err(e)) => (StatusCode::BAD_GATEWAY, Json(json!({"error": e.to_string()}))).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "task panicked"}))).into_response(),
+    }
+}
+
+// ─── Schneider info ───────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct SchneiderInfoQuery {
+    ip: String,
+    #[serde(default)]
+    port: u16,
+}
+
+async fn api_schneider_info(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<SchneiderInfoQuery>,
+) -> impl IntoResponse {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return err.into_response();
+    }
+    let ip = q.ip.clone();
+    let port = q.port;
+    let result = tokio::task::spawn_blocking(move || {
+        use crate::vendors::schneider::session_hijack;
+        let session = session_hijack::get_session_cookie(&ip, port)?;
+        session_hijack::get_device_info(&ip, port, &session.cookie_value, "USER")
+    })
+    .await;
+    match result {
+        Ok(Some(info)) => Json(json!({
+            "device": info.device,
+            "mac": info.mac,
+            "firmware": info.firmware,
+            "state": info.state,
+        }))
+        .into_response(),
+        Ok(None) => {
+            (StatusCode::NOT_FOUND, Json(json!({"error": "no device info returned"}))).into_response()
+        }
+        Err(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "task panicked"}))).into_response()
+        }
     }
 }
 

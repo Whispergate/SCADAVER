@@ -1,0 +1,4 @@
+[[hooks]]
+name = "clippy-strict"
+run = "cargo clippy -- -D warnings"
+stage = "pre-commit"
