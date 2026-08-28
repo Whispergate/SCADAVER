@@ -65,6 +65,10 @@ jobs:
           cargo test --test modbus_integration
           cargo test --test snmp_integration
           cargo test --test bacnet_integration
+          cargo test --test rockwell_integration
+          cargo test --test s7_integration
+          cargo test --test library_api
+          cargo test --test macros_derive
 
       - name: Simulator-backed integration tests
         env:

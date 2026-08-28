@@ -85,6 +85,9 @@ enum CapabilityKey {
     SnmpWrite,
     SnmpApc,
     MqttTcp,
+    BacnetIp,
+    Dnp3Tcp,
+    OpcuaTcp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,18 +340,19 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
                 .risk(ExploitRisk::WriteControl),
         ],
         "bacnet" => vec![
-            ExploitDef::new("Device Info"),
-            ExploitDef::new("Property Dump"),
-            ExploitDef::new("Who-Is Broadcast"),
+            ExploitDef::new("Device Info").capability(CapabilityKey::BacnetIp),
+            ExploitDef::new("Property Dump").capability(CapabilityKey::BacnetIp),
+            ExploitDef::new("Who-Is Broadcast").capability(CapabilityKey::BacnetIp),
         ],
         "dnp3" => vec![
-            ExploitDef::new("Device Attributes"),
-            ExploitDef::new("Integrity Poll"),
+            ExploitDef::new("Device Attributes").capability(CapabilityKey::Dnp3Tcp),
+            ExploitDef::new("Integrity Poll").capability(CapabilityKey::Dnp3Tcp),
         ],
         "opcua" => vec![
-            ExploitDef::new("Server Info"),
-            ExploitDef::new("Enumerate Endpoints"),
-            ExploitDef::with_input("Try Auth Bypass", "endpoint index (default 0)"),
+            ExploitDef::new("Server Info").capability(CapabilityKey::OpcuaTcp),
+            ExploitDef::new("Enumerate Endpoints").capability(CapabilityKey::OpcuaTcp),
+            ExploitDef::with_input("Try Auth Bypass", "endpoint index (default 0)")
+                .capability(CapabilityKey::OpcuaTcp),
         ],
         "mqtt" => vec![
             ExploitDef::with_input("Publish", "topic:payload")
@@ -1279,6 +1283,18 @@ fn capability_availability(dev: &DeviceRecord, capability: CapabilityKey) -> Act
             field_bool_value(fields, "cap_mqtt_tcp")
                 .unwrap_or_else(|| has_port(&["mqtt_port"]) || vendor == "mqtt")
         }
+        CapabilityKey::BacnetIp => {
+            field_bool_value(fields, "cap_bacnet")
+                .unwrap_or_else(|| has_port(&["bacnet_port"]) || vendor == "bacnet")
+        }
+        CapabilityKey::Dnp3Tcp => {
+            field_bool_value(fields, "cap_dnp3")
+                .unwrap_or_else(|| has_port(&["dnp3_port"]) || vendor == "dnp3")
+        }
+        CapabilityKey::OpcuaTcp => {
+            field_bool_value(fields, "cap_opcua")
+                .unwrap_or_else(|| has_port(&["opcua_port"]) || vendor == "opcua")
+        }
     };
 
     ActionAvailability {
@@ -1310,6 +1326,9 @@ fn capability_missing_reason(capability: CapabilityKey) -> &'static str {
         CapabilityKey::SnmpUdp | CapabilityKey::SnmpWrite => "SNMP UDP has not been confirmed",
         CapabilityKey::SnmpApc => "APC UPS not identified via SNMP sysObjectID",
         CapabilityKey::MqttTcp => "MQTT TCP has not been confirmed",
+        CapabilityKey::BacnetIp => "BACnet/IP has not been confirmed",
+        CapabilityKey::Dnp3Tcp => "DNP3 TCP has not been confirmed",
+        CapabilityKey::OpcuaTcp => "OPC-UA TCP has not been confirmed",
     }
 }
 

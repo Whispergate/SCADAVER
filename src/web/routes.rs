@@ -186,7 +186,7 @@ async fn style_css() -> impl IntoResponse {
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({"status": "ok", "version": "1.0.0"}))
+    Json(json!({"status": "ok", "version": env!("CARGO_PKG_VERSION")}))
 }
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────

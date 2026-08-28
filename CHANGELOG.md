@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.4] - 2026-08-28
+
+### Fixed
+- `--timeout` flag now propagates to all S7Comm call sites (`get_io`, `get state`, `get db`,
+  `set output`, `set merkers`, `set db`) instead of being hardcoded to 5 seconds
+- `--timeout` propagates to Beckhoff ADS discovery in `get state` and `get tags` (was hardcoded to 3)
+- `get tags --protocol mqtt` subscribe window now respects `--timeout` instead of always waiting 2 s
+
+### Added
+- `db list` subcommand: prints all stored devices with id, IP, vendor, and last-seen age
+
+### Fixed (CSV)
+- `export --format csv` now strips embedded newlines and carriage returns from JSON field blobs
+  so rows are never split across multiple CSV lines
+
+## [1.5.3] - 2026-08-28
+
+### Fixed
+- `set tag --protocol mqtt` now publishes decoded bytes instead of the ASCII encoding of the hex
+  string (`set tag TOPIC=01` now sends `[0x01]`, not `[0x30, 0x31]`); invalid hex input now
+  returns a clear error
+- `set state --protocol siemens` help text removed "monitor" and "config" states that were never
+  implemented; valid states are `run`, `stop`, and `flip`
+- `GET /health` web endpoint now returns the real binary version via `CARGO_PKG_VERSION` instead
+  of the hardcoded string `"1.0.0"`
+- Stale comment in `tests/library_api.rs` updated from `scadaver::` to `casket::` paths
+
+### Changed
+- CI workflow now runs `rockwell_integration`, `s7_integration`, `library_api`, and
+  `macros_derive` in the explicit per-test integration step (they were already covered by
+  `cargo test --verbose` but were absent from the named step)
+
+## [1.5.2] - 2026-08-28
+
+### Fixed
+- BACnet (3 entries), DNP3 (2 entries), and OPC-UA (3 entries) exploit entries in the TUI were
+  always shown as enabled regardless of whether the protocol was actually detected; added
+  `BacnetIp`, `Dnp3Tcp`, and `OpcuaTcp` capability keys with port-based and field-based
+  detection, matching the existing pattern used for MQTT
+
 ## [1.5.1] - 2026-08-28
 
 ### Fixed

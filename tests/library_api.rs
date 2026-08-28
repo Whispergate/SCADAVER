@@ -1,6 +1,6 @@
 // Integration tests for the scadaver_rs public library API.
 // Each test exercises the public surface as an external crate would:
-// using scadaver:: paths, not crate:: paths.
+// using casket:: paths, not crate:: paths.
 
 use casket::core::autodetect::{DeviceInfo, ProbeInfo, SweepOutcome};
 use casket::core::bytes;

@@ -223,7 +223,7 @@ pub enum GetNoun {
 
 #[derive(Subcommand)]
 pub enum SetNoun {
-    /// CPU state: run | stop | monitor | config | flip  (--protocol required)
+    /// CPU state: run | stop | flip  (--protocol required)
     State {
         state: String,
     },
@@ -446,6 +446,8 @@ pub enum DbCmd {
         #[arg(long)]
         id: i64,
     },
+    /// List stored devices in the database
+    List,
     /// List ICS research references from awesome-ics-writeups (optionally filtered by vendor)
     Refs {
         /// Vendor slug: beckhoff, siemens, schneider, rockwell, mitsubishi, omron,
@@ -617,7 +619,9 @@ fn run_export(format: &str, output: Option<&str>) -> Result<()> {
     let content = if format.to_lowercase() == "csv" {
         let mut lines = vec!["ip,vendor,last_seen,fields".to_string()];
         for d in &devices {
-            let fields_inline = d.fields.to_string().replace('"', "\"\"");
+            let fields_inline = d.fields.to_string()
+                .replace('"', "\"\"")
+                .replace(['\n', '\r'], " ");
             lines.push(format!(
                 "{},{},{},\"{}\"",
                 d.ip, d.vendor, d.last_seen, fields_inline
@@ -1019,7 +1023,7 @@ fn run_get(
     match noun {
         GetNoun::Info => get_info(ip, port, timeout, protocol),
         GetNoun::State => get_state(ip, port, timeout, protocol),
-        GetNoun::Io { password } => { get_io(ip, port, password.as_deref()); Ok(()) }
+        GetNoun::Io { password } => { get_io(ip, port, timeout, password.as_deref()); Ok(()) }
         GetNoun::Tags => get_tags(ip, port, timeout, protocol),
         GetNoun::Tag { name } => get_tag(ip, port, timeout, &name, protocol),
         GetNoun::Register { start, count } => {
@@ -1103,7 +1107,7 @@ fn run_get(
             let pb = crate::display::spinner_start(&format!(
                 "Reading DB{db}:{offset}+{len} from {ip}…"
             ));
-            let result = s7comm::read_data_block(ip, db, offset, len, s7_port, 5, password.as_deref());
+            let result = s7comm::read_data_block(ip, db, offset, len, s7_port, timeout, password.as_deref());
             pb.finish_and_clear();
             match result {
                 Ok(bytes) => {
@@ -1566,12 +1570,12 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
     Ok(())
 }
 
-fn get_state(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Result<()> {
+fn get_state(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Result<()> {
     match proto {
         Some(Protocol::Siemens) => {
             use casket::vendors::siemens::s7comm;
             let s7_port = if port == 0 { 102 } else { port };
-            let state = s7comm::get_cpu_state(ip, s7_port, 5, None);
+            let state = s7comm::get_cpu_state(ip, s7_port, timeout, None);
             crate::display::print_info(&format!("CPU state: {state}"));
         }
         Some(Protocol::Omron) => {
@@ -1586,7 +1590,7 @@ fn get_state(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Res
             use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let devs =
-                scan::discover_ip_with_port(ip, 3, true, port).unwrap_or_default();
+                scan::discover_ip_with_port(ip, timeout, true, port).unwrap_or_default();
             let Some(dev) = devs.into_iter().next() else {
                 crate::display::print_error("No Beckhoff device found.");
                 return Ok(());
@@ -1640,11 +1644,11 @@ fn get_state(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Res
     Ok(())
 }
 
-fn get_io(ip: &str, port: u16, password: Option<&str>) {
+fn get_io(ip: &str, port: u16, timeout: u64, password: Option<&str>) {
     use casket::vendors::siemens::s7comm;
     let s7_port = if port == 0 { 102 } else { port };
     let pb = crate::display::spinner_start(&format!("Reading I/O from {ip}…"));
-    let data = s7comm::read_all_data(ip, s7_port, 5, password);
+    let data = s7comm::read_all_data(ip, s7_port, timeout, password);
     pb.finish_and_clear();
     let mut any = false;
     for area in &["inputs", "outputs", "merkers"] {
@@ -1663,7 +1667,7 @@ fn get_io(ip: &str, port: u16, password: Option<&str>) {
     }
 }
 
-fn get_tags(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Result<()> {
+fn get_tags(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Result<()> {
     match proto {
         Some(Protocol::Rockwell) => {
             use casket::vendors::rockwell::driver;
@@ -1689,7 +1693,7 @@ fn get_tags(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Resu
             use casket::vendors::beckhoff::{ads, scan};
             let local_netid = ads::build_local_netid(&local_ip_for(ip));
             let devs =
-                scan::discover_ip_with_port(ip, 3, true, port).unwrap_or_default();
+                scan::discover_ip_with_port(ip, timeout, true, port).unwrap_or_default();
             let Some(dev) = devs.into_iter().next() else {
                 crate::display::print_error("No Beckhoff device found.");
                 return Ok(());
@@ -1716,7 +1720,7 @@ fn get_tags(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Resu
         }
         Some(Protocol::Iec104) => get_tags_iec104(ip, port),
         Some(Protocol::Ewon) => get_tags_ewon(ip, port),
-        Some(Protocol::Mqtt) => get_tags_mqtt(ip, port)?,
+        Some(Protocol::Mqtt) => get_tags_mqtt(ip, port, timeout)?,
         Some(p) => bail!("{p:?} does not support 'get tags'"),
         None => bail!("'--protocol <PROTO>' required for 'get tags'"),
     }
@@ -1743,7 +1747,7 @@ fn get_tags_ewon(ip: &str, port: u16) {
     }
 }
 
-fn get_tags_mqtt(ip: &str, port: u16) -> Result<()> {
+fn get_tags_mqtt(ip: &str, port: u16, timeout: u64) -> Result<()> {
     use casket::vendors::mqtt::{client, session::{ConnectOptions, MqttSession}};
     let mqtt_port = if port == 0 { client::MQTT_PORT } else { port };
     let pb = crate::display::spinner_start(
@@ -1761,13 +1765,13 @@ fn get_tags_mqtt(ip: &str, port: u16) -> Result<()> {
         Err(e) => crate::display::print_error(&format!("{e}")),
         Ok(mut sess) => {
             sess.subscribe("#", 0)?;
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            std::thread::sleep(std::time::Duration::from_secs(timeout));
             let msgs = sess.drain_messages();
             let mut topics: Vec<String> = msgs.iter().map(|m| m.topic.clone()).collect();
             topics.sort();
             topics.dedup();
             if topics.is_empty() {
-                crate::display::print_warn("No topics received within 2 s.");
+                crate::display::print_warn(&format!("No topics received within {timeout} s."));
             } else {
                 for t in &topics {
                     println!("  {t}");
@@ -1907,7 +1911,7 @@ fn run_set(
             use casket::vendors::siemens::s7comm;
             let s7_port = if port == 0 { 102 } else { port };
             crate::display::print_info(&format!("Writing outputs to {ip}…"));
-            if s7comm::set_outputs(ip, &bits, s7_port, 5, password.as_deref()) {
+            if s7comm::set_outputs(ip, &bits, s7_port, timeout, password.as_deref()) {
                 crate::display::print_success("Outputs written.");
             } else {
                 crate::display::print_error("Failed to write outputs.");
@@ -1924,7 +1928,7 @@ fn run_set(
             let bits = parts[0];
             let offset: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
             crate::display::print_info(&format!("Writing merkers to {ip} (offset {offset})…"));
-            if s7comm::set_merkers(ip, bits, offset, s7_port, 5, password.as_deref()) {
+            if s7comm::set_merkers(ip, bits, offset, s7_port, timeout, password.as_deref()) {
                 crate::display::print_success("Merkers written.");
             } else {
                 crate::display::print_error("Failed to write merkers.");
@@ -1966,7 +1970,7 @@ fn run_set(
                 "Writing {} byte(s) to DB{db}:{offset} on {ip}…",
                 bytes.len()
             ));
-            match s7comm::write_data_block(ip, db, offset, &bytes, s7_port, 5, password.as_deref())
+            match s7comm::write_data_block(ip, db, offset, &bytes, s7_port, timeout, password.as_deref())
             {
                 Ok(true) => crate::display::print_success("DB write acknowledged."),
                 Ok(false) => crate::display::print_warn("Write sent: PLC did not acknowledge."),
@@ -2096,14 +2100,14 @@ fn set_state(
             use casket::vendors::siemens::s7comm;
             let s7_port = if port == 0 { 102 } else { port };
             if state.eq_ignore_ascii_case("flip") {
-                if s7comm::change_cpu_state(ip, s7_port, 5) {
-                    let new = s7comm::get_cpu_state(ip, s7_port, 5, None);
+                if s7comm::change_cpu_state(ip, s7_port, timeout) {
+                    let new = s7comm::get_cpu_state(ip, s7_port, timeout, None);
                     crate::display::print_success(&format!("New state: {new}"));
                 } else {
                     crate::display::print_error("Failed to toggle CPU state.");
                 }
             } else {
-                let cur = s7comm::get_cpu_state(ip, s7_port, 5, None);
+                let cur = s7comm::get_cpu_state(ip, s7_port, timeout, None);
                 let want_run = state.eq_ignore_ascii_case("run");
                 let want_stop = state.eq_ignore_ascii_case("stop");
                 if want_run && cur.eq_ignore_ascii_case("running") {
@@ -2112,8 +2116,8 @@ fn set_state(
                     crate::display::print_info("Already stopped.");
                 } else if want_run || want_stop {
                     crate::display::print_info(&format!("Current: {cur}"));
-                    if s7comm::change_cpu_state(ip, s7_port, 5) {
-                        let new = s7comm::get_cpu_state(ip, s7_port, 5, None);
+                    if s7comm::change_cpu_state(ip, s7_port, timeout) {
+                        let new = s7comm::get_cpu_state(ip, s7_port, timeout, None);
                         crate::display::print_success(&format!("New state: {new}"));
                     } else {
                         crate::display::print_error("Failed to change CPU state.");
@@ -2263,10 +2267,13 @@ fn set_tag(
                 client_id: "scadaver-pub".to_string(),
                 ..Default::default()
             };
-            let payload = hex_val.as_bytes();
+            let payload = parse_hex(hex_val);
+            if payload.is_empty() && !hex_val.is_empty() {
+                bail!("Invalid hex value '{hex_val}': must be even-length hex (e.g. 01, deadbeef)");
+            }
             crate::display::print_info(&format!("Publishing to '{name}' on {ip}:{mqtt_port}…"));
             let mut sess = MqttSession::connect(&opts)?;
-            sess.publish(name, payload, 0, false)?;
+            sess.publish(name, &payload, 0, false)?;
             crate::display::print_success(&format!("Published {} byte(s) to '{name}'.", payload.len()));
         }
         Some(Protocol::Iec104) => set_tag_iec104(ip, port, name, hex_val)?,
@@ -2665,6 +2672,31 @@ fn run_db(cmd: DbCmd) -> Result<()> {
                 &serde_json::Value::Object(serde_json::Map::default()),
             )?;
             crate::display::print_success(&format!("Added {ip} (vendor={vendor}, id={id})"));
+        }
+        DbCmd::List => {
+            let devices = db.load_devices()?;
+            if devices.is_empty() {
+                println!("No devices in database.");
+            } else {
+                println!("{:<5}  {:<16}  {:<14}  LAST SEEN", "ID", "IP", "VENDOR");
+                println!("{}", "-".repeat(60));
+                for d in &devices {
+                    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+                    let ts = UNIX_EPOCH + Duration::from_secs(d.last_seen.cast_unsigned());
+                    let elapsed = SystemTime::now().duration_since(ts).unwrap_or_default();
+                    let ago = if elapsed.as_secs() < 60 {
+                        format!("{}s ago", elapsed.as_secs())
+                    } else if elapsed.as_secs() < 3600 {
+                        format!("{}m ago", elapsed.as_secs() / 60)
+                    } else if elapsed.as_secs() < 86400 {
+                        format!("{}h ago", elapsed.as_secs() / 3600)
+                    } else {
+                        format!("{}d ago", elapsed.as_secs() / 86400)
+                    };
+                    println!("{:<5}  {:<16}  {:<14}  {}", d.id, d.ip, d.vendor, ago);
+                }
+                crate::display::print_success(&format!("{} device(s).", devices.len()));
+            }
         }
         DbCmd::Remove { id } => {
             db.delete_device(id)?;
