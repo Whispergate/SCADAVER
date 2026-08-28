@@ -1713,6 +1713,7 @@ fn get_tags(ip: &str, port: u16, _timeout: u64, proto: Option<Protocol>) -> Resu
             }
             crate::display::print_success(&format!("{} tag(s).", tags.len()));
         }
+        Some(Protocol::Iec104) => get_tags_iec104(ip, port),
         Some(Protocol::Ewon) => get_tags_ewon(ip, port),
         Some(Protocol::Mqtt) => get_tags_mqtt(ip, port)?,
         Some(p) => bail!("{p:?} does not support 'get tags'"),
@@ -1775,6 +1776,26 @@ fn get_tags_mqtt(ip: &str, port: u16) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn get_tags_iec104(ip: &str, port: u16) {
+    use crate::vendors::iec104::client;
+    let iec_port = if port == 0 { client::IEC104_PORT } else { port };
+    let pb = crate::display::spinner_start(
+        &format!("Enumerating IEC 104 objects on {ip}:{iec_port}…"),
+    );
+    let result = client::connect(ip, iec_port)
+        .and_then(|mut s| client::general_interrogation(&mut s));
+    pb.finish_and_clear();
+    match result {
+        Ok(objs) => {
+            for obj in &objs {
+                println!("  IOA {:>6}: type=0x{:02x}  {}", obj.ioa, obj.type_id, obj.decoded);
+            }
+            crate::display::print_success(&format!("{} object(s).", objs.len()));
+        }
+        Err(e) => crate::display::print_error(&format!("{e}")),
+    }
 }
 
 fn get_tag(ip: &str, port: u16, timeout: u64, name: &str, proto: Option<Protocol>) -> Result<()> {

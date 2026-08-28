@@ -250,6 +250,9 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
             ExploitDef::with_input("Extract Credentials (auth bypass)", "adm:20")
                 .capability(CapabilityKey::EwonHttp)
                 .risk(ExploitRisk::SensitiveRead),
+            ExploitDef::new("List Tags")
+                .capability(CapabilityKey::EwonHttp)
+                .risk(ExploitRisk::SensitiveRead),
         ],
         "rockwell" | "enip" => vec![
             ExploitDef::new("Get Device Identity").capability(CapabilityKey::EnipTcp),
@@ -348,6 +351,7 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
         ],
         "mqtt" => vec![
             ExploitDef::with_input("Publish", "topic:payload").risk(ExploitRisk::WriteControl),
+            ExploitDef::new("List Topics").risk(ExploitRisk::SensitiveRead),
         ],
         _ => vec![ExploitDef::new("Auto-detect / rescan")],
     };
@@ -2117,6 +2121,26 @@ fn dispatch_exploit(
         ("phoenix", 3) => exploit_phoenix_write_tag(ip, port, input, &out),
         ("phoenix", 4) => exploit_phoenix_info(ip, port, &out),
         ("ewon", 0) => exploit_ewon_creds(ip, port, input, &out),
+        ("ewon", 1) => {
+            out(&format!("Reading tags from eWON at {ip}…"));
+            match crate::vendors::ewon::scan::read_tag_values(ip, port, None) {
+                Ok(tags) => {
+                    let leaves: Vec<(String, bool)> =
+                        tags.iter().map(|(n, _)| (n.clone(), false)).collect();
+                    for (name, val) in &tags {
+                        out(&format!("  {name}: {val}"));
+                    }
+                    out(&format!("{} tag(s).", tags.len()));
+                    let _ = tx.send(ScanEvent::TagLeaves {
+                        ip: ip.to_string(),
+                        port,
+                        vendor: vendor.to_string(),
+                        leaves,
+                    });
+                }
+                Err(e) => out(&format!("Error: {e}")),
+            }
+        }
         ("rockwell" | "enip", 0) => exploit_rockwell_identity(ip, port, &out),
         ("rockwell" | "enip", 1) => {
             let leaves = exploit_rockwell_tags(ip, port, &out);
@@ -2335,6 +2359,45 @@ fn dispatch_exploit(
                 .and_then(|mut sess| sess.publish(topic, payload_str.as_bytes(), 0, false))
             {
                 Ok(()) => out(&format!("Published {} byte(s) to '{topic}'.", payload_str.len())),
+                Err(e) => out(&format!("Error: {e}")),
+            }
+        }
+        ("mqtt", 1) => {
+            let mqtt_port = if port == 0 {
+                crate::vendors::mqtt::client::MQTT_PORT
+            } else {
+                port
+            };
+            let opts = ConnectOptions {
+                host: ip.to_string(),
+                port: mqtt_port,
+                client_id: "scadaver-scan".to_string(),
+                ..Default::default()
+            };
+            out(&format!("Subscribing to all topics on {ip}:{mqtt_port} for 2 s…"));
+            match MqttSession::connect(&opts).and_then(|mut sess| {
+                sess.subscribe("#", 0)?;
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                Ok(sess.drain_messages())
+            }) {
+                Ok(msgs) => {
+                    let mut topics: Vec<String> =
+                        msgs.iter().map(|m| m.topic.clone()).collect();
+                    topics.sort();
+                    topics.dedup();
+                    let leaves: Vec<(String, bool)> =
+                        topics.iter().map(|t| (t.clone(), true)).collect();
+                    for t in &topics {
+                        out(&format!("  {t}"));
+                    }
+                    out(&format!("{} topic(s).", topics.len()));
+                    let _ = tx.send(ScanEvent::TagLeaves {
+                        ip: ip.to_string(),
+                        port: mqtt_port,
+                        vendor: vendor.to_string(),
+                        leaves,
+                    });
+                }
                 Err(e) => out(&format!("Error: {e}")),
             }
         }
