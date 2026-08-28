@@ -49,6 +49,71 @@ All notable changes to this project will be documented in this file.
 - MQTT exploit entries ("Publish", "List Topics") were missing capability keys, causing them to always appear disabled; added `MqttTcp` capability key with port and field-based detection
 - Added `MqttTcp` to `check_capability` and `capability_missing_reason` to complete the gating logic
 
+## [1.4.0] - 2026-08-28
+
+### Added
+- Write and read support for IEC-104, Siemens S7, MQTT, and eWON devices (`set tag`, `get tag`)
+- Beckhoff `get tag` via ADS; Rockwell `set tag --type` flag for typed CIP writes
+- EIP sender context watermark for traffic fingerprinting; Snort and YARA detection rules
+- TUI: persistent struct members, auto-display on device select, Beckhoff I-key, access labels, legend
+
+### Fixed
+- TUI panic guard on empty device list
+- Web API auth gaps in ephemeral key validation
+
+### Changed
+- Pre-commit strict clippy gate; Rust 1.87 pinned as minimum version
+
+## [1.3.0] - 2026-08-26
+
+### Added
+- PCAP passive discovery (`capture` feature flag): listen on a network interface and fingerprint ICS devices from traffic without sending any probes
+- Regression test suite covering all protocol parsers
+
+### Fixed
+- 7 security and correctness fixes across MQTT, EIP, and Modbus parsers
+- Reader thread lock starvation in MQTT persistent session
+- CI: replaced Python-based simulators (pysnmp, bacpypes3, pymodbus) with in-process UDP/TCP loopbacks for reliable test runs
+
+## [1.2.1] - 2026-08-20
+
+### Added
+- Integration tests for all 10 remaining ICS protocol scanners (BACnet, DNP3, OPC-UA, SNMP, IEC-104, SLMP, FINS, EIP, Modbus, Beckhoff)
+
+### Fixed
+- MQTT shell `ConnectOptions` missing `tls` and `protocol_version` fields at construction
+- musl CI build: vendor native-tls OpenSSL so the static binary links cleanly
+
+## [1.2.0] - 2026-08-20
+
+### Added
+- CIDR network sweep: `scadaver --network 192.168.1.0/24 scan` probes every host in a range
+- Nmap XML import: `scadaver import --nmap scan.xml` seeds the device database from existing scans
+- Config file support (`~/.config/scadaver/config.toml`): persist default timeout, interface, and stealth settings
+- BACnet/IP, DNP3 TCP, and OPC-UA protocol support (scan, read, exploits)
+- MQTT TLS and MQTT v5 support in the interactive shell
+- Web UI: live device push over WebSocket — browser updates without polling
+- MQTT: ACL enumeration, session persistence attack, and retain flooding commands
+- Sparkplug B fuzzer with safety hardening and configurable payload gates
+- TUI: live MQTT topic browser panel (press `m`)
+
+## [1.1.3] - 2026-08-16
+
+### Added
+- Siemens and SNMP device info enrichment: CPU state, firmware, and hardware fields now populate the device record
+- `IntoDeviceInfo` derive macro wired into all vendor structs so autodetect results are fully typed
+
+## [1.1.2] - 2026-08-16
+
+### Added
+- MQTT broker scanner: anonymous detection, `$SYS/#` recon, Sparkplug B passive detection, credential spraying
+- `MqttSession`: persistent MQTT connection with background reader thread (subscribe, publish, drain, disconnect)
+- `scadaver mqtt` interactive shell: 3-level client (configure → connect → pub/sub/attack)
+
+### Fixed
+- Renamed `FinsDevice` to `OmronDevice` to match the prelude re-export
+- Renamed `LogixDevice` and `PhoenixDeviceInfo` to match prelude export names
+
 ## [1.5.0] - 2026-08-28
 
 ### Changed
