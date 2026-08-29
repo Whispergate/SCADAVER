@@ -55,6 +55,10 @@ struct TagsReq {
     vendor: String,
     #[serde(default)]
     cache: bool,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -67,6 +71,10 @@ struct WriteReq {
     /// the driver cannot know how to encode the text, so Rockwell writes require it.
     #[serde(default)]
     type_code: Option<u16>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -158,6 +166,10 @@ fn device_field_str(ip: &str, key: &str) -> Option<String> {
 
 // When `key` is empty the server runs in no-auth mode: every request is accepted.
 // This is intentional for local/isolated deployments; pass a non-empty key in production.
+fn join_err(e: &tokio::task::JoinError) -> String {
+    if e.is_panic() { "internal error".to_string() } else { e.to_string() }
+}
+
 fn require_api_key(headers: &HeaderMap, key: &str) -> Option<(StatusCode, Json<serde_json::Value>)> {
     use subtle::ConstantTimeEq as _;
     let provided = headers
@@ -269,7 +281,7 @@ async fn api_export(
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": join_err(&e)}))).into_response();
         }
     };
 
@@ -358,7 +370,7 @@ async fn api_save_device(
     match result {
         Ok(Ok(id)) => Json(json!({"success": true, "id": id})).into_response(),
         Ok(Err(e)) => Json(json!({"success": false, "error": e.to_string()})).into_response(),
-        Err(e) => Json(json!({"success": false, "error": e.to_string()})).into_response(),
+        Err(e) => Json(json!({"success": false, "error": join_err(&e)})).into_response(),
     }
 }
 
@@ -379,7 +391,7 @@ async fn api_delete_device(
     match result {
         Ok(Ok(())) => Json(json!({"success": true})).into_response(),
         Ok(Err(e)) => Json(json!({"success": false, "error": e.to_string()})).into_response(),
-        Err(e) => Json(json!({"success": false, "error": e.to_string()})).into_response(),
+        Err(e) => Json(json!({"success": false, "error": join_err(&e)})).into_response(),
     }
 }
 
@@ -459,10 +471,11 @@ async fn api_scan_inner(req: ScanNetworkReq) -> Json<Value> {
     match result {
         Ok(Ok(devices)) => Json(json!({"devices": devices})),
         Ok(Err(e)) => Json(json!({"error": e.to_string()})),
-        Err(e) => Json(json!({"error": e.to_string()})),
+        Err(e) => Json(json!({"error": join_err(&e)})),
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn broadcast_scan(
     vendor: &str,
     timeout: u64,
@@ -490,6 +503,8 @@ fn broadcast_scan(
     let scan_ewon = matches!(vendor, "ewon" | "all" | "");
     let scan_schneider = matches!(vendor, "schneider" | "modicon" | "all" | "");
     let scan_mitsubishi = matches!(vendor, "mitsubishi" | "all" | "");
+    let scan_bacnet = matches!(vendor, "bacnet" | "all" | "");
+    let scan_modbus_tcp = matches!(vendor, "modbus" | "all" | "");
 
     if scan_beckhoff {
         if let Ok(devs) = casket::vendors::beckhoff::scan::discover(&iface, timeout, true) {
@@ -568,6 +583,53 @@ fn broadcast_scan(
         }
     }
 
+    if scan_bacnet {
+        use std::time::Duration;
+        for dev in casket::vendors::bacnet::client::who_is_broadcast(Duration::from_secs(timeout)) {
+            devices.push(json!({
+                "ip": dev.ip,
+                "vendor": "bacnet",
+                "object_name": dev.object_name,
+                "vendor_name": dev.vendor_name,
+                "instance_id": dev.instance_id,
+            }));
+        }
+    }
+
+    if scan_modbus_tcp {
+        use std::net::{IpAddr, SocketAddr, TcpStream};
+        use std::time::Duration;
+        if let Ok(IpAddr::V4(v4)) = iface.ip.parse::<IpAddr>() {
+            let octets = v4.octets();
+            let prefix = format!("{}.{}.{}.", octets[0], octets[1], octets[2]);
+            let hosts: Vec<String> = (1u8..=254).map(|i| format!("{prefix}{i}")).collect();
+            for batch in hosts.chunks(32) {
+                let handles: Vec<_> = batch
+                    .iter()
+                    .map(|ip| {
+                        let ip = ip.clone();
+                        std::thread::spawn(move || -> Option<String> {
+                            let addr: SocketAddr = format!("{ip}:502").parse().ok()?;
+                            TcpStream::connect_timeout(&addr, Duration::from_secs(1)).ok()?;
+                            casket::core::modbus::read_holding_registers(&ip, 502, 0, 1).ok()?;
+                            Some(ip)
+                        })
+                    })
+                    .collect();
+                for h in handles {
+                    if let Some(ip) = h.join().ok().flatten() {
+                        devices.push(json!({
+                            "ip": ip,
+                            "vendor": "modbus",
+                            "protocol": "modbus_tcp",
+                            "port": 502,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
     Ok(devices)
 }
 
@@ -588,12 +650,14 @@ async fn api_device_tags_inner(req: TagsReq) -> Json<Value> {
     let ip = req.ip.clone();
     let vendor = req.vendor.clone();
     let cache = req.cache;
+    let username = req.username.clone();
+    let password = req.password.clone();
 
     match tokio::task::spawn_blocking(move || {
         if cache {
             read_tags_from_db(&ip)
         } else {
-            let tags = read_tags_for_vendor(&ip, &vendor);
+            let tags = read_tags_for_vendor(&ip, &vendor, username.as_deref(), password.as_deref());
             // Persist the freshly-pulled tags under a `_tags` key inside the device
             // record so they survive restarts and appear in the cached Tags tab.
             if let Ok(db) = crate::db::Database::open(&crate::db::Database::default_path()) {
@@ -611,12 +675,12 @@ async fn api_device_tags_inner(req: TagsReq) -> Json<Value> {
         }
     }).await {
         Ok(tags) => Json(json!({"tags": tags})),
-        Err(e) => Json(json!({"error": e.to_string()})),
+        Err(e) => Json(json!({"error": join_err(&e)})),
     }
 }
 
 #[allow(clippy::too_many_lines)] // single-responsibility match dispatch over 10 protocol families
-fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
+fn read_tags_for_vendor(ip: &str, vendor: &str, username: Option<&str>, password: Option<&str>) -> Value {
     let mut tags = Map::new();
 
     match vendor {
@@ -633,10 +697,11 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
                 }
             }
         }
-        "siemens" => {
-            let password = device_field_str(ip, "password");
+        "siemens" | "s7" => {
+            let db_pw = device_field_str(ip, "password");
+            let effective_pw = password.or(db_pw.as_deref());
             let data = casket::vendors::siemens::s7comm::read_all_data(
-                ip, 102, 5, password.as_deref(),
+                ip, 102, 5, effective_pw,
             );
             for (area, maybe_bits) in &data {
                 let Some(bits) = maybe_bits else { continue };
@@ -781,9 +846,11 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
         }
         // ── eWON Flexy: live tag values via REST API ──────────────────────────
         "ewon" => {
-            let ewon_user = device_field_str(ip, "username");
-            let ewon_pass = device_field_str(ip, "password");
-            let ewon_creds = ewon_user.as_deref().zip(ewon_pass.as_deref());
+            let db_user = device_field_str(ip, "username");
+            let db_pass = device_field_str(ip, "password");
+            let eff_user = username.or(db_user.as_deref());
+            let eff_pass = password.or(db_pass.as_deref());
+            let ewon_creds = eff_user.zip(eff_pass);
             if let Ok(tag_values) = casket::vendors::ewon::scan::read_tag_values(ip, 80, ewon_creds) {
                 for (name, val) in tag_values {
                     tags.insert(name, Value::String(val));
@@ -798,6 +865,61 @@ fn read_tags_for_vendor(ip: &str, vendor: &str) -> Value {
                 for (oid, val) in varbinds {
                     tags.insert(oid, Value::String(val.display()));
                 }
+            }
+        }
+        // ── MQTT: subscribe to # and drain received topics ────────────────────
+        "mqtt" => {
+            use casket::vendors::mqtt::session::{ConnectOptions, MqttSession};
+            let opts = ConnectOptions {
+                host: ip.to_string(),
+                port: 1883,
+                client_id: "scadaver-web".to_string(),
+                username: username.map(str::to_string),
+                password: password.map(str::to_string),
+                ..ConnectOptions::default()
+            };
+            if let Ok(mut session) = MqttSession::connect(&opts) {
+                let _ = session.subscribe("#", 0);
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                for msg in session.drain_messages().into_iter().take(50) {
+                    let display = String::from_utf8_lossy(&msg.payload).into_owned();
+                    tags.insert(msg.topic, Value::String(display));
+                }
+            }
+        }
+        // ── BACnet/IP: read device properties as tags ─────────────────────────
+        "bacnet" => {
+            if let Some(dev) = casket::vendors::bacnet::client::scan_ip(ip, 5) {
+                tags.insert("vendor_name".into(), dev.vendor_name.into());
+                tags.insert("object_name".into(), dev.object_name.into());
+                tags.insert("description".into(), dev.description.into());
+                tags.insert("firmware_revision".into(), dev.firmware_revision.into());
+                tags.insert("instance_id".into(), dev.instance_id.to_string().into());
+            }
+        }
+        // ── DNP3: read device attributes ─────────────────────────────────────
+        "dnp3" => {
+            let attrs = casket::vendors::dnp3::client::read_device_attributes(
+                ip,
+                std::time::Duration::from_secs(5),
+            );
+            for (k, v) in attrs {
+                tags.insert(k, v.into());
+            }
+        }
+        // ── OPC-UA: enumerate server endpoints ───────────────────────────────
+        "opcua" => {
+            for (i, ep) in casket::vendors::opcua::client::get_endpoints(
+                ip,
+                4840,
+                std::time::Duration::from_secs(5),
+            )
+            .iter()
+            .enumerate()
+            {
+                tags.insert(format!("ep{i}.url"), ep.url.clone().into());
+                tags.insert(format!("ep{i}.security_mode"), ep.security_mode.clone().into());
+                tags.insert(format!("ep{i}.security_policy"), ep.security_policy.clone().into());
             }
         }
         _ => {}
@@ -840,16 +962,18 @@ async fn api_device_write_inner(req: WriteReq) -> Json<Value> {
     let tag = req.tag.clone();
     let value = req.value.clone();
     let type_code = req.type_code;
+    let username = req.username.clone();
+    let password = req.password.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        write_tag_for_vendor(&ip, &vendor, &tag, &value, type_code)
+        write_tag_for_vendor(&ip, &vendor, &tag, &value, type_code, username.as_deref(), password.as_deref())
     })
     .await;
 
     match result {
         Ok(Ok(())) => Json(json!({"success": true})),
         Ok(Err(e)) => Json(json!({"success": false, "error": e.to_string()})),
-        Err(e) => Json(json!({"success": false, "error": e.to_string()})),
+        Err(e) => Json(json!({"success": false, "error": join_err(&e)})),
     }
 }
 
@@ -885,14 +1009,51 @@ fn write_rockwell_tag(
     driver::write_tag(ip, 0, tag, cip_type & 0x0FFF, &bytes)
 }
 
+#[allow(clippy::too_many_lines)]
 fn write_tag_for_vendor(
     ip: &str,
     vendor: &str,
     tag: &str,
     value: &str,
     type_code: Option<u16>,
+    _username: Option<&str>,
+    password: Option<&str>,
 ) -> anyhow::Result<()> {
     use casket::core::modbus;
+
+    // ── IEC 60870-5-104 ──────────────────────────────────────────────────────
+    // Tag format: "IOA:<number>" or "IOA <number>". Value: "1"/"on" or "0"/"off".
+    if matches!(vendor, "iec104") {
+        use casket::vendors::iec104::client;
+        let ioa: u32 = tag
+            .strip_prefix("IOA:")
+            .or_else(|| tag.strip_prefix("IOA "))
+            .ok_or_else(|| {
+                anyhow::anyhow!("IEC-104 tag must be 'IOA:<number>', got: {tag}")
+            })?
+            .trim()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("IEC-104 IOA must be a number, got: {tag}"))?;
+        let mut session = client::connect(ip, 0)
+            .map_err(|e| anyhow::anyhow!("IEC-104 connect to {ip} failed: {e}"))?;
+        client::single_command(&mut session, ioa, parse_bool_value(value))?;
+        return Ok(());
+    }
+
+    // ── Protocols without casket write support ───────────────────────────────
+    if matches!(vendor, "bacnet") {
+        anyhow::bail!(
+            "BACnet write not supported; casket has no WriteProperty implementation yet"
+        );
+    }
+    if matches!(vendor, "dnp3") {
+        anyhow::bail!(
+            "DNP3 write not supported; casket has no direct operate implementation yet"
+        );
+    }
+    if matches!(vendor, "opcua") {
+        anyhow::bail!("OPC-UA write not supported; casket uses anonymous sessions only");
+    }
 
     // ── Siemens S7 ───────────────────────────────────────────────────────────
     // Tags displayed as "Q0.0"…"Q0.7" (outputs) and "M0.0"…"M0.7" (merkers).
@@ -902,10 +1063,11 @@ fn write_tag_for_vendor(
             anyhow::anyhow!("Siemens tag must be Q<byte>.<bit> or M<byte>.<bit>, got: {tag}")
         })?;
         let bit_on = parse_bool_value(value);
-        let password = device_field_str(ip, "password");
+        let db_pw = device_field_str(ip, "password");
+        let effective_pw = password.or(db_pw.as_deref());
         match area {
-            'Q' => s7comm::write_output_bit(ip, byte_idx, bit_idx, bit_on, 102, 5, password.as_deref())?,
-            'M' => s7comm::write_merker_bit(ip, byte_idx, bit_idx, bit_on, 102, 5, password.as_deref())?,
+            'Q' => s7comm::write_output_bit(ip, byte_idx, bit_idx, bit_on, 102, 5, effective_pw)?,
+            'M' => s7comm::write_merker_bit(ip, byte_idx, bit_idx, bit_on, 102, 5, effective_pw)?,
             _ => anyhow::bail!("Unsupported Siemens area '{area}'; use Q or M"),
         }
         return Ok(());
@@ -975,6 +1137,15 @@ fn write_tag_for_vendor(
     }
 
     // ── Modbus / Schneider / generic ─────────────────────────────────────────
+    if matches!(vendor, "modbus" | "schneider" | "modicon")
+        && !tag.starts_with("hr:")
+        && !tag.starts_with("coil:")
+    {
+        anyhow::bail!(
+            "Modbus tag must use a prefix: 'hr:<addr>' for holding register or \
+             'coil:<addr>' for coil, e.g. hr:0 or coil:5"
+        );
+    }
     if let Some(rest) = tag.strip_prefix("hr:") {
         let address: u16 = rest
             .trim()
@@ -1166,7 +1337,7 @@ async fn api_exploit_inner(id: String, req: ExploitReq, events_tx: broadcast::Se
             Json(json!({"success": true, "output": output}))
         }
         Ok(Err(e)) => Json(json!({"success": false, "error": e.to_string()})),
-        Err(e) => Json(json!({"success": false, "error": e.to_string()})),
+        Err(e) => Json(json!({"success": false, "error": join_err(&e)})),
     }
 }
 
@@ -1278,6 +1449,51 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
                 val,
             )?;
             Ok(format!("Register {addr} written: {val}"))
+        }
+
+        "modbus/map-quick" | "modbus/map-common" => {
+            use casket::core::modbus;
+            use std::fmt::Write as _;
+            let port = modbus::DEFAULT_PORT;
+            let count: u16 = if id == "modbus/map-quick" { 125 } else { 512 };
+            let mut out = String::new();
+            match modbus::read_holding_registers(ip, port, 0, count) {
+                Ok(regs) if !regs.is_empty() => {
+                    writeln!(out, "=== Holding Registers (FC3) ===").ok();
+                    for r in &regs { writeln!(out, "  {}  {}", r.display_addr, r.value_str).ok(); }
+                }
+                Ok(_) => {}
+                Err(e) => { writeln!(out, "FC3: {e:#}").ok(); }
+            }
+            match modbus::read_coils(ip, port, 0, count.min(64)) {
+                Ok(regs) if !regs.is_empty() => {
+                    writeln!(out, "=== Coils (FC1) ===").ok();
+                    for r in &regs { writeln!(out, "  {}  {}", r.display_addr, r.value_str).ok(); }
+                }
+                Ok(_) => {}
+                Err(e) => { writeln!(out, "FC1: {e:#}").ok(); }
+            }
+            match modbus::read_input_registers(ip, port, 0, count) {
+                Ok(regs) if !regs.is_empty() => {
+                    writeln!(out, "=== Input Registers (FC4) ===").ok();
+                    for r in &regs { writeln!(out, "  {}  {}", r.display_addr, r.value_str).ok(); }
+                }
+                Ok(_) => {}
+                Err(e) => { writeln!(out, "FC4: {e:#}").ok(); }
+            }
+            match modbus::read_discrete_inputs(ip, port, 0, count.min(64)) {
+                Ok(regs) if !regs.is_empty() => {
+                    writeln!(out, "=== Discrete Inputs (FC2) ===").ok();
+                    for r in &regs { writeln!(out, "  {}  {}", r.display_addr, r.value_str).ok(); }
+                }
+                Ok(_) => {}
+                Err(e) => { writeln!(out, "FC2: {e:#}").ok(); }
+            }
+            if out.is_empty() {
+                Ok("No Modbus registers accessible on any function code.".into())
+            } else {
+                Ok(out)
+            }
         }
 
         "common/shellshock" => {
@@ -1954,6 +2170,151 @@ fn run_exploit(id: &str, ip: &str, username: &str, password: &str) -> anyhow::Re
             }
         }
 
+        // ── BACnet/IP ─────────────────────────────────────────────────────────────
+
+        "bacnet/0" => {
+            use casket::vendors::bacnet::client as bacnet;
+            match bacnet::scan_ip(ip, 5) {
+                Some(dev) => Ok(format!(
+                    "Instance ID : {}\nVendor      : {} (ID {})\nObject Name : {}\nDescription : {}\nFirmware    : {}\nMax APDU    : {}",
+                    dev.instance_id, dev.vendor_name, dev.vendor_id,
+                    dev.object_name, dev.description, dev.firmware_revision, dev.max_apdu
+                )),
+                None => anyhow::bail!("No BACnet device found at {ip}"),
+            }
+        }
+
+        "bacnet/1" => {
+            use casket::vendors::bacnet::client as bacnet;
+            let timeout = std::time::Duration::from_secs(5);
+            let Some(dev) = bacnet::scan_ip(ip, 5) else {
+                anyhow::bail!("No BACnet device found at {ip}");
+            };
+            let props = [
+                (bacnet::PROP_OBJECT_NAME, "Object-Name"),
+                (bacnet::PROP_DESCRIPTION, "Description"),
+                (bacnet::PROP_FIRMWARE_REVISION, "Firmware-Revision"),
+                (bacnet::PROP_VENDOR_NAME, "Vendor-Name"),
+                (bacnet::PROP_VENDOR_IDENTIFIER, "Vendor-Identifier"),
+            ];
+            let mut out = String::new();
+            for (prop_id, label) in props {
+                if let Some(val) = bacnet::read_property(ip, dev.instance_id, prop_id, timeout) {
+                    writeln!(out, "{label}: {val}").ok();
+                }
+            }
+            if out.is_empty() {
+                anyhow::bail!("No properties readable from {ip}");
+            }
+            Ok(out)
+        }
+
+        "bacnet/2" => {
+            use casket::vendors::bacnet::client as bacnet;
+            let timeout = std::time::Duration::from_secs(5);
+            let devices = bacnet::who_is_broadcast(timeout);
+            if devices.is_empty() {
+                return Ok("No BACnet devices responded to Who-Is broadcast.".into());
+            }
+            let mut out = String::new();
+            for d in &devices {
+                writeln!(out, "  {} — instance {} vendor_id {}", d.ip, d.instance_id, d.vendor_id).ok();
+                if !d.object_name.is_empty() {
+                    writeln!(out, "    Name: {}", d.object_name).ok();
+                }
+            }
+            Ok(format!("{} device(s):\n{out}", devices.len()))
+        }
+
+        // ── DNP3 TCP ──────────────────────────────────────────────────────────────
+
+        "dnp3/0" => {
+            use casket::vendors::dnp3::client as dnp3;
+            let timeout = std::time::Duration::from_secs(5);
+            let attrs = dnp3::read_device_attributes(ip, timeout);
+            if attrs.is_empty() {
+                anyhow::bail!("No DNP3 device attributes returned from {ip}");
+            }
+            let mut pairs: Vec<_> = attrs.iter().collect();
+            pairs.sort_by_key(|(k, _)| k.as_str());
+            let mut out = String::new();
+            for (k, v) in pairs {
+                writeln!(out, "{k}: {v}").ok();
+            }
+            Ok(out)
+        }
+
+        "dnp3/1" => {
+            use casket::vendors::dnp3::client as dnp3;
+            let timeout = std::time::Duration::from_secs(5);
+            let lines = dnp3::read_integrity_poll(ip, timeout);
+            if lines.is_empty() {
+                anyhow::bail!("No DNP3 integrity poll data returned from {ip}");
+            }
+            Ok(lines.join("\n"))
+        }
+
+        // ── OPC-UA ────────────────────────────────────────────────────────────────
+
+        "opcua/0" => {
+            use casket::vendors::opcua::client as opcua;
+            let timeout = std::time::Duration::from_secs(5);
+            let Some(server) = opcua::detect(ip, 4840, timeout) else {
+                anyhow::bail!("No OPC-UA server found at {ip}:4840");
+            };
+            let endpoints = opcua::get_endpoints(ip, 4840, timeout);
+            let anon = endpoints.iter().any(|e| e.allows_anonymous && e.security_mode == "None");
+            let mut out = format!(
+                "IP         : {}\nPort       : {}\nEndpoints  : {}\nAnon access: {}\n",
+                server.ip, server.port, endpoints.len(),
+                if anon { "YES — unauthenticated access possible" } else { "No" }
+            );
+            for ep in &endpoints {
+                writeln!(out, "  [{}] {}", ep.security_mode, ep.url).ok();
+            }
+            Ok(out)
+        }
+
+        "opcua/1" => {
+            use casket::vendors::opcua::client as opcua;
+            let timeout = std::time::Duration::from_secs(5);
+            let endpoints = opcua::get_endpoints(ip, 4840, timeout);
+            if endpoints.is_empty() {
+                anyhow::bail!("No OPC-UA endpoints returned from {ip}:4840");
+            }
+            let mut out = String::new();
+            for (i, ep) in endpoints.iter().enumerate() {
+                writeln!(
+                    out,
+                    "[{i}] mode={} policy={}\n    {} (anon={})",
+                    ep.security_mode, ep.security_policy, ep.url, ep.allows_anonymous
+                ).ok();
+            }
+            Ok(out)
+        }
+
+        "opcua/2" => {
+            use casket::vendors::opcua::client as opcua;
+            let timeout = std::time::Duration::from_secs(5);
+            let endpoints = opcua::get_endpoints(ip, 4840, timeout);
+            let vuln: Vec<_> = endpoints.iter()
+                .filter(|e| e.allows_anonymous && e.security_mode == "None")
+                .collect();
+            if vuln.is_empty() {
+                Ok(format!(
+                    "No anonymous None-security endpoints found at {ip}:4840.\nAll {} endpoint(s) require authentication or encryption.",
+                    endpoints.len()
+                ))
+            } else {
+                let mut out = format!("[VULN] Found {} anonymous endpoint(s):\n", vuln.len());
+                for ep in &vuln {
+                    writeln!(out, "  [VULN] {}", ep.url).ok();
+                    writeln!(out, "  Anonymous connect allowed with no encryption").ok();
+                }
+                Ok(out)
+            }
+        }
+
         _ => anyhow::bail!("Unknown exploit: {id}"),
     }
 }
@@ -1964,9 +2325,9 @@ async fn api_portscan(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<PortscanReq>,
-) -> Json<Value> {
+) -> Response {
     if let Some(err) = require_api_key(&headers, &state.api_key) {
-        return Json(err.1.0);
+        return err.into_response();
     }
     let timeout = req.timeout.clamp(1, 60);
     let mut extra_ports = req.extra_ports;
@@ -1989,9 +2350,9 @@ async fn api_portscan(
                     })
                 })
                 .collect();
-            Json(json!({"ports": ports}))
+            Json(json!({"ports": ports})).into_response()
         }
-        Err(e) => Json(json!({"ports": [], "error": e.to_string()})),
+        Err(e) => Json(json!({"ports": [], "error": join_err(&e)})).into_response(),
     }
 }
 
@@ -2002,6 +2363,9 @@ async fn ws_events(
     headers: axum::http::HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Response {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return err.into_response();
+    }
     let origin_ok = headers
         .get("origin")
         .and_then(|v| v.to_str().ok())
@@ -2033,9 +2397,13 @@ async fn events_loop(mut socket: WebSocket, mut rx: broadcast::Receiver<DeviceEv
 async fn ws_monitor(
     ws: WebSocketUpgrade,
     headers: axum::http::HeaderMap,
+    State(state): State<Arc<AppState>>,
     Path(ip): Path<String>,
     Query(q): Query<MonitorQuery>,
 ) -> Response {
+    if let Some(err) = require_api_key(&headers, &state.api_key) {
+        return err.into_response();
+    }
     let origin_ok = headers
         .get("origin")
         .and_then(|v| v.to_str().ok())
@@ -2051,10 +2419,10 @@ async fn monitor_loop(mut socket: WebSocket, ip: String, vendor: String) {
         let ip2 = ip.clone();
         let vendor2 = vendor.clone();
         let payload = match tokio::task::spawn_blocking(
-            move || read_tags_for_vendor(&ip2, &vendor2)
+            move || read_tags_for_vendor(&ip2, &vendor2, None, None)
         ).await {
             Ok(tags) => json!({"tags": tags, "error": null}),
-            Err(e) => json!({"tags": {}, "error": e.to_string()}),
+            Err(e) => json!({"tags": {}, "error": join_err(&e)}),
         };
 
         let Ok(msg) = serde_json::to_string(&payload) else { break };

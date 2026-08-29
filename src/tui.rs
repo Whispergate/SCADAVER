@@ -180,6 +180,32 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
                 .capability(CapabilityKey::S7Tcp)
                 .risk(ExploitRisk::SensitiveRead),
         ],
+        "modbus" => vec![
+            ExploitDef::new("Map Modbus: Quick").capability(CapabilityKey::SchneiderModbus),
+            ExploitDef::new("Map Modbus: Common").capability(CapabilityKey::SchneiderModbus),
+            ExploitDef::with_input("Map Modbus: Custom", "hr:0:500,ir:0:100,co:0:128,di:0:128")
+                .capability(CapabilityKey::SchneiderModbus),
+            ExploitDef::new("Map Modbus: All")
+                .capability(CapabilityKey::SchneiderModbus)
+                .risk(ExploitRisk::LongRunning),
+            ExploitDef::with_input("Read Holding Registers", "0:100")
+                .capability(CapabilityKey::SchneiderModbus),
+            ExploitDef::with_input("Read Coils", "0:64")
+                .capability(CapabilityKey::SchneiderModbus),
+            ExploitDef::with_input("Read Input Registers", "0:100")
+                .capability(CapabilityKey::SchneiderModbus),
+            ExploitDef::with_input("Read Discrete Inputs", "0:64")
+                .capability(CapabilityKey::SchneiderModbus),
+            ExploitDef::with_input("Write Coil", "addr:on|off")
+                .capability(CapabilityKey::SchneiderModbus)
+                .risk(ExploitRisk::WriteControl),
+            ExploitDef::with_input("Write Register", "addr:value")
+                .capability(CapabilityKey::SchneiderModbus)
+                .risk(ExploitRisk::WriteControl),
+            ExploitDef::with_input("Write Multiple Registers", "start:v0,v1,...")
+                .capability(CapabilityKey::SchneiderModbus)
+                .risk(ExploitRisk::WriteControl),
+        ],
         "schneider" | "modicon" => vec![
             ExploitDef::new("Flash LED")
                 .capability(CapabilityKey::SchneiderIdentity)
@@ -375,6 +401,7 @@ const ALL_VENDORS: &[&str] = &[
     "enip",
     "schneider",
     "modicon",
+    "modbus",
     "mitsubishi",
     "phoenix",
     "omron",
@@ -394,6 +421,7 @@ const SCAN_ITEMS: &[&str] = &[
     "Schneider Electric (UDP 1740 broadcast)",
     "Mitsubishi MELSEC  (UDP 5561)",
     "eWON IPCONF        (UDP 1507)",
+    "Modbus TCP         (port 502 /24 sweep)",
     "\u{2190} Return",
 ];
 
@@ -672,6 +700,9 @@ struct App {
     pending_tag_write: Option<(String, bool)>,
     per_device_output: std::collections::HashMap<String, DeviceOutput>,
     current_output_ip: String,
+    output_filter: String,
+    output_filter_active: bool,
+    output_has_tag_content: bool,
 }
 
 impl App {
@@ -738,6 +769,9 @@ impl App {
             pending_tag_write: None,
             per_device_output: std::collections::HashMap::new(),
             current_output_ip: String::new(),
+            output_filter: String::new(),
+            output_filter_active: false,
+            output_has_tag_content: false,
         }
     }
 
@@ -917,6 +951,7 @@ impl App {
                 }
                 ScanEvent::TagLeaves { ip, port, vendor, leaves } => {
                     self.output_from_cache = false;
+                    self.output_has_tag_content = true;
                     self.output_line_backup = None;
                     self.scan_timestamp = Some(std::time::Instant::now());
                     self.tag_write_ip.clone_from(&ip);
@@ -1745,6 +1780,37 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
             return;
         }
 
+        if matches!(target.vendor.as_deref(), Some("modbus")) {
+            use casket::core::modbus;
+            let port = target.port.unwrap_or(modbus::DEFAULT_PORT);
+            let _ = tx.send(ScanEvent::Output(format!(
+                "[*] Modbus TCP probe (port {port})..."
+            )));
+            let responded = modbus::read_holding_registers(&target.ip, port, 0, 1).is_ok();
+            let mut fields = HashMap::new();
+            fields.insert("port".into(), Value::Number(i64::from(port).into()));
+            fields.insert("modbus_port".into(), Value::Number(i64::from(port).into()));
+            fields.insert("protocol".into(), Value::String("modbus_tcp".into()));
+            fields.insert("discovery_transport".into(), Value::String("tcp".into()));
+            fields.insert("cap_modbus_tcp".into(), Value::Bool(responded));
+            let msg = if responded {
+                format!("[+] Modbus TCP: {} responded on port {port}", target.ip)
+            } else {
+                format!(
+                    "[!] {} - no Modbus response on port {port}; stored for manual ops",
+                    target.ip
+                )
+            };
+            let _ = tx.send(ScanEvent::Output(msg));
+            let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
+                vendor: "modbus".into(),
+                ip: target.ip.clone(),
+                fields,
+            }));
+            let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
+            return;
+        }
+
         if target.should_try_schneider() {
             use casket::core::modbus;
             use casket::vendors::schneider::scan;
@@ -1793,6 +1859,37 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
         let all = probe_all(&target.ip, 8);
         match all.len() {
             0 => {
+                // probe_all found nothing — try Modbus TCP as a silent fallback
+                {
+                    use casket::core::modbus;
+                    use std::net::{SocketAddr, TcpStream};
+                    use std::time::Duration;
+                    let mb_port = target.port.unwrap_or(modbus::DEFAULT_PORT);
+                    let addr_str = format!("{}:{}", target.ip, mb_port);
+                    if let Ok(addr) = addr_str.parse::<SocketAddr>() {
+                        if TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok()
+                            && modbus::read_holding_registers(&target.ip, mb_port, 0, 1).is_ok()
+                        {
+                            let _ = tx.send(ScanEvent::Output(format!(
+                                "[+] Modbus TCP: {}:{mb_port}",
+                                target.ip
+                            )));
+                            let mut fields = HashMap::new();
+                            fields.insert("port".into(), Value::Number(i64::from(mb_port).into()));
+                            fields.insert("modbus_port".into(), Value::Number(i64::from(mb_port).into()));
+                            fields.insert("protocol".into(), Value::String("modbus_tcp".into()));
+                            fields.insert("discovery_transport".into(), Value::String("tcp".into()));
+                            fields.insert("cap_modbus_tcp".into(), Value::Bool(true));
+                            let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
+                                vendor: "modbus".into(),
+                                ip: target.ip.clone(),
+                                fields,
+                            }));
+                            let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
+                            return;
+                        }
+                    }
+                }
                 if let Some(port) = target.port {
                     let mut fields = HashMap::new();
                     fields.insert("port".into(), Value::Number(i64::from(port).into()));
@@ -1899,6 +1996,7 @@ fn run_vendor_broadcast(vendor_idx: usize, iface: &NetworkInterface, tx: &mpsc::
         3 => scan_broadcast_schneider(iface, tx),
         4 => scan_broadcast_mitsubishi(iface, tx),
         5 => scan_broadcast_ewon(iface, tx),
+        6 => scan_broadcast_modbus(iface, tx),
         _ => {}
     }
 }
@@ -2017,6 +2115,65 @@ fn scan_broadcast_ewon(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
                     fields,
                 }));
             }
+        }
+    }
+}
+
+fn scan_broadcast_modbus(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
+    use casket::core::modbus;
+    use std::net::{IpAddr, SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let Ok(local_ip) = iface.ip.parse::<IpAddr>() else {
+        let _ = tx.send(ScanEvent::Output("[-] Cannot parse local interface IP".into()));
+        return;
+    };
+    let IpAddr::V4(v4) = local_ip else {
+        let _ = tx.send(ScanEvent::Output(
+            "[-] IPv6 interface; Modbus sweep requires IPv4".into(),
+        ));
+        return;
+    };
+    let octets = v4.octets();
+    let prefix = format!("{}.{}.{}.", octets[0], octets[1], octets[2]);
+    let _ = tx.send(ScanEvent::Output(format!(
+        "[*] Modbus TCP sweep: {prefix}1-254 port 502 (batches of 32)..."
+    )));
+
+    let hosts: Vec<String> = (1u8..=254).map(|i| format!("{prefix}{i}")).collect();
+    for batch in hosts.chunks(32) {
+        let handles: Vec<_> = batch
+            .iter()
+            .map(|ip| {
+                let ip = ip.clone();
+                let tx2 = tx.clone();
+                std::thread::spawn(move || {
+                    let addr: SocketAddr = match format!("{ip}:502").parse() {
+                        Ok(a) => a,
+                        Err(_) => return,
+                    };
+                    if TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_err() {
+                        return;
+                    }
+                    if modbus::read_holding_registers(&ip, 502, 0, 1).is_ok() {
+                        let _ = tx2.send(ScanEvent::Output(format!("[+] Modbus TCP: {ip}:502")));
+                        let mut fields = HashMap::new();
+                        fields.insert("port".into(), Value::Number(502i64.into()));
+                        fields.insert("modbus_port".into(), Value::Number(502i64.into()));
+                        fields.insert("protocol".into(), Value::String("modbus_tcp".into()));
+                        fields.insert("discovery_transport".into(), Value::String("tcp".into()));
+                        fields.insert("cap_modbus_tcp".into(), Value::Bool(true));
+                        let _ = tx2.send(ScanEvent::DeviceFound(DeviceInfo {
+                            vendor: "modbus".into(),
+                            ip: ip.clone(),
+                            fields,
+                        }));
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            let _ = h.join();
         }
     }
 }
@@ -2146,8 +2303,30 @@ fn dispatch_exploit(
         ("schneider" | "modicon", 2) => exploit_schneider_action(ip, port, "stop", input, &out),
         ("schneider" | "modicon", 3) => exploit_schneider_action(ip, port, "run", input, &out),
         ("phoenix", 0) => exploit_phoenix_passwords(ip, port, &out),
-        ("phoenix", 1) => exploit_phoenix_list_tags(ip, port, &out),
-        ("phoenix", 2) => exploit_phoenix_read_tags(ip, port, &out),
+        ("phoenix", 1) => {
+            let tags = exploit_phoenix_list_tags(ip, port, &out);
+            if !tags.is_empty() {
+                let leaves = tags.into_iter().map(|n| (n, true)).collect();
+                let _ = tx.send(ScanEvent::TagLeaves {
+                    ip: ip.to_string(),
+                    port,
+                    vendor: vendor.to_string(),
+                    leaves,
+                });
+            }
+        }
+        ("phoenix", 2) => {
+            let tags = exploit_phoenix_read_tags(ip, port, &out);
+            if !tags.is_empty() {
+                let leaves = tags.into_iter().map(|n| (n, true)).collect();
+                let _ = tx.send(ScanEvent::TagLeaves {
+                    ip: ip.to_string(),
+                    port,
+                    vendor: vendor.to_string(),
+                    leaves,
+                });
+            }
+        }
         ("phoenix", 3) => exploit_phoenix_write_tag(ip, port, input, &out),
         ("phoenix", 4) => exploit_phoenix_info(ip, port, &out),
         ("ewon", 0) => exploit_ewon_creds(ip, port, input, &out),
@@ -2193,14 +2372,14 @@ fn dispatch_exploit(
         ("siemens", 4) => exploit_siemens_set_merkers(ip, port, input, &out),
         ("siemens", 5) => exploit_siemens_list_dbs(ip, port, input, &out),
         ("siemens", 6) => exploit_siemens_read_db(ip, port, input, &out),
-        ("schneider" | "modicon", 4) => exploit_modbus_map(ip, port, "quick", &out),
-        ("schneider" | "modicon", 5) => exploit_modbus_map(ip, port, "common", &out),
-        ("schneider" | "modicon", 6) => exploit_modbus_map(ip, port, input, &out),
-        ("schneider" | "modicon", 7) => exploit_modbus_map(ip, port, "all", &out),
-        ("schneider" | "modicon", 8) => exploit_modbus_holding(ip, port, input, &out),
-        ("schneider" | "modicon", 9) => exploit_modbus_coils(ip, port, input, &out),
-        ("schneider" | "modicon", 10) => exploit_modbus_input(ip, port, input, &out),
-        ("schneider" | "modicon", 11) => exploit_modbus_discrete(ip, port, input, &out),
+        ("schneider" | "modicon", 4) | ("modbus", 0) => exploit_modbus_map(ip, port, "quick", &out),
+        ("schneider" | "modicon", 5) | ("modbus", 1) => exploit_modbus_map(ip, port, "common", &out),
+        ("schneider" | "modicon", 6) | ("modbus", 2) => exploit_modbus_map(ip, port, input, &out),
+        ("schneider" | "modicon", 7) | ("modbus", 3) => exploit_modbus_map(ip, port, "all", &out),
+        ("schneider" | "modicon", 8) | ("modbus", 4) => exploit_modbus_holding(ip, port, input, &out),
+        ("schneider" | "modicon", 9) | ("modbus", 5) => exploit_modbus_coils(ip, port, input, &out),
+        ("schneider" | "modicon", 10) | ("modbus", 6) => exploit_modbus_input(ip, port, input, &out),
+        ("schneider" | "modicon", 11) | ("modbus", 7) => exploit_modbus_discrete(ip, port, input, &out),
         ("phoenix", 5) => exploit_phoenix_control_ilc150(ip, port, input, &out),
         ("phoenix", 6) => exploit_phoenix_control_ilc390(ip, port, input, &out),
         ("mitsubishi", 3) => exploit_slmp_map(ip, port, input, &out),
@@ -2215,9 +2394,9 @@ fn dispatch_exploit(
         ("siemens", 7) => exploit_siemens_write_db(ip, port, input, &out),
         ("siemens", 8) => exploit_siemens_try_defaults(ip, port, &out),
         ("beckhoff", 8) => exploit_beckhoff_write_symbol(ip, port, input, &out),
-        ("schneider" | "modicon", 12) => exploit_modbus_write_coil(ip, port, input, &out),
-        ("schneider" | "modicon", 13) => exploit_modbus_write_register(ip, port, input, &out),
-        ("schneider" | "modicon", 14) => {
+        ("schneider" | "modicon", 12) | ("modbus", 8) => exploit_modbus_write_coil(ip, port, input, &out),
+        ("schneider" | "modicon", 13) | ("modbus", 9) => exploit_modbus_write_register(ip, port, input, &out),
+        ("schneider" | "modicon", 14) | ("modbus", 10) => {
             exploit_modbus_write_registers(ip, port, input, &out);
         }
         ("schneider" | "modicon", 15) => exploit_fc90_stop(ip, port, &out),
@@ -2717,7 +2896,7 @@ fn exploit_phoenix_passwords(ip: &str, port: u16, out: &impl Fn(&str)) {
     }
 }
 
-fn exploit_phoenix_list_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
+fn exploit_phoenix_list_tags(ip: &str, port: u16, out: &impl Fn(&str)) -> Vec<String> {
     use casket::vendors::phoenix::webvisit;
     out(&format!("[*] Listing tags on {ip}..."));
     match webvisit::get_tags(ip, port) {
@@ -2727,25 +2906,34 @@ fn exploit_phoenix_list_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
                 out(&format!("  [{i:>4}] {t}"));
             }
             out(&format!("[+] {} tag(s)", tags.len()));
+            tags
         }
-        Err(e) => out(&format!("[-] {e}")),
+        Err(e) => {
+            out(&format!("[-] {e}"));
+            vec![]
+        }
     }
 }
 
-fn exploit_phoenix_read_tags(ip: &str, port: u16, out: &impl Fn(&str)) {
+fn exploit_phoenix_read_tags(ip: &str, port: u16, out: &impl Fn(&str)) -> Vec<String> {
     use casket::vendors::phoenix::webvisit;
     out(&format!("[*] Reading tag values from {ip}..."));
-    let tags_result = webvisit::get_tags(ip, port);
-    match tags_result {
-        Ok((_, tags)) => match webvisit::read_tag_values(ip, port, &tags) {
-            Ok(vals) => {
-                for (name, val) in &vals {
-                    out(&format!("  {name}: {val}"));
+    match webvisit::get_tags(ip, port) {
+        Ok((_, tags)) => {
+            match webvisit::read_tag_values(ip, port, &tags) {
+                Ok(vals) => {
+                    for (name, val) in &vals {
+                        out(&format!("  {name}: {val}"));
+                    }
                 }
+                Err(e) => out(&format!("[-] {e}")),
             }
-            Err(e) => out(&format!("[-] {e}")),
-        },
-        Err(e) => out(&format!("[-] {e}")),
+            tags
+        }
+        Err(e) => {
+            out(&format!("[-] {e}"));
+            vec![]
+        }
     }
 }
 
@@ -2890,6 +3078,36 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) -> Vec<(Strin
         })
         .collect();
 
+    // Bulk-read element [0] for 1D arrays-of-structs
+    let array1d_struct_tags: Vec<(&str, u16)> = tags
+        .iter()
+        .filter(|t| driver::is_struct_like(t.tag_type) && t.dimensions == 1)
+        .map(|t| (t.name.as_str(), t.tag_type))
+        .collect();
+    let array1d_struct_subs: Vec<String> = array1d_struct_tags
+        .iter()
+        .map(|(name, _)| format!("{name}[0]"))
+        .collect();
+    let array1d_struct_refs: Vec<&str> =
+        array1d_struct_subs.iter().map(String::as_str).collect();
+    let array1d_struct_raw = driver::read_tags_bulk(ip, port, &array1d_struct_refs);
+    let array1d_struct_map: HashMap<&str, String> = array1d_struct_tags
+        .iter()
+        .zip(array1d_struct_raw.iter())
+        .map(|((name, tag_type), opt)| {
+            let val = opt.as_deref().map_or_else(
+                || "[array]".to_string(),
+                |data| {
+                    format!(
+                        "[{}, ...]",
+                        driver::decode_value(*tag_type, data, Some(&templates))
+                    )
+                },
+            );
+            (*name, val)
+        })
+        .collect();
+
     // Bulk-read scalar struct tags — keep raw bytes for flatten_struct expansion
     let struct_tags: Vec<(&str, u16)> = tags
         .iter()
@@ -2952,6 +3170,19 @@ fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) -> Vec<(Strin
                     i64::from(t.tag_type),
                 ));
             }
+        } else if driver::is_struct_like(t.tag_type) && t.dimensions >= 1 {
+            let value = array1d_struct_map
+                .get(t.name.as_str())
+                .cloned()
+                .unwrap_or_else(|| format!("[{}D array]", t.dimensions));
+            out(&fmt_tag_row(
+                i64::from(t.instance_id),
+                &t.name,
+                &base,
+                dims,
+                &value,
+                i64::from(t.tag_type),
+            ));
         } else {
             let value = match t.dimensions {
                 1 => array1d_map
@@ -4465,7 +4696,13 @@ fn exploit_mitsubishi_read_m(ip: &str, port: u16, input: &str, out: &impl Fn(&st
 fn exploit_modbus_write_coil(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use casket::vendors::schneider::modbus;
     let (addr_s, state_s) = input.split_once(':').unwrap_or((input, "on"));
-    let addr = addr_s.trim().parse::<u16>().unwrap_or(0);
+    let addr: u16 = if let Ok(a) = addr_s.trim().parse() { a } else {
+        out(&format!(
+            "[-] Invalid coil address '{}': must be a number 0\u{2013}65535 (format: addr:on|off)",
+            addr_s.trim()
+        ));
+        return;
+    };
     let on = !state_s.trim().eq_ignore_ascii_case("off");
     out(&format!(
         "[*] Writing coil {addr} = {} on {ip}...",
@@ -4480,8 +4717,20 @@ fn exploit_modbus_write_coil(ip: &str, port: u16, input: &str, out: &impl Fn(&st
 fn exploit_modbus_write_register(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
     use casket::vendors::schneider::modbus;
     let (addr_s, val_s) = input.split_once(':').unwrap_or((input, "0"));
-    let addr = addr_s.trim().parse::<u16>().unwrap_or(0);
-    let value = val_s.trim().parse::<u16>().unwrap_or(0);
+    let addr: u16 = if let Ok(a) = addr_s.trim().parse() { a } else {
+        out(&format!(
+            "[-] Invalid register address '{}': must be a number 0\u{2013}65535 (format: addr:value)",
+            addr_s.trim()
+        ));
+        return;
+    };
+    let value: u16 = if let Ok(v) = val_s.trim().parse() { v } else {
+        out(&format!(
+            "[-] Invalid register value '{}': must be a decimal 0\u{2013}65535",
+            val_s.trim()
+        ));
+        return;
+    };
     out(&format!("[*] Writing register {addr} = {value} on {ip}..."));
     match modbus::write_single_register(ip, port, addr, value) {
         Ok(()) => out(&format!("[+] Register {addr} written")),
@@ -4984,7 +5233,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         Mode::Search => " Type to filter \u{2014} [ESC] clear  [ENTER] confirm",
         Mode::ExploitInput => " Enter parameter \u{2014} [ENTER] run  [ESC] cancel",
         Mode::ExploitConfirm => " Type YES to confirm action \u{2014} [ENTER] confirm  [ESC] cancel",
-        Mode::OutputZoom => " [J/K/PgUp/PgDn] Scroll  [G] Bottom  [g] Top  [C] Clear  [O/ESC] Close",
+        Mode::OutputZoom => " [J/K/PgUp/PgDn] Scroll  [G] Bottom  [g] Top  [/] Filter  [C] Clear  [O/ESC] Close",
         Mode::References => " [J/K/\u{2191}\u{2193}] Scroll  [B/ESC] Close",
         Mode::ImportInput => " nmap XML path \u{2014} [ENTER] import  [ESC] cancel",
         Mode::WordlistInput => " Wordlist path (empty = built-in defaults) \u{2014} [ENTER] save  [ESC] cancel",
@@ -5512,29 +5761,43 @@ fn build_leaf_line_indices(
 
 fn draw_output_zoom(frame: &mut Frame, area: Rect, app: &App) {
     let visible = area.height.saturating_sub(2) as usize;
-    let total = app.output_lines.len();
+    let filter_lc = app.output_filter.to_lowercase();
+    let filtered: Vec<&str> = if filter_lc.is_empty() {
+        app.output_lines.iter().map(String::as_str).collect()
+    } else {
+        app.output_lines
+            .iter()
+            .filter(|l| l.to_lowercase().contains(&filter_lc))
+            .map(String::as_str)
+            .collect()
+    };
+    let total = filtered.len();
     let end = total
         .saturating_sub(app.output_scroll)
         .max(visible.min(total));
     let start = end.saturating_sub(visible);
 
-    let cursor_abs: Option<usize> = app
-        .output_leaf_cursor
-        .and_then(|n| app.tag_leaf_line_indices.get(n).map(|&(li, _)| li));
+    // Leaf cursor is relative to unfiltered line indices — disable while filter is active.
+    let cursor_abs: Option<usize> = if filter_lc.is_empty() {
+        app.output_leaf_cursor
+            .and_then(|n| app.tag_leaf_line_indices.get(n).map(|&(li, _)| li))
+    } else {
+        None
+    };
 
-    let text: Vec<Line> = app.output_lines[start..end]
+    let text: Vec<Line> = filtered[start..end]
         .iter()
         .enumerate()
         .map(|(i, l)| {
             let abs = start + i;
             if cursor_abs == Some(abs) {
                 return Line::from(Span::styled(
-                    l.as_str(),
+                    *l,
                     Style::default().fg(Color::Black).bg(Color::Cyan),
                 ));
             }
             let c = output_line_color(l);
-            Line::from(Span::styled(l.as_str(), Style::default().fg(c)))
+            Line::from(Span::styled(*l, Style::default().fg(c)))
         })
         .collect();
 
@@ -5588,6 +5851,24 @@ fn draw_output_zoom(frame: &mut Frame, area: Rect, app: &App) {
             end,
             total
         )
+    };
+    let title = if app.output_filter_active || !app.output_filter.is_empty() {
+        let cursor = if app.output_filter_active { "\u{2588}" } else { "" };
+        let n_raw = app.output_lines.len();
+        let suffix = if filter_lc.is_empty() {
+            format!("  [/{cursor}]")
+        } else {
+            format!(
+                "  [/{}{cursor} \u{2014} {}/{} match{}]",
+                app.output_filter,
+                total,
+                n_raw,
+                if total == 1 { "" } else { "es" }
+            )
+        };
+        format!("{}{suffix}", title.trim_end())
+    } else {
+        title
     };
 
     let legend = Line::from(vec![
@@ -6375,6 +6656,23 @@ fn handle_key(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers) -
 
 fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
     match code {
+        // Filter-input intercepts: handled before any other key when filter is active.
+        KeyCode::Esc if app.output_filter_active => {
+            app.output_filter_active = false;
+            app.output_filter.clear();
+        }
+        KeyCode::Enter if app.output_filter_active => {
+            app.output_filter_active = false;
+        }
+        KeyCode::Backspace if app.output_filter_active => {
+            app.output_filter.pop();
+            if app.output_filter.is_empty() {
+                app.output_filter_active = false;
+            }
+        }
+        KeyCode::Char(c) if app.output_filter_active => {
+            app.output_filter.push(c);
+        }
         KeyCode::Esc | KeyCode::Char('o' | 'O') => app.exit_zoom(),
         KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => app.exit_zoom(),
         KeyCode::Char('c' | 'C') => {
@@ -6392,6 +6690,7 @@ fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
                     app.output_line_backup = Some(app.output_lines.clone());
                 }
                 app.output_lines.clear();
+                app.output_has_tag_content = false;
                 app.output_scroll = 0;
                 app.output_leaf_cursor = None;
             }
@@ -6479,6 +6778,10 @@ fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Char('g') | KeyCode::Home => {
             app.output_scroll = app.output_lines.len().saturating_sub(1);
         }
+        KeyCode::Char('/') => {
+            app.output_filter.clear();
+            app.output_filter_active = true;
+        }
         _ => {}
     }
 }
@@ -6529,6 +6832,7 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
         KeyCode::Char('a' | 'A') => {
             app.input_buf.clear();
             app.output_lines.clear();
+            app.output_has_tag_content = false;
             app.output_scroll = 0;
             app.mode = Mode::IpInput;
         }
@@ -6544,6 +6848,7 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
             if let Some(ip) = app.selected_device_ip() {
                 if app.active_jobs == 0 {
                     app.output_lines.clear();
+                    app.output_has_tag_content = false;
                     app.output_scroll = 0;
                 }
                 app.output_lines.push(format!("══ Rescan @ {ip} ══"));
@@ -6562,6 +6867,7 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
         }
         KeyCode::Char('c' | 'C') if !mods.contains(KeyModifiers::CONTROL) => {
             app.output_lines.clear();
+            app.output_has_tag_content = false;
             app.output_scroll = 0;
             app.output_leaf_cursor = None;
             // tag_leaves and tag_leaf_line_indices are preserved so J can re-activate cursor
@@ -7224,7 +7530,14 @@ fn execute_pending_exploit(app: &mut App, pending: &PendingExploit) {
         .is_some_and(|e| e.is_monitor);
 
     if app.active_jobs == 0 {
-        app.output_lines.clear();
+        if app.output_has_tag_content {
+            // Preserve the tag list — append exploit output below a separator so the
+            // user can still scroll up to see tags.  Next exploit will clear normally.
+            app.output_lines.push("\u{2500}".repeat(60));
+            app.output_has_tag_content = false;
+        } else {
+            app.output_lines.clear();
+        }
         app.output_scroll = 0;
     }
     app.output_lines
@@ -7806,7 +8119,7 @@ fn run_tui_acl(app: &mut App) {
     app.mqtt_attack_label = "ACL Probe".into();
 
     std::thread::spawn(move || {
-        let mut session = arc.lock().unwrap();
+        let mut session = arc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         session.flush_subacks();
         let mut tested = std::collections::HashSet::new();
         let variants = acl_variants(&base);
@@ -7859,7 +8172,7 @@ fn run_tui_retain(app: &mut App) {
     app.mqtt_attack_label = "Retain Hunt".into();
 
     std::thread::spawn(move || {
-        let mut session = arc.lock().unwrap();
+        let mut session = arc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if session.subscribe("#", 0).is_err() {
             let _ = tx.send(ScanEvent::MqttLine(" Retain Hunt".into()));
             let _ = tx.send(ScanEvent::MqttLine("─".repeat(60)));

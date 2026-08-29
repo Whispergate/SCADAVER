@@ -17,7 +17,6 @@ pub fn parse_nmap_xml(path: &str) -> anyhow::Result<Vec<NmapHost>> {
 
     let mut hosts: Vec<NmapHost> = Vec::new();
     let mut current: Option<NmapHost> = None;
-    let mut in_hostname_element = false;
     let mut port_open = false;
     let mut current_port: Option<u16> = None;
 
@@ -53,7 +52,6 @@ pub fn parse_nmap_xml(path: &str) -> anyhow::Result<Vec<NmapHost>> {
                     }
                     b"hostname" => {
                         if let Some(ref mut host) = current {
-                            in_hostname_element = true;
                             if let Some(name) = attr_val(e, b"name") {
                                 if !name.is_empty() {
                                     host.hostnames.push(name);
@@ -79,7 +77,7 @@ pub fn parse_nmap_xml(path: &str) -> anyhow::Result<Vec<NmapHost>> {
             }
             Ok(Event::End(ref e)) => {
                 match e.name().as_ref() {
-                    b"hostname" => { in_hostname_element = false; }
+
                     b"port" => {
                         if let (Some(ref mut host), Some(port), true) =
                             (current.as_mut(), current_port, port_open)
@@ -98,7 +96,6 @@ pub fn parse_nmap_xml(path: &str) -> anyhow::Result<Vec<NmapHost>> {
                                 hosts.push(host);
                             }
                         }
-                        in_hostname_element = false;
                     }
                     _ => {}
                 }
@@ -109,7 +106,6 @@ pub fn parse_nmap_xml(path: &str) -> anyhow::Result<Vec<NmapHost>> {
         }
     }
 
-    let _ = in_hostname_element;
     Ok(hosts)
 }
 

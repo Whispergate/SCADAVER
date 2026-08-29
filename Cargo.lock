@@ -1719,7 +1719,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "scadaver"
-version = "1.5.4"
+version = "1.7.2"
 dependencies = [
  "anyhow",
  "axum",

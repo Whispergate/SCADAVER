@@ -2,6 +2,159 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.2] - 2026-08-29
+
+### Added
+
+- TUI broadcast scan: Modbus TCP is now its own dedicated menu entry ("Modbus TCP port 502 /24 sweep"), separate from Schneider UDP; sweeps the local /24 in 32-host batches using TCP pre-connect + FC3 confirmation
+- CLI `scan_network` (CIDR sweep): after `autodetect::sweep` finishes, any host with no modbus/schneider result is probed directly on port 502 — fixes Modbus TCP devices being silently dropped from CIDR scans
+- TUI `spawn_ip_scan` (single-IP scan): after `probe_all` returns 0 results, falls back to TCP connect + FC3 read on the Modbus port — fixes Modbus TCP devices going undetected in the TUI device scanner
+- Web `broadcast_scan`: Modbus vendor is now handled by a dedicated TCP /24 sweep (32-host batches, TCP pre-connect + FC3 confirmation) instead of being incorrectly routed through the Schneider UDP broadcast path
+- CLI `get tag --protocol iec104 <name>` — resolves IOA number from name (e.g. `100` or `IOA:100`), performs general interrogation, and prints the matching data object value
+- CLI `get tag --protocol ewon <name>` — reads all eWON tag values and looks up the named tag, with a clear "not found" message listing how many tags were returned
+- CLI `get tag --protocol mqtt <topic>` — subscribes to the named topic, drains messages within the timeout, and prints the payload
+- CLI `get tag --protocol modbus <name>` — resolves `hr:N`/`coil:N`/`ir:N`/`di:N` address and reads the individual register
+
+### Fixed
+
+- eWON `get tag` lookup corrected from HashMap `.get()` to tuple-vector `.find()` — the return type of `read_tag_values` is `Vec<(String, String)>`, not a map
+
+## [1.7.1] - 2026-08-29
+
+### Added
+
+- TUI broadcast scan: new "Modbus TCP (/24 sweep)" entry probes port 502 across the local /24
+  in batches of 32 concurrent threads; any host that answers a FC3 read is registered as
+  vendor=modbus
+- TUI Phoenix "List Tags" (exploit index 1) and "Read Tag Values" (exploit index 2) now emit
+  `ScanEvent::TagLeaves` after completion, populating the tag browser so `[W]` write is
+  available for Phoenix tags
+- CLI `get tags --protocol modbus` — reads FC3 holding registers, FC1 coils, and FC4 input
+  registers (first 32 each) and prints them with display addresses
+- CLI `get tags --protocol bacnet` — reads BACnet device properties (instance_id, vendor_name,
+  object_name, description, firmware_revision) via `bacnet::client::scan_ip`
+- CLI `get tags --protocol dnp3` — reads DNP3 device attributes via
+  `dnp3::client::read_device_attributes`
+- CLI `get tags --protocol opcua` — enumerates OPC-UA server endpoints (URL, security mode,
+  security policy) via `opcua::client::get_endpoints`
+- CLI `get discrete-input [start] [count]` subcommand — reads Modbus FC2 discrete inputs
+- Web `POST /api/exploit/modbus/map-quick` — sweeps FC1/FC2/FC3/FC4 (first 125 registers each)
+  and returns a formatted register map
+- Web `POST /api/exploit/modbus/map-common` — same as map-quick but reads up to 512 registers
+  per function code
+- Web `POST /api/device/tags {"vendor":"s7"}` — `"s7"` is now a recognised alias for
+  `"siemens"` in `read_tags_for_vendor`, matching the existing write-side behaviour
+
+### Fixed
+
+- Web `POST /api/device/write` for `vendor=modbus|schneider|modicon` with a bare tag name
+  (no `hr:` or `coil:` prefix) now returns a clear format hint instead of the generic
+  "Unknown tag format" Modbus fallback message
+- CLI `get tags` catch-all `Some(p) => bail!` arm removed — all 16 Protocol variants are
+  now explicitly handled, matching the existing `get info` completeness
+
+## [1.7.0] - 2026-08-29
+
+### Added
+
+- `get tags --password` and `get tag --password` CLI flags for Siemens S7 — threads the password
+  directly into `list_data_blocks` and `read_data_block` instead of ignoring it
+- `get tags --username` / `--password` CLI flags for eWON — credentials are passed to the REST
+  API call instead of being ignored
+- `get tags --username` / `--password` CLI flags for MQTT — broker credentials are included in
+  the `ConnectOptions` when subscribing for topic enumeration
+- Web `POST /api/device/tags` now accepts `username` and `password` JSON fields; both are
+  optional (`#[serde(default)]`) — existing callers are unaffected
+- Web `POST /api/device/write` now accepts `username` and `password` JSON fields (same pattern)
+- `read_tags_for_vendor`: Siemens arm now prefers the request-body password over the DB-stored
+  value, falling back to DB if none is provided in the request
+- `read_tags_for_vendor`: eWON arm now prefers request-body credentials over DB-stored values
+- `read_tags_for_vendor`: added `"mqtt"` arm — connects with optional credentials, subscribes
+  to `#`, drains up to 50 messages, and returns topic → payload as UTF-8 strings
+- `read_tags_for_vendor`: added `"bacnet"` arm — reads device properties via
+  `bacnet::scan_ip` (vendor\_name, object\_name, description, firmware\_revision, instance\_id)
+- `read_tags_for_vendor`: added `"dnp3"` arm — reads device attributes via
+  `dnp3::read_device_attributes`; previously the arm was absent and requests silently returned
+  an empty tag map
+- `read_tags_for_vendor`: added `"opcua"` arm — enumerates server endpoints via
+  `opcua::get_endpoints`, returning each endpoint's URL, security mode, and security policy
+  as `ep<n>.*` tags
+- `write_tag_for_vendor`: added `"iec104"` arm — sends a `single_command` to the specified
+  IOA; tag format is `IOA:<number>`, value is `1`/`on` or `0`/`off`
+- `write_tag_for_vendor`: added informative bail responses for `"bacnet"`, `"dnp3"`, and
+  `"opcua"` — previously these fell through to the generic Modbus error message
+- `write_tag_for_vendor`: Siemens arm now prefers request-body password over DB-stored value
+- `broadcast_scan` (`POST /api/scan`): added `"bacnet"` discovery via
+  `bacnet::who_is_broadcast`; responds to any of `vendor=bacnet`, `all`, or empty string
+
+### Changed
+
+- `write_tag_for_vendor` IEC-104, BACnet, DNP3, and OPC-UA arms are checked before the
+  generic Modbus tag-prefix fallback, so a clear protocol-specific error is returned instead of
+  the misleading "Unknown tag format … Use hr:<addr> or coil:<addr>" message
+
+### Notes
+
+- **Casket `change_cpu_state` password gap**: `F:\git\casket` has been updated to add
+  `password: Option<&str>` to `change_cpu_state`; that change will wire into the three
+  scadaver call sites (`cli.rs`, `tui.rs`, `routes.rs`) once casket v0.1.1 is published to
+  crates.io
+
+## [1.6.0] - 2026-08-28
+
+### Added
+
+- Web exploit routes for BACnet (`bacnet/0-2`), DNP3 (`dnp3/0-1`), and OPC-UA (`opcua/0-2`) —
+  previously these IDs were silently unreachable in `POST /api/exploit/:id`
+- `GET /api/info` for Enip, Schneider, Mitsubishi, and SNMP — all four now return real device
+  data instead of bailing with "not supported"
+- `get tags --protocol siemens` — lists S7 data blocks (DB number and byte length) via
+  `s7comm::list_data_blocks`
+- `get tags --protocol mitsubishi` — reads SLMP D-word registers D0–D31
+- `get tags --protocol omron` — reads FINS DM words DM0–DM31
+- `get tags --protocol schneider` — reads 32 Modbus holding registers (40001–40032)
+- `get tags --protocol snmp` — discovers community string, prints sysInfo and interface table
+- `get tags --protocol enip` — informative bail directing user to `--protocol rockwell`
+- `get tag --protocol siemens NAME` — reads a single S7 data block byte range; name format
+  `DB<num>` (reads 4 bytes) or `DB<num>:<offset>:<len>`
+- `get tag --protocol mitsubishi NAME` — reads one SLMP word device; name format `D<addr>`,
+  `M<addr>`, `W<addr>`, etc.
+- `get tag --protocol omron NAME` — reads one FINS DM word; name format `DM<addr>` or bare
+  number
+- `get tag --protocol schneider NAME` — reads one Modbus holding register; accepts display
+  address (40001) or raw address (0)
+- `get tag --protocol snmp OID` — reads one SNMP OID with auto-discovered community; accepts
+  dotted OID or shorthand names (`sysDescr`, `sysName`, `sysLocation`, `sysContact`)
+- `get tag --protocol enip NAME` — informative bail directing user to `--protocol rockwell`
+
+### Fixed
+
+- Removed unreachable `Some(p) => bail!` fallthrough in `get_info` — all 16 protocol variants
+  are now handled explicitly
+- `get tag --protocol mitsubishi DM100` now fails at parse time with a clear error listing valid
+  SLMP device codes (D, M, X, Y, B, W, R); previously "DM" silently reached casket and returned
+  an opaque "unknown device" error
+- `get tag --protocol siemens DB0` now fails at parse time; DB0 is a reserved S7 internal block
+- `get tags --protocol siemens` now prints an upfront warning about worst-case probe duration
+  before starting the DB1–DB200 sweep
+- Web: `POST /api/portscan` now returns `401 Unauthorized` on auth failure; previously it
+  returned `200 OK` with `{"error": "..."}` due to an incorrect response construction
+- Web: `/ws/monitor/:ip` and `/ws/events` WebSocket endpoints now require the `X-API-Key`
+  header; previously they only checked the `Origin` header, allowing any non-browser client to
+  connect without a key
+- Web: task panics in `spawn_blocking` handlers now return `"internal error"` instead of the
+  raw `JoinError` string, which included source file paths
+- `scan --network` CIDR sweep now excludes the network address (.0) and IPv4 broadcast (.255)
+  from the host list, preventing noise and spurious IDS alerts on those addresses
+- `scan --network` with `-z` stealth flag now randomizes the host sweep order instead of
+  always scanning in ascending IP order (which creates a textbook ascending-scan signature)
+- `scan --network` now hard-limits sweeps to 65,536 hosts (/16 max); larger ranges bail with
+  a clear error instead of silently allocating hundreds of MB and running for hours
+- Mutex poisoning in `scan_network` semaphore and TUI MQTT threads now recovers the inner
+  value via `unwrap_or_else(PoisonError::into_inner)` instead of propagating a secondary panic
+- Dead `in_hostname_element` tracking variable removed from `src/import.rs` (was set but
+  never read; Nmap XML hostname capture was already correct without it)
+
 ## [1.5.4] - 2026-08-28
 
 ### Fixed

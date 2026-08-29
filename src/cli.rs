@@ -133,11 +133,20 @@ pub enum GetNoun {
         #[arg(long)]
         password: Option<String>,
     },
-    /// Tag/symbol list (--protocol: rockwell | beckhoff | phoenix)
-    Tags,
-    /// Read one named tag (--protocol: rockwell | beckhoff | phoenix)
+    /// Tag/symbol list (--protocol: rockwell | beckhoff | phoenix | siemens | mqtt)
+    Tags {
+        #[arg(long)]
+        username: Option<String>,
+        #[arg(long)]
+        password: Option<String>,
+    },
+    /// Read one named tag (--protocol: rockwell | beckhoff | phoenix | siemens | mqtt)
     Tag {
         name: String,
+        #[arg(long)]
+        username: Option<String>,
+        #[arg(long)]
+        password: Option<String>,
     },
     /// Holding registers FC3 (Modbus TCP)
     Register {
@@ -155,6 +164,13 @@ pub enum GetNoun {
     },
     /// Coils FC1 (Modbus TCP)
     Coil {
+        #[arg(default_value = "0")]
+        start: u16,
+        #[arg(default_value = "16")]
+        count: u16,
+    },
+    /// Discrete inputs FC2 (Modbus TCP)
+    DiscreteInput {
         #[arg(default_value = "0")]
         start: u16,
         #[arg(default_value = "16")]
@@ -478,6 +494,7 @@ pub fn run(args: Args, cfg: &crate::config::ConfigFile) -> Result<()> {
             args.port,
             timeout,
             args.protocol,
+            stealth,
         ),
         Verb::Import { nmap } => run_import(nmap),
         Verb::Export { format, output } => run_export(&format, output.as_deref()),
@@ -517,9 +534,10 @@ fn run_scan(
     port: u16,
     timeout: u64,
     protocol: Option<Protocol>,
+    stealth: bool,
 ) -> Result<()> {
     if let Some(cidr) = network {
-        return scan_network(cidr, timeout);
+        return scan_network(cidr, timeout, stealth);
     }
     match (ip, protocol) {
         (Some(ip), None) => { scan_auto(ip, timeout); Ok(()) }
@@ -529,8 +547,9 @@ fn run_scan(
     }
 }
 
-fn scan_network(cidr: &str, timeout: u64) -> Result<()> {
+fn scan_network(cidr: &str, timeout: u64, stealth: bool) -> Result<()> {
     const MAX_CONCURRENT: usize = 64;
+    const MAX_HOSTS: usize = 65_536;
     use ipnetwork::IpNetwork;
     use std::sync::mpsc;
 
@@ -538,7 +557,32 @@ fn scan_network(cidr: &str, timeout: u64) -> Result<()> {
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid CIDR: {cidr}"))?;
 
-    let hosts: Vec<std::net::IpAddr> = net.iter().collect();
+    // Exclude network address (.0) and IPv4 broadcast (.255)
+    let network_addr = net.network();
+    let broadcast_addr = if let IpNetwork::V4(v4) = net {
+        Some(std::net::IpAddr::V4(v4.broadcast()))
+    } else {
+        None
+    };
+    let mut hosts: Vec<std::net::IpAddr> = net
+        .iter()
+        .filter(|ip| *ip != network_addr && Some(*ip) != broadcast_addr)
+        .collect();
+
+    if hosts.len() > MAX_HOSTS {
+        bail!(
+            "CIDR range {cidr} contains {} hosts (max {MAX_HOSTS}). \
+             Use a narrower range (/16 or smaller).",
+            hosts.len()
+        );
+    }
+
+    // Randomize probe order in stealth mode to avoid ascending-IP pattern
+    if stealth {
+        use rand::seq::SliceRandom as _;
+        hosts.shuffle(&mut rand::thread_rng());
+    }
+
     let host_count = hosts.len();
     crate::display::print_info(&format!("Scanning {host_count} hosts in {cidr}…"));
 
@@ -550,9 +594,9 @@ fn scan_network(cidr: &str, timeout: u64) -> Result<()> {
         let tx2 = tx.clone();
         let sem2 = std::sync::Arc::clone(&sem);
 
-        // Simple spinning semaphore: wait until a slot is available.
+        // Sleep-poll semaphore: wait until a slot is free.
         loop {
-            let mut count = sem2.lock().unwrap();
+            let mut count = sem2.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if *count < MAX_CONCURRENT {
                 *count += 1;
                 break;
@@ -563,21 +607,36 @@ fn scan_network(cidr: &str, timeout: u64) -> Result<()> {
 
         std::thread::spawn(move || {
             let outcomes = casket::core::autodetect::sweep(&ip_str, timeout);
-            for o in outcomes {
-                if let Some(dev) = o.device {
+            let mut found_modbus = false;
+            for o in &outcomes {
+                if let Some(dev) = &o.device {
+                    if dev.vendor.contains("modbus") || dev.vendor.contains("schneider") {
+                        found_modbus = true;
+                    }
                     let model = dev
                         .fields
                         .get("model")
                         .or_else(|| dev.fields.get("name"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("?");
-                    let _ = tx2.send(format!(
-                        "[+] {} — {} ({})",
-                        ip_str, dev.vendor, model
-                    ));
+                    let _ = tx2.send(format!("[+] {} — {} ({})", ip_str, dev.vendor, model));
                 }
             }
-            let mut count = sem2.lock().unwrap();
+            if !found_modbus {
+                use casket::core::modbus;
+                use std::net::{SocketAddr, TcpStream};
+                use std::time::Duration;
+                let addr_str = format!("{ip_str}:{}", modbus::DEFAULT_PORT);
+                if let Ok(addr) = addr_str.parse::<SocketAddr>() {
+                    if TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok()
+                        && modbus::read_holding_registers(&ip_str, modbus::DEFAULT_PORT, 0, 1)
+                            .is_ok()
+                    {
+                        let _ = tx2.send(format!("[+] {ip_str} — modbus (TCP 502)"));
+                    }
+                }
+            }
+            let mut count = sem2.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             *count = count.saturating_sub(1);
         });
     }
@@ -1024,8 +1083,12 @@ fn run_get(
         GetNoun::Info => get_info(ip, port, timeout, protocol),
         GetNoun::State => get_state(ip, port, timeout, protocol),
         GetNoun::Io { password } => { get_io(ip, port, timeout, password.as_deref()); Ok(()) }
-        GetNoun::Tags => get_tags(ip, port, timeout, protocol),
-        GetNoun::Tag { name } => get_tag(ip, port, timeout, &name, protocol),
+        GetNoun::Tags { username, password } => {
+            get_tags(ip, port, timeout, protocol, username, password)
+        }
+        GetNoun::Tag { name, username, password } => {
+            get_tag(ip, port, timeout, &name, protocol, username.as_deref(), password.as_deref())
+        }
         GetNoun::Register { start, count } => {
             use casket::vendors::schneider::modbus;
             crate::display::print_info(&format!(
@@ -1069,6 +1132,22 @@ fn run_get(
                         println!("  {:>6}  {}", r.display_addr, r.value_str);
                     }
                     crate::display::print_success(&format!("{} coil(s) read.", regs.len()));
+                }
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+            Ok(())
+        }
+        GetNoun::DiscreteInput { start, count } => {
+            use casket::vendors::schneider::modbus;
+            crate::display::print_info(&format!(
+                "Reading {count} discrete inputs from {ip} (start={start})…"
+            ));
+            match modbus::read_discrete_inputs(ip, port, start, count) {
+                Ok(regs) => {
+                    for r in &regs {
+                        println!("  {:>6}  {}", r.display_addr, r.value_str);
+                    }
+                    crate::display::print_success(&format!("{} discrete input(s) read.", regs.len()));
                 }
                 Err(e) => crate::display::print_error(&format!("{e}")),
             }
@@ -1564,7 +1643,74 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
                 }
             }
         }
-        Some(p) => bail!("{p:?} does not support 'get info'"),
+        Some(Protocol::Enip) => {
+            use casket::vendors::enip::scan;
+            let pb = crate::display::spinner_start(&format!("Querying EtherNet/IP at {ip}…"));
+            let devs = scan::scan_ip(ip, timeout, false).unwrap_or_default();
+            pb.finish_and_clear();
+            if devs.is_empty() {
+                crate::display::print_error("No EtherNet/IP device responded.");
+            } else {
+                for d in &devs {
+                    println!("  Product:  {}", d.product_name);
+                    println!("  Vendor:   {}", d.vendor_id);
+                    println!("  Revision: {}", d.revision);
+                }
+            }
+        }
+        Some(Protocol::Schneider) => {
+            use casket::vendors::schneider::scan::{self, Transport};
+            let pb = crate::display::spinner_start(&format!("Querying Schneider device at {ip}…"));
+            let devs = scan::scan_ip_with_transport(ip, timeout, false, port, Transport::Both)
+                .unwrap_or_default();
+            pb.finish_and_clear();
+            if devs.is_empty() {
+                crate::display::print_error("No Schneider device responded.");
+            } else {
+                for d in &devs {
+                    if let Some(name) = &d.name { println!("  Name:     {name}"); }
+                    if let Some(fw) = &d.firmware { println!("  Firmware: {fw}"); }
+                    if let Some(proto) = &d.protocol { println!("  Protocol: {proto}"); }
+                    if let Some(uid) = d.modbus_unit_id { println!("  Unit ID:  {uid}"); }
+                }
+            }
+        }
+        Some(Protocol::Mitsubishi) => {
+            use casket::vendors::mitsubishi::scan::{self, Transport};
+            let pb = crate::display::spinner_start(&format!("Querying Mitsubishi MELSEC at {ip}…"));
+            let devs = scan::scan_ip_with_transport(ip, timeout, false, port, Transport::Both)
+                .unwrap_or_default();
+            pb.finish_and_clear();
+            if devs.is_empty() {
+                crate::display::print_error("No Mitsubishi device responded.");
+            } else {
+                for d in &devs {
+                    println!("  PLC Type: {}", d.plc_type);
+                    if let Some(title) = &d.title { println!("  Title:    {title}"); }
+                    if let Some(comment) = &d.comment { println!("  Comment:  {comment}"); }
+                    if let Some(proto) = &d.protocol { println!("  Protocol: {proto}"); }
+                }
+            }
+        }
+        Some(Protocol::Snmp) => {
+            use casket::vendors::snmp::{client, oids};
+            let snmp_port = if port == 0 { 161 } else { port };
+            let pb = crate::display::spinner_start(&format!("Querying SNMP at {ip}:{snmp_port}…"));
+            let mut found = Vec::new();
+            for &c in oids::COMMON_COMMUNITIES {
+                if let Ok(val) = client::get(ip, snmp_port, c, oids::SYS_DESCR) {
+                    found.push((c, val.display()));
+                }
+            }
+            pb.finish_and_clear();
+            if found.is_empty() {
+                crate::display::print_error("No SNMP community strings responded.");
+            } else {
+                for (c, descr) in &found {
+                    println!("  community={c:<12}  sysDescr={descr}");
+                }
+            }
+        }
         None => bail!("'--protocol <PROTO>' required for 'get info'"),
     }
     Ok(())
@@ -1667,7 +1813,15 @@ fn get_io(ip: &str, port: u16, timeout: u64, password: Option<&str>) {
     }
 }
 
-fn get_tags(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Result<()> {
+#[allow(clippy::too_many_lines)]
+fn get_tags(
+    ip: &str,
+    port: u16,
+    timeout: u64,
+    proto: Option<Protocol>,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<()> {
     match proto {
         Some(Protocol::Rockwell) => {
             use casket::vendors::rockwell::driver;
@@ -1719,18 +1873,210 @@ fn get_tags(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             crate::display::print_success(&format!("{} tag(s).", tags.len()));
         }
         Some(Protocol::Iec104) => get_tags_iec104(ip, port),
-        Some(Protocol::Ewon) => get_tags_ewon(ip, port),
-        Some(Protocol::Mqtt) => get_tags_mqtt(ip, port, timeout)?,
-        Some(p) => bail!("{p:?} does not support 'get tags'"),
+        Some(Protocol::Ewon) => get_tags_ewon(ip, port, username.as_deref(), password.as_deref()),
+        Some(Protocol::Mqtt) => get_tags_mqtt(ip, port, timeout, username, password)?,
+        Some(Protocol::Siemens) => {
+            use casket::vendors::siemens::s7comm;
+            let s7_port = if port == 0 { 102 } else { port };
+            crate::display::print_info(
+                &format!("Probing DB1–DB200 on {ip} (worst case: 200 × {timeout} s on filtered hosts)…")
+            );
+            let pb = crate::display::spinner_start(&format!("Listing S7 data blocks on {ip}…"));
+            let blocks = s7comm::list_data_blocks(ip, s7_port, timeout, password.as_deref());
+            pb.finish_and_clear();
+            if blocks.is_empty() {
+                crate::display::print_warn("No data blocks found.");
+            } else {
+                for (db_num, len) in &blocks {
+                    println!("  DB{db_num:<4}  ({len} bytes)");
+                }
+                crate::display::print_success(&format!("{} data block(s).", blocks.len()));
+            }
+        }
+        Some(Protocol::Mitsubishi) => {
+            use casket::vendors::mitsubishi::slmp;
+            let slmp_port = if port == 0 { 5007 } else { port };
+            let pb =
+                crate::display::spinner_start(&format!("Reading Mitsubishi D registers on {ip}…"));
+            let result = slmp::read_word_devices(ip, slmp_port, "D", 0, 32);
+            pb.finish_and_clear();
+            match result {
+                Ok(vals) => {
+                    for (i, v) in vals.iter().enumerate() {
+                        println!("  D{i:<4}  {}", v.value_str);
+                    }
+                    crate::display::print_success(&format!("{} register(s).", vals.len()));
+                }
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+        Some(Protocol::Omron) => {
+            use casket::vendors::omron::fins;
+            let fins_port = if port == 0 { 9600 } else { port };
+            let pb = crate::display::spinner_start(&format!("Reading Omron DM words on {ip}…"));
+            let result = fins::read_dm_words(ip, fins_port, 0, 0, 32);
+            pb.finish_and_clear();
+            match result {
+                Ok(words) => {
+                    for (i, w) in words.iter().enumerate() {
+                        println!("  DM{i:<4}  {w} (0x{w:04x})");
+                    }
+                    crate::display::print_success(&format!("{} word(s).", words.len()));
+                }
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+        Some(Protocol::Schneider) => {
+            use casket::core::modbus;
+            let mb_port = if port == 0 { 502 } else { port };
+            let pb = crate::display::spinner_start(
+                &format!("Reading Schneider holding registers on {ip}…"),
+            );
+            let result = modbus::read_holding_registers(ip, mb_port, 0, 32);
+            pb.finish_and_clear();
+            match result {
+                Ok(regs) => {
+                    for r in &regs {
+                        println!("  {:>6}  {}", r.display_addr, r.value_str);
+                    }
+                    crate::display::print_success(&format!("{} register(s).", regs.len()));
+                }
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+        Some(Protocol::Snmp) => {
+            use casket::vendors::snmp::{client, enumerate};
+            let snmp_port = if port == 0 { 161 } else { port };
+            let pb =
+                crate::display::spinner_start(&format!("Discovering SNMP community on {ip}…"));
+            let community = client::discover_community(ip, snmp_port);
+            pb.finish_and_clear();
+            let Some(community) = community else {
+                bail!("No responding SNMP community found on {ip}:{snmp_port}");
+            };
+            println!("  Community: {community}");
+            let pb2 = crate::display::spinner_start("Reading system info and interfaces…");
+            let info = enumerate::get_system_info(ip, snmp_port, &community);
+            let ifaces = enumerate::get_interfaces(ip, snmp_port, &community);
+            pb2.finish_and_clear();
+            if let Ok(sys) = info {
+                println!("  sysName:     {}", sys.name);
+                println!("  sysDescr:    {}", sys.descr);
+                println!("  sysLocation: {}", sys.location);
+                println!("  sysContact:  {}", sys.contact);
+            }
+            if let Ok(ifs) = ifaces {
+                for iface in &ifs {
+                    let state = if iface.oper_up { "up" } else { "down" };
+                    println!(
+                        "  if{:<2}  {:20}  {}  {} Mbps",
+                        iface.index, iface.descr, state, iface.speed_mbps
+                    );
+                }
+                crate::display::print_success(&format!("{} interface(s).", ifs.len()));
+            }
+        }
+        Some(Protocol::Modbus) => {
+            use casket::core::modbus;
+            let mb_port = if port == 0 { 502 } else { port };
+            let pb = crate::display::spinner_start(&format!("Reading Modbus registers on {ip}…"));
+            let hr = modbus::read_holding_registers(ip, mb_port, 0, 32);
+            let coil = modbus::read_coils(ip, mb_port, 0, 32);
+            let ir = modbus::read_input_registers(ip, mb_port, 0, 32);
+            pb.finish_and_clear();
+            let mut total = 0usize;
+            match hr {
+                Ok(regs) => {
+                    for r in &regs { println!("  hr:{:<6}  {}", r.display_addr, r.value_str); }
+                    total += regs.len();
+                }
+                Err(e) => crate::display::print_warn(&format!("FC3 holding registers: {e:#}")),
+            }
+            match coil {
+                Ok(regs) => {
+                    for r in &regs { println!("  coil:{:<4}  {}", r.display_addr, r.value_str); }
+                    total += regs.len();
+                }
+                Err(e) => crate::display::print_warn(&format!("FC1 coils: {e:#}")),
+            }
+            match ir {
+                Ok(regs) => {
+                    for r in &regs { println!("  ir:{:<6}  {}", r.display_addr, r.value_str); }
+                    total += regs.len();
+                }
+                Err(e) => crate::display::print_warn(&format!("FC4 input registers: {e:#}")),
+            }
+            if total > 0 {
+                crate::display::print_success(&format!("{total} register(s) total."));
+            }
+        }
+        Some(Protocol::Bacnet) => {
+            use casket::vendors::bacnet::client;
+            let pb = crate::display::spinner_start(&format!("Reading BACnet properties on {ip}…"));
+            let dev = client::scan_ip(ip, timeout);
+            pb.finish_and_clear();
+            match dev {
+                None => crate::display::print_warn("No BACnet device responded."),
+                Some(d) => {
+                    println!("  instance_id:       {}", d.instance_id);
+                    println!("  vendor_name:       {}", d.vendor_name);
+                    println!("  object_name:       {}", d.object_name);
+                    println!("  description:       {}", d.description);
+                    println!("  firmware_revision: {}", d.firmware_revision);
+                    crate::display::print_success("BACnet device properties read.");
+                }
+            }
+        }
+        Some(Protocol::Dnp3) => {
+            use casket::vendors::dnp3::client;
+            let pb = crate::display::spinner_start(&format!("Reading DNP3 attributes on {ip}…"));
+            let attrs = client::read_device_attributes(ip, std::time::Duration::from_secs(timeout));
+            pb.finish_and_clear();
+            if attrs.is_empty() {
+                crate::display::print_warn("No DNP3 device attributes returned.");
+            } else {
+                for (k, v) in &attrs {
+                    println!("  {k}: {v}");
+                }
+                crate::display::print_success(&format!("{} attribute(s).", attrs.len()));
+            }
+        }
+        Some(Protocol::OpcUa) => {
+            use casket::vendors::opcua::client;
+            let opcua_port = if port == 0 { 4840 } else { port };
+            let pb = crate::display::spinner_start(&format!(
+                "Reading OPC-UA endpoints on {ip}:{opcua_port}…"
+            ));
+            let endpoints = client::get_endpoints(
+                ip,
+                opcua_port,
+                std::time::Duration::from_secs(timeout),
+            );
+            pb.finish_and_clear();
+            if endpoints.is_empty() {
+                crate::display::print_warn("No OPC-UA endpoints returned.");
+            } else {
+                for (i, ep) in endpoints.iter().enumerate() {
+                    println!("  [ep{i}] {}", ep.url);
+                    println!("        security_mode:   {}", ep.security_mode);
+                    println!("        security_policy: {}", ep.security_policy);
+                }
+                crate::display::print_success(&format!("{} endpoint(s).", endpoints.len()));
+            }
+        }
+        Some(Protocol::Enip) => {
+            bail!("EtherNet/IP tag enumeration requires --protocol rockwell (CIP List Tags)");
+        }
         None => bail!("'--protocol <PROTO>' required for 'get tags'"),
     }
     Ok(())
 }
 
-fn get_tags_ewon(ip: &str, port: u16) {
+fn get_tags_ewon(ip: &str, port: u16, username: Option<&str>, password: Option<&str>) {
     use casket::vendors::ewon::scan;
     let pb = crate::display::spinner_start(&format!("Reading eWON tags from {ip}…"));
-    let result = scan::read_tag_values(ip, port, None);
+    let creds = username.zip(password);
+    let result = scan::read_tag_values(ip, port, creds);
     pb.finish_and_clear();
     match result {
         Err(e) => crate::display::print_error(&format!("{e}")),
@@ -1747,7 +2093,13 @@ fn get_tags_ewon(ip: &str, port: u16) {
     }
 }
 
-fn get_tags_mqtt(ip: &str, port: u16, timeout: u64) -> Result<()> {
+fn get_tags_mqtt(
+    ip: &str,
+    port: u16,
+    timeout: u64,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<()> {
     use casket::vendors::mqtt::{client, session::{ConnectOptions, MqttSession}};
     let mqtt_port = if port == 0 { client::MQTT_PORT } else { port };
     let pb = crate::display::spinner_start(
@@ -1757,6 +2109,8 @@ fn get_tags_mqtt(ip: &str, port: u16, timeout: u64) -> Result<()> {
         host: ip.to_string(),
         port: mqtt_port,
         client_id: "scadaver-scan".to_string(),
+        username,
+        password,
         ..Default::default()
     };
     let result = MqttSession::connect(&opts);
@@ -1803,7 +2157,16 @@ fn get_tags_iec104(ip: &str, port: u16) {
     }
 }
 
-fn get_tag(ip: &str, port: u16, timeout: u64, name: &str, proto: Option<Protocol>) -> Result<()> {
+#[allow(clippy::too_many_lines)]
+fn get_tag(
+    ip: &str,
+    port: u16,
+    timeout: u64,
+    name: &str,
+    proto: Option<Protocol>,
+    _username: Option<&str>,
+    password: Option<&str>,
+) -> Result<()> {
     match proto {
         Some(Protocol::Rockwell) => {
             use casket::vendors::rockwell::driver;
@@ -1840,6 +2203,177 @@ fn get_tag(ip: &str, port: u16, timeout: u64, name: &str, proto: Option<Protocol
             } else {
                 crate::display::print_warn(&format!("Tag '{name}' not found."));
             }
+        }
+        Some(Protocol::Siemens) => {
+            use casket::vendors::siemens::s7comm;
+            let s7_port = if port == 0 { 102 } else { port };
+            // Accept "DB3" or "DB3:offset:len" — default offset=0, len=4
+            let (db_num, offset, len) = parse_s7_tag_name(name)?;
+            let pb = crate::display::spinner_start(&format!("Reading S7 DB{db_num}…"));
+            let result =
+                s7comm::read_data_block(ip, db_num, offset, len, s7_port, timeout, password);
+            pb.finish_and_clear();
+            match result {
+                Ok(raw) => println!("  DB{db_num}:{offset} = 0x{}", hex_encode(&raw)),
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+        Some(Protocol::Mitsubishi) => {
+            use casket::vendors::mitsubishi::slmp;
+            let slmp_port = if port == 0 { 5007 } else { port };
+            // Accept "D100", "M10", "W1", etc. — split at first digit boundary
+            let (device, addr) = parse_slmp_tag_name(name)?;
+            let pb = crate::display::spinner_start(&format!("Reading {name}…"));
+            let result = slmp::read_word_devices(ip, slmp_port, device, u32::from(addr), 1);
+            pb.finish_and_clear();
+            match result {
+                Ok(vals) if !vals.is_empty() => println!("  {name} = {}", vals[0].value_str),
+                Ok(_) => crate::display::print_warn("No value returned."),
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+        Some(Protocol::Omron) => {
+            use casket::vendors::omron::fins;
+            let fins_port = if port == 0 { 9600 } else { port };
+            // Accept "DM100" or a plain number → DM address
+            let dm_addr: u16 = name
+                .trim_start_matches("DM")
+                .trim_start_matches("dm")
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid Omron DM address '{name}'; use DM<number>"))?;
+            let pb = crate::display::spinner_start(&format!("Reading {name}…"));
+            let result = fins::read_dm_words(ip, fins_port, 0, dm_addr, 1);
+            pb.finish_and_clear();
+            match result {
+                Ok(words) if !words.is_empty() => {
+                    println!("  {name} = {} (0x{:04x})", words[0], words[0]);
+                }
+                Ok(_) => crate::display::print_warn("No value returned."),
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+        Some(Protocol::Schneider) => {
+            use casket::core::modbus;
+            let mb_port = if port == 0 { 502 } else { port };
+            // Accept display address (40001) or raw address (0); subtract 40001 if >=40001
+            let raw_addr = parse_modbus_addr(name)?;
+            let pb = crate::display::spinner_start(&format!("Reading register {name}…"));
+            let result = modbus::read_holding_registers(ip, mb_port, raw_addr, 1);
+            pb.finish_and_clear();
+            match result {
+                Ok(regs) if !regs.is_empty() => {
+                    println!("  {} = {}", regs[0].display_addr, regs[0].value_str);
+                }
+                Ok(_) => crate::display::print_warn("No value returned."),
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+        Some(Protocol::Snmp) => {
+            use casket::vendors::snmp::{client, oids};
+            let snmp_port = if port == 0 { 161 } else { port };
+            let community = client::discover_community(ip, snmp_port)
+                .ok_or_else(|| anyhow::anyhow!("No responding SNMP community on {ip}:{snmp_port}"))?;
+            let pb = crate::display::spinner_start(&format!("Reading OID {name}…"));
+            let result = client::get(ip, snmp_port, &community, name);
+            pb.finish_and_clear();
+            match result {
+                Ok(val) => println!("  {name} = {}", val.display()),
+                Err(e) => {
+                    // Retry with SYS_DESCR shorthand if user typed a name instead of OID
+                    let resolved = match name {
+                        "sysDescr" => Some(oids::SYS_DESCR),
+                        "sysName" => Some(oids::SYS_NAME),
+                        "sysLocation" => Some(oids::SYS_LOCATION),
+                        "sysContact" => Some(oids::SYS_CONTACT),
+                        _ => None,
+                    };
+                    if let Some(oid) = resolved {
+                        match client::get(ip, snmp_port, &community, oid) {
+                            Ok(val) => println!("  {name} = {}", val.display()),
+                            Err(e2) => crate::display::print_error(&format!("{e2}")),
+                        }
+                    } else {
+                        crate::display::print_error(&format!("{e}"));
+                    }
+                }
+            }
+        }
+        Some(Protocol::Iec104) => {
+            use casket::vendors::iec104::client;
+            let iec_port = if port == 0 { client::IEC104_PORT } else { port };
+            let ioa: u32 = name
+                .trim_start_matches("IOA")
+                .trim_start_matches(':')
+                .trim_start_matches(' ')
+                .parse()
+                .map_err(|_| anyhow::anyhow!("IEC-104 name must be an IOA number, e.g. 100 or IOA:100"))?;
+            let mut session = client::connect(ip, iec_port)
+                .map_err(|e| anyhow::anyhow!("IEC-104 connect to {ip}:{iec_port}: {e}"))?;
+            let objects = client::general_interrogation(&mut session)
+                .map_err(|e| anyhow::anyhow!("IEC-104 GI failed: {e}"))?;
+            if let Some(obj) = objects.iter().find(|o| o.ioa == ioa) {
+                println!("  IOA:{ioa} = {}", obj.decoded);
+            } else {
+                crate::display::print_warn(&format!("IOA {ioa} not found in GI response ({} objects).", objects.len()));
+            }
+        }
+        Some(Protocol::Ewon) => {
+            let ewon_port = if port == 0 { 80 } else { port };
+            match casket::vendors::ewon::scan::read_tag_values(ip, ewon_port, None) {
+                Ok(tags) => {
+                    if let Some((_, val)) = tags.iter().find(|(k, _)| k == name) {
+                        println!("  {name} = {val}");
+                    } else {
+                        crate::display::print_warn(&format!(
+                            "Tag '{name}' not found ({} tags returned). Check spelling or use 'get tags' to list all.",
+                            tags.len()
+                        ));
+                    }
+                }
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+        Some(Protocol::Mqtt) => {
+            use casket::vendors::mqtt::session::{ConnectOptions, MqttSession};
+            let mqtt_port = if port == 0 { 1883 } else { port };
+            let opts = ConnectOptions {
+                host: ip.to_string(),
+                port: mqtt_port,
+                client_id: "scadaver-gettag".to_string(),
+                ..ConnectOptions::default()
+            };
+            let mut session = MqttSession::connect(&opts)
+                .map_err(|e| anyhow::anyhow!("MQTT connect to {ip}:{mqtt_port}: {e}"))?;
+            session.subscribe(name, 0)
+                .map_err(|e| anyhow::anyhow!("MQTT subscribe to '{name}': {e}"))?;
+            std::thread::sleep(std::time::Duration::from_secs(timeout.min(5)));
+            let msgs = session.drain_messages();
+            if let Some(msg) = msgs.iter().find(|m| m.topic == name) {
+                let payload = String::from_utf8_lossy(&msg.payload);
+                println!("  {name} = {payload}");
+            } else {
+                crate::display::print_warn(&format!(
+                    "No message received on '{name}' within {timeout}s."
+                ));
+            }
+        }
+        Some(Protocol::Modbus) => {
+            use casket::core::modbus;
+            let mb_port = if port == 0 { 502 } else { port };
+            let raw_addr = parse_modbus_addr(name)?;
+            let pb = crate::display::spinner_start(&format!("Reading Modbus register {name}…"));
+            let result = modbus::read_holding_registers(ip, mb_port, raw_addr, 1);
+            pb.finish_and_clear();
+            match result {
+                Ok(regs) if !regs.is_empty() => {
+                    println!("  {} = {}", regs[0].display_addr, regs[0].value_str);
+                }
+                Ok(_) => crate::display::print_warn("No value returned."),
+                Err(e) => crate::display::print_error(&format!("{e}")),
+            }
+        }
+        Some(Protocol::Enip) => {
+            bail!("EtherNet/IP tag read requires --protocol rockwell (CIP tag access)");
         }
         Some(p) => bail!("{p:?} does not support 'get tag'"),
         None => bail!("'--protocol <PROTO>' required for 'get tag'"),
@@ -1880,7 +2414,7 @@ fn run_set(
                 .filter_map(|s| s.trim().parse::<u16>().ok())
                 .collect();
             if parsed.is_empty() {
-                bail!("No valid register values in '{values}'");
+                bail!("No valid register values in '{values}' — expected comma-separated decimals, e.g. 100,200,300");
             }
             match modbus::write_multiple_registers(ip, port, start, &parsed) {
                 Ok(n) => crate::display::print_success(&format!("{n} register(s) written.")),
@@ -1943,7 +2477,7 @@ fn run_set(
                 .filter_map(|s| s.trim().parse::<u16>().ok())
                 .collect();
             if parsed.is_empty() {
-                bail!("No valid values in '{values}'");
+                bail!("No valid DM word values in '{values}' — expected comma-separated decimals, e.g. 100,200,300");
             }
             match fins::write_dm_words(ip, fins_port, 0, start, &parsed) {
                 Ok(()) => crate::display::print_success(&format!(
@@ -1964,7 +2498,7 @@ fn run_set(
             let s7_port = if port == 0 { 102 } else { port };
             let bytes = parse_hex(&data);
             if bytes.is_empty() {
-                bail!("Invalid hex data '{data}'");
+                bail!("Invalid hex data '{data}' — expected even-length hex string, e.g. deadbeef");
             }
             crate::display::print_info(&format!(
                 "Writing {} byte(s) to DB{db}:{offset} on {ip}…",
@@ -1986,7 +2520,7 @@ fn run_set(
                 .filter_map(|s| s.trim().parse::<u16>().ok())
                 .collect();
             if parsed.is_empty() {
-                bail!("No valid D register values in '{values}'");
+                bail!("No valid D register values in '{values}' — expected comma-separated decimals, e.g. 100,200");
             }
             match slmp::write_word_devices(ip, slmp_port, "D", start, &parsed) {
                 Ok(()) => crate::display::print_success(&format!(
@@ -2067,6 +2601,9 @@ fn run_set(
         }
         SetNoun::Dc { ioa, state } => {
             use casket::vendors::iec104::client;
+            if !matches!(state, 1..=3) {
+                bail!("Invalid double-command state {state}: use 1 (off), 2 (on), or 3 (indeterminate)");
+            }
             let iec_port = if port == 0 { 2404 } else { port };
             let state_name = match state {
                 1 => "OFF",
@@ -2462,7 +2999,11 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
         RunCmd::Fc90Force { output, state } => {
             use casket::vendors::schneider::modicon_fc90::{self, ForceState};
             let output_byte =
-                u8::from_str_radix(output.trim().trim_start_matches("0x"), 16).unwrap_or(0x11);
+                u8::from_str_radix(output.trim().trim_start_matches("0x"), 16)
+                    .map_err(|_| anyhow::anyhow!(
+                        "Invalid --output value '{}': expected a hex byte, e.g. 0x11 or 1a",
+                        output.trim()
+                    ))?;
             let force_state = match state.to_lowercase().as_str() {
                 "off" => ForceState::Off,
                 "unforce" => ForceState::Unforce,
@@ -2779,6 +3320,47 @@ fn hex_encode(b: &[u8]) -> String {
         let _ = write!(s, "{x:02x}");
         s
     })
+}
+
+fn parse_s7_tag_name(name: &str) -> anyhow::Result<(u16, u16, u16)> {
+    let s = name.trim_start_matches("DB").trim_start_matches("db");
+    let parts: Vec<&str> = s.splitn(3, ':').collect();
+    let db_num: u16 = parts.first().and_then(|s| s.parse().ok())
+        .ok_or_else(|| anyhow::anyhow!("Invalid S7 tag name '{name}'; use DB<num> or DB<num>:<offset>:<len>"))?;
+    if db_num == 0 {
+        anyhow::bail!("S7 data blocks start at DB1; DB0 is a reserved internal block");
+    }
+    let offset: u16 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let len: u16 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(4);
+    Ok((db_num, offset, len))
+}
+
+fn parse_slmp_tag_name(name: &str) -> anyhow::Result<(&str, u16)> {
+    let split_at = name.find(|c: char| c.is_ascii_digit())
+        .ok_or_else(|| anyhow::anyhow!("Invalid SLMP tag '{name}'; use D<addr>, M<addr>, W<addr>, etc."))?;
+    let (device, addr_str) = name.split_at(split_at);
+    if device.is_empty() {
+        anyhow::bail!("Invalid SLMP tag '{name}'; name must start with a device letter, e.g. D100, M10, W1");
+    }
+    // Valid SLMP word device codes per Mitsubishi SLMP spec
+    let valid_devices: &[&str] = &["D", "M", "X", "Y", "B", "W", "R"];
+    if !valid_devices.contains(&device) {
+        anyhow::bail!("Unknown SLMP device '{device}' in '{name}'; valid devices: D, M, X, Y, B, W, R");
+    }
+    let addr: u16 = addr_str.parse()
+        .map_err(|_| anyhow::anyhow!("Invalid address in '{name}'"))?;
+    Ok((device, addr))
+}
+
+fn parse_modbus_addr(name: &str) -> anyhow::Result<u16> {
+    let n: u32 = name.parse()
+        .map_err(|_| anyhow::anyhow!("Invalid register '{name}'; use display address (40001) or raw (0)"))?;
+    // Subtract display offset if user gave display address (40001–49999)
+    if (40001..=49999).contains(&n) {
+        Ok(u16::try_from(n - 40001).unwrap_or(0))
+    } else {
+        Ok(u16::try_from(n).map_err(|_| anyhow::anyhow!("Address out of range: {n}"))?)
+    }
 }
 
 fn parse_hex(s: &str) -> Vec<u8> {
