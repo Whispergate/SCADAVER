@@ -15,7 +15,7 @@ fn build_beckhoff_response() -> Vec<u8> {
     let name = b"CI-BeckhoffTwin";
     let name_len: usize = name.len() + 1; // include null
     let mut frame = vec![0u8; 28 + name_len]; // exact minimum
-    // AMS Net ID at bytes 12..18 → hex at hexdata[24..36]
+                                              // AMS Net ID at bytes 12..18 → hex at hexdata[24..36]
     frame[12..18].copy_from_slice(&[0x7F, 0x00, 0x00, 0x01, 0x01, 0x01]);
     // name_len as LE u16 at bytes 26..28
     let nl = u16::try_from(name_len).unwrap_or(u16::MAX).to_le_bytes();
@@ -28,10 +28,7 @@ fn build_beckhoff_response() -> Vec<u8> {
 
 #[test]
 fn loopback_beckhoff_discover_ip_finds_device() {
-    let server_sock = match UdpSocket::bind("0.0.0.0:48899") {
-        Ok(s) => s,
-        Err(_) => return, // port busy on CI, skip
-    };
+    let Ok(server_sock) = UdpSocket::bind("0.0.0.0:48899") else { return }; // port busy on CI, skip
     server_sock
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
@@ -45,9 +42,12 @@ fn loopback_beckhoff_discover_ip_finds_device() {
     });
     thread::sleep(Duration::from_millis(50));
 
-    let result =
-        casket::vendors::beckhoff::scan::discover_ip("127.0.0.1", 2, true);
-    assert!(result.is_ok(), "discover_ip should return Ok: {:?}", result.err());
+    let result = casket::vendors::beckhoff::scan::discover_ip("127.0.0.1", 2, true);
+    assert!(
+        result.is_ok(),
+        "discover_ip should return Ok: {:?}",
+        result.err()
+    );
     let devs = result.unwrap();
     assert_eq!(devs.len(), 1, "should discover exactly one Beckhoff device");
     assert_eq!(devs[0].name, "CI-BeckhoffTwin");

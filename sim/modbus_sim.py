@@ -8,16 +8,23 @@ DI[addr] = 1 if addr % 3 == 0 else 0 (FC2 read discrete inputs)
 Expected output with 'Read Holding Registers 0:10':
   HR40001=0, HR40002=10, HR40003=20, HR40004=30, ...
 """
+# Accuracy audit (2026-08): source-traced protocol-operation fixture, not a
+# model-specific PLC emulator. Sources: Modbus Application Protocol V1.1b3
+# (https://www.modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf) and
+# Modbus TCP/IP messaging guidance (https://www.modbus.org/modbus-specifications).
+# Surface: FC1/2/3/4/5/6/16 and optional FC43/MEI 0x0E identity only.
 import argparse
 import asyncio
 import logging
 import os
+from typing import Optional
 
 from pymodbus.datastore import (
     ModbusSequentialDataBlock,
     ModbusServerContext,
     ModbusSlaveContext,
 )
+from pymodbus.device import ModbusDeviceIdentification
 from pymodbus.server import StartAsyncTcpServer
 
 COUNT = 200
@@ -50,7 +57,30 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("SCADAVER_SIM_HOST", "0.0.0.0"),
         help="IP address to bind (default: 0.0.0.0 or SCADAVER_SIM_HOST)",
     )
+    parser.add_argument(
+        "--identity",
+        choices=("generic", "schneider"),
+        default=os.environ.get("SCADAVER_MODBUS_IDENTITY", "generic"),
+        help=(
+            "optional read-only FC43 device identity (default: generic or "
+            "SCADAVER_MODBUS_IDENTITY)"
+        ),
+    )
     return parser.parse_args()
+
+
+def simulated_identity(kind: str) -> Optional[ModbusDeviceIdentification]:
+    """Return an optional FC43 identity without changing the register fixture."""
+    if kind == "generic":
+        return None
+    return ModbusDeviceIdentification(
+        {
+            0x00: "Schneider Electric",
+            0x01: "TM241CE24T/U",
+            0x02: "V1.0.0-sim",
+            0x04: "Modicon M241 simulator",
+        }
+    )
 
 
 async def main() -> None:
@@ -64,7 +94,13 @@ async def main() -> None:
     print(f"  IR[0..{COUNT-1}]: value = 1000 + addr (display 30001+addr)")
     print(f"  Coils[0..{COUNT-1}]: alternating 0/1")
     print(f"  DI[0..{COUNT-1}]: ON every 3rd address")
-    await StartAsyncTcpServer(context=ctx, address=(args.host, args.port))
+    if args.identity == "schneider":
+        print("  FC43 identity: Schneider Electric / Modicon M241 simulator")
+    await StartAsyncTcpServer(
+        context=ctx,
+        identity=simulated_identity(args.identity),
+        address=(args.host, args.port),
+    )
 
 
 asyncio.run(main())

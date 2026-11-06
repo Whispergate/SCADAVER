@@ -40,7 +40,7 @@ cli = [
 capture = ["casket/capture"]
 
 [dependencies]
-casket = "0.1"
+casket = { version = "0.1", path = "../casket" }
 anyhow = "1"
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
@@ -68,6 +68,7 @@ chrono = { version = "0.4", optional = true, default-features = false, features 
 
 [dev-dependencies]
 casket-macros = "0.1"
+tempfile = "3.10"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

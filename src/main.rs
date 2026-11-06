@@ -1,11 +1,13 @@
 mod cli;
 mod config;
+mod protocol;
 mod creds;
-mod import;
 mod db;
 mod display;
+mod import;
 mod mqtt_shell;
 mod net;
+mod ops;
 mod tui;
 mod web;
 
@@ -19,9 +21,15 @@ fn main() {
     print_disclaimer();
     let args = cli::Args::parse();
     let cfg = config::load();
+    display::set_color_override(match args.color {
+        cli::ColorMode::Auto => None,
+        cli::ColorMode::Always => Some(true),
+        cli::ColorMode::Never => Some(false),
+    });
+    display::set_byte_format(args.byte_format);
+    let verbose = args.verbose;
 
-    let launch_tui =
-        args.command.is_none() || matches!(args.command, Some(cli::Verb::Tui));
+    let launch_tui = args.command.is_none() || matches!(args.command, Some(cli::Verb::Tui));
     let launch_web = matches!(args.command, Some(cli::Verb::Web { .. }));
 
     if launch_tui {
@@ -36,25 +44,27 @@ fn main() {
             }
         };
         if let Err(e) = tui::run(&db) {
-            eprintln!("Fatal: {e:#}");
+            display::print_fatal_error(&e, verbose);
             std::process::exit(1);
         }
     } else if launch_web {
-        let Some(cli::Verb::Web { host, port }) = args.command else { unreachable!() };
+        let Some(cli::Verb::Web { host, port }) = args.command else {
+            unreachable!()
+        };
         // Apply config defaults for web host/port if CLI values are the hardcoded defaults.
-        let effective_host = cfg.web.host
+        let effective_host = cfg
+            .web
+            .host
             .filter(|h| host == "127.0.0.1" && !h.is_empty())
             .unwrap_or(host);
-        let effective_port = cfg.web.port
-            .filter(|_| port == 8888)
-            .unwrap_or(port);
+        let effective_port = cfg.web.port.filter(|_| port == 8888).unwrap_or(port);
         let api_key = cfg.web.api_key.filter(|k| !k.is_empty());
         if let Err(e) = web::start(&effective_host, effective_port, api_key) {
-            eprintln!("Web server error: {e:#}");
+            display::print_fatal_error(&e.context("web server failed"), verbose);
             std::process::exit(1);
         }
     } else if let Err(e) = cli::run(args, &cfg) {
-        eprintln!("Error: {e:#}");
+        display::print_fatal_error(&e, verbose);
         std::process::exit(1);
     }
 }

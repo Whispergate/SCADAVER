@@ -5,7 +5,7 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
 
-fn serve_fins_tcp(listener: TcpListener) {
+fn serve_fins_tcp(listener: &TcpListener) {
     if let Ok((mut s, _)) = listener.accept() {
         // Stage 1: address negotiation
         // Client sends 20-byte hello; we reply with 24 bytes, node=1 at byte 23
@@ -49,15 +49,20 @@ fn serve_fins_tcp(listener: TcpListener) {
 fn loopback_omron_fins_device_info() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    thread::spawn(move || serve_fins_tcp(listener));
+    thread::spawn(move || serve_fins_tcp(&listener));
     thread::sleep(Duration::from_millis(50));
 
     let result = casket::vendors::omron::fins::get_device_info_tcp("127.0.0.1", port);
-    assert!(result.is_ok(), "FINS device info should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "FINS device info should succeed: {:?}",
+        result.err()
+    );
     let dev = result.unwrap();
     assert_eq!(dev.node_addr, 1);
     assert!(
         dev.model.contains("CI-Omron"),
-        "model should contain CI-Omron, got: {}", dev.model
+        "model should contain CI-Omron, got: {}",
+        dev.model
     );
 }

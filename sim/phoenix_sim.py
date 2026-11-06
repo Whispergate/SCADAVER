@@ -10,38 +10,40 @@ Exchange 3 (info):    read 14 bytes → send 100-byte response with PLC identity
                          ret[79:87] = "20230101"     (build)
 Drain:                read remaining bytes from optional follow-up packets.
 """
+# Accuracy audit (2026-08): fixture-only ProConOS/WebVisit compatibility stub,
+# not a Phoenix Contact controller emulator. Phoenix's public advisory
+# (https://assets.phoenixcontact.com/file/0b82d360-83fb-4cd5-965a-1b7cb89712fd/media/original?Security_Advisory_OEM_CVE-2014-9195.pdf=)
+# and Redpoint research (https://github.com/digitalbond/Redpoint) informed its
+# Surface: only SCADAver's info and local tag test paths. No public vendor wire
+# specification was available to verify full conformance.
 import argparse
 import os
 import socketserver
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import unquote
 
 PORT = 1962
-
-_SPLIT_MARKER = b"userLevel\x05\x06\x03\x00\x01"
-_CLEAR_MARKER = bytes([0x00, 0x03, 0x00, 0x03, 0x01, 0x03, 0x01, 0x06, 0x83, 0x00])
-
-
-def _build_teq() -> bytes:
-    pw = b"admin"
-    return b"hdr\x00" + _SPLIT_MARKER + _CLEAR_MARKER + bytes([len(pw)]) + pw + b"\x00" * 5
-
 
 _TCR = b"#!-- N = 2\nPUMP_RUN;0;1;\nPUMP_SPEED;0;2;\n"
 
 _ROOT_HTML = (
     b"<html><body>\n"
-    b'<input type="hidden" name="MainTEQName" VALUE="app.teq">\n'
     b'<input type="hidden" name="ProjectName" VALUE="app">\n'
     b"</body></html>"
 )
 
-_RR_XML = (
-    b"<body>"
-    b"<i><n>PUMP_RUN</n><v>1</v></i>"
-    b"<i><n>PUMP_SPEED</n><v>1500</v></i>"
-    b"</body>"
-)
+_webvisit_values = {"PUMP_RUN": "1", "PUMP_SPEED": "1500"}
+_webvisit_lock = threading.Lock()
+
+
+def _read_values_xml() -> bytes:
+    with _webvisit_lock:
+        rows = b"".join(
+            f"<i><n>{name}</n><v>{value}</v></i>".encode()
+            for name, value in _webvisit_values.items()
+        )
+    return b"<body>" + rows + b"</body>"
 
 
 class WebVisitHandler(BaseHTTPRequestHandler):
@@ -51,10 +53,21 @@ class WebVisitHandler(BaseHTTPRequestHandler):
             self._send(200, "text/html", _ROOT_HTML)
         elif path == "/app.tcr":
             self._send(200, "text/plain", _TCR)
-        elif path == "/app.teq":
-            self._send(200, "application/octet-stream", _build_teq())
         elif path == "/cgi-bin/writeVal.exe":
-            self._send(200, "text/plain", b"")
+            raw_query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            try:
+                name, value = unquote(raw_query).split("+", 1)
+            except ValueError:
+                self.send_response(400)
+                self.end_headers()
+                return
+            with _webvisit_lock:
+                if name not in _webvisit_values:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                _webvisit_values[name] = value
+            self._send(200, "text/plain", b"OK")
         else:
             self.send_response(404)
             self.end_headers()
@@ -63,7 +76,7 @@ class WebVisitHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         self.rfile.read(length)
         if self.path == "/cgi-bin/ILRReadValues.exe":
-            self._send(200, "text/xml", _RR_XML)
+            self._send(200, "text/xml", _read_values_xml())
         else:
             self.send_response(404)
             self.end_headers()

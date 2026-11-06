@@ -3,6 +3,10 @@
 Anonymous access enabled, $SYS topics published every 5 s (retained),
 no ACL restrictions.
 """
+# Accuracy audit (2026-08): standards-backed MQTT 3.1.1 broker fixture, not a
+# production broker configuration. Source: OASIS MQTT v3.1.1
+# (https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html).
+# Surface: anonymous TCP broker behavior used by publish/subscribe smoke tests.
 import argparse
 import asyncio
 import logging

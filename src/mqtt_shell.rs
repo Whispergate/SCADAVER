@@ -6,12 +6,12 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 use casket::vendors::mqtt::client;
 use casket::vendors::mqtt::session::{ConnectOptions, MqttMessage, MqttSession, WillConfig};
-use casket::vendors::mqtt::sparkplug_fuzz::{FuzzCategory, FuzzConfig, run_sparkplug_fuzz};
+use casket::vendors::mqtt::sparkplug_fuzz::{run_sparkplug_fuzz, FuzzCategory, FuzzConfig};
 
 // ── Shell entry point ─────────────────────────────────────────────────────────
 
@@ -49,7 +49,10 @@ struct MainState {
 
 impl Default for MainState {
     fn default() -> Self {
-        Self { client_id: "scadaver-shell".into(), clean_session: true }
+        Self {
+            client_id: "scadaver-shell".into(),
+            clean_session: true,
+        }
     }
 }
 
@@ -64,7 +67,14 @@ struct ConnState {
 
 impl Default for ConnState {
     fn default() -> Self {
-        Self { host: "localhost".into(), port: 1883, keepalive: 60, username: None, password: None, will: None }
+        Self {
+            host: "localhost".into(),
+            port: 1883,
+            keepalive: 60,
+            username: None,
+            password: None,
+            will: None,
+        }
     }
 }
 
@@ -126,23 +136,30 @@ fn connection_console(ms: &mut MainState, cs: &mut ConnState) -> Result<()> {
         let (cmd, args) = split_first(&line);
         match cmd {
             "host" if args.is_empty() => println!("  host = {}", cs.host),
-            "host" => { cs.host = args.to_string(); println!("  host = {}", cs.host); }
+            "host" => {
+                cs.host = args.to_string();
+                println!("  host = {}", cs.host);
+            }
             "port" if args.is_empty() => println!("  port = {}", cs.port),
             "port" => match args.parse::<u16>() {
-                Ok(p) => { cs.port = p; println!("  port = {p}"); }
+                Ok(p) => {
+                    cs.port = p;
+                    println!("  port = {p}");
+                }
                 Err(_) => println!("  invalid port '{args}'"),
             },
             "keepalive" if args.is_empty() => println!("  keepalive = {}", cs.keepalive),
             "keepalive" => match args.parse::<u16>() {
-                Ok(k) => { cs.keepalive = k; println!("  keepalive = {k}s"); }
+                Ok(k) => {
+                    cs.keepalive = k;
+                    println!("  keepalive = {k}s");
+                }
                 Err(_) => println!("  invalid keepalive '{args}'"),
             },
-            "username" if args.is_empty() => {
-                match &cs.username {
-                    Some(u) => println!("  username = {u}"),
-                    None => println!("  username = (not set)"),
-                }
-            }
+            "username" if args.is_empty() => match &cs.username {
+                Some(u) => println!("  username = {u}"),
+                None => println!("  username = (not set)"),
+            },
             "username" => {
                 cs.username = Some(args.to_string());
                 println!("  username = {args}");
@@ -156,9 +173,15 @@ fn connection_console(ms: &mut MainState, cs: &mut ConnState) -> Result<()> {
                 cs.password = Some(pass);
                 println!("  password set");
             }
-            "clear_password" => { cs.password = None; println!("  password cleared"); }
+            "clear_password" => {
+                cs.password = None;
+                println!("  password cleared");
+            }
             "will" => handle_will_cmd(cs, args),
-            "clear_will" => { cs.will = None; println!("  will cleared"); }
+            "clear_will" => {
+                cs.will = None;
+                println!("  will cleared");
+            }
             "connect" => {
                 if cs.host.is_empty() {
                     println!("  set a host first: host <hostname>");
@@ -213,6 +236,7 @@ fn drain_and_log(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
     let mut logging = true;
     let mut seq: u64 = 0;
@@ -231,7 +255,13 @@ fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
     println!();
 
     loop {
-        drain_and_log(&session, &mut topic_stats, &mut retained_cache, logging, &filter);
+        drain_and_log(
+            &session,
+            &mut topic_stats,
+            &mut retained_cache,
+            logging,
+            &filter,
+        );
 
         let line = read_line("mqtt/messaging> ")?;
         let (cmd, rest) = split_first(&line);
@@ -266,12 +296,10 @@ fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
                     Err(e) => println!("  unsubscribe failed: {e:#}"),
                 }
             }
-            "unsubscribe_all" | "unsub_all" => {
-                match session.unsubscribe_all() {
-                    Ok(()) => println!("  unsubscribed from all topics"),
-                    Err(e) => println!("  error: {e:#}"),
-                }
-            }
+            "unsubscribe_all" | "unsub_all" => match session.unsubscribe_all() {
+                Ok(()) => println!("  unsubscribed from all topics"),
+                Err(e) => println!("  error: {e:#}"),
+            },
             "list_subscriptions" | "subs" | "ls" => {
                 let subs = session.subscriptions();
                 if subs.is_empty() {
@@ -283,16 +311,27 @@ fn messaging_console(cs: &ConnState, mut session: MqttSession) -> Result<()> {
                 }
             }
             "publish" | "pub" => handle_publish_cmd(&mut session, rest, &mut seq),
-            "listen" => handle_listen_cmd(&session, rest, &filter, &mut topic_stats, &mut retained_cache),
+            "listen" => handle_listen_cmd(
+                &session,
+                rest,
+                &filter,
+                &mut topic_stats,
+                &mut retained_cache,
+            ),
             "logging" => {
                 logging = match rest.to_lowercase().as_str() {
                     "off" | "0" | "false" => {
-                        println!("  logging off"); false
+                        println!("  logging off");
+                        false
                     }
                     "on" | "1" | "true" | "" => {
-                        println!("  logging on"); true
+                        println!("  logging on");
+                        true
                     }
-                    _ => { println!("  usage: logging on|off"); logging }
+                    _ => {
+                        println!("  usage: logging on|off");
+                        logging
+                    }
                 };
             }
             "ping" => match session.ping() {
@@ -336,7 +375,12 @@ fn handle_will_cmd(cs: &mut ConnState, args: &str) {
     let payload = parts.get(1).copied().unwrap_or("").as_bytes().to_vec();
     let qos: u8 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
     let retain: bool = matches!(parts.get(3).copied(), Some("true" | "1"));
-    cs.will = Some(WillConfig { topic: topic.to_string(), payload, qos, retain });
+    cs.will = Some(WillConfig {
+        topic: topic.to_string(),
+        payload,
+        qos,
+        retain,
+    });
     println!("  will set: topic='{topic}' qos={qos} retain={retain}");
 }
 
@@ -353,14 +397,16 @@ fn handle_publish_cmd(session: &mut MqttSession, args: &str, seq: &mut u64) {
     }
     let raw_payload = parts.get(1).copied().unwrap_or("");
     let payload_str = apply_seq(raw_payload, seq);
-    let qos: u8 = parts.get(2).and_then(|s| s.parse::<u8>().ok()).unwrap_or(0).min(2);
+    let qos: u8 = parts
+        .get(2)
+        .and_then(|s| s.parse::<u8>().ok())
+        .unwrap_or(0)
+        .min(2);
     let retain: bool = matches!(parts.get(3).copied(), Some("true" | "1"));
 
     match session.publish(topic, payload_str.as_bytes(), qos, retain) {
         Ok(()) => {
-            println!(
-                "  published → '{topic}' payload='{payload_str}' qos={qos} retain={retain}"
-            );
+            println!("  published → '{topic}' payload='{payload_str}' qos={qos} retain={retain}");
         }
         Err(e) => println!("  publish failed: {e:#}"),
     }
@@ -374,7 +420,11 @@ fn handle_listen_cmd(
     retained_cache: &mut HashMap<String, String>,
 ) {
     let secs: u64 = args.parse().unwrap_or(5);
-    let filter_note = if filter.is_empty() { String::new() } else { format!(" [filter: {filter}]") };
+    let filter_note = if filter.is_empty() {
+        String::new()
+    } else {
+        format!(" [filter: {filter}]")
+    };
     println!("  Listening for {secs}s{filter_note}…");
     let deadline = std::time::Instant::now() + Duration::from_secs(secs);
     let mut shown = 0usize;
@@ -402,9 +452,15 @@ fn handle_listen_cmd(
         thread::sleep(Duration::from_millis(50));
     }
     if filter.is_empty() {
-        println!("  listened {secs}s — {total} message(s), {} unique topic(s).", topic_stats.len());
+        println!(
+            "  listened {secs}s — {total} message(s), {} unique topic(s).",
+            topic_stats.len()
+        );
     } else {
-        println!("  listened {secs}s — {shown} shown, {total} received, {} unique topic(s).", topic_stats.len());
+        println!(
+            "  listened {secs}s — {shown} shown, {total} received, {} unique topic(s).",
+            topic_stats.len()
+        );
     }
 }
 
@@ -431,25 +487,26 @@ fn handle_sys_cmd(session: &mut MqttSession, topic_stats: &mut HashMap<String, u
 }
 
 const DEFAULT_CREDS: &[(&str, &str)] = &[
-    ("admin",  "admin"),
-    ("admin",  "password"),
-    ("admin",  "1234"),
-    ("admin",  ""),
-    ("mqtt",   "mqtt"),
-    ("mqtt",   "password"),
-    ("user",   "user"),
-    ("guest",  "guest"),
-    ("test",   "test"),
-    ("root",   "root"),
-    ("admin",  "admin1234"),
-    ("admin",  "mosquitto"),
+    ("admin", "admin"),
+    ("admin", "password"),
+    ("admin", "1234"),
+    ("admin", ""),
+    ("mqtt", "mqtt"),
+    ("mqtt", "password"),
+    ("user", "user"),
+    ("guest", "guest"),
+    ("test", "test"),
+    ("root", "root"),
+    ("admin", "admin1234"),
+    ("admin", "mosquitto"),
 ];
 
 fn handle_creds_cmd(cs: &ConnState, extra: &str) {
     let pairs: Vec<(&str, &str)> = if extra.is_empty() {
         DEFAULT_CREDS.to_vec()
     } else {
-        extra.split_once(':')
+        extra
+            .split_once(':')
             .map(|(u, p)| vec![(u, p)])
             .unwrap_or_default()
     };
@@ -457,7 +514,12 @@ fn handle_creds_cmd(cs: &ConnState, extra: &str) {
         println!("  usage: creds [user:pass]");
         return;
     }
-    println!("  Testing {} credential pair(s) against {}:{}…", pairs.len(), cs.host, cs.port);
+    println!(
+        "  Testing {} credential pair(s) against {}:{}…",
+        pairs.len(),
+        cs.host,
+        cs.port
+    );
     let mut hits = 0usize;
     for (user, pass) in &pairs {
         match client::try_credential(&cs.host, cs.port, user, pass) {
@@ -627,7 +689,11 @@ fn show_topic_tree(topic_stats: &HashMap<String, usize>) {
         }
     }
     let total: usize = topic_stats.values().sum();
-    println!("  {} topic(s), {} message(s) total", topic_stats.len(), total);
+    println!(
+        "  {} topic(s), {} message(s) total",
+        topic_stats.len(),
+        total
+    );
 }
 
 fn show_retained(cache: &HashMap<String, String>) {
@@ -653,11 +719,7 @@ fn matches_filter(msg: &MqttMessage, filter: &str) -> bool {
     msg.topic.to_lowercase().contains(&f) || msg.payload_str().to_lowercase().contains(&f)
 }
 
-fn handle_acl_cmd(
-    session: &mut MqttSession,
-    topic_stats: &HashMap<String, usize>,
-    args: &str,
-) {
+fn handle_acl_cmd(session: &mut MqttSession, topic_stats: &HashMap<String, usize>, args: &str) {
     let base_topics: Vec<String> = if args.is_empty() {
         let mut by_count: Vec<(&String, &usize)> = topic_stats.iter().collect();
         by_count.sort_by(|a, b| b.1.cmp(a.1));
@@ -702,7 +764,9 @@ fn handle_acl_cmd(
             } else {
                 0
             };
-            let pub_ok = session.publish(&variant, b"scadaver/acl-probe", 0, false).is_ok();
+            let pub_ok = session
+                .publish(&variant, b"scadaver/acl-probe", 0, false)
+                .is_ok();
             let sub_label = if sub_ok {
                 format!("SUB:YES({rx_count})")
             } else {
@@ -747,7 +811,9 @@ fn handle_session_cmd(cs: &ConnState, args: &str) {
         id.to_string()
     } else {
         println!("  usage: session <clientid> [secs]");
-        println!("         Reconnects as <clientid> with clean_session=false to steal queued messages.");
+        println!(
+            "         Reconnects as <clientid> with clean_session=false to steal queued messages."
+        );
         return;
     };
     let secs: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(5);
@@ -807,7 +873,9 @@ fn handle_session_cmd(cs: &ConnState, args: &str) {
     println!("    Messages captured : {total}");
     println!("    Unique topics     : {}", unique.len());
     if total == 0 {
-        println!("    Note: 0 messages — broker may enforce strict clean_session or no queued traffic.");
+        println!(
+            "    Note: 0 messages — broker may enforce strict clean_session or no queued traffic."
+        );
     } else {
         println!("    Note: captured traffic was delivered HERE; original owner will miss it.");
     }
@@ -833,7 +901,11 @@ fn handle_retain_cmd(session: &mut MqttSession, args: &str) {
             if sensitive {
                 sensitive_count += 1;
             }
-            let flag = if sensitive { "[SENSITIVE]" } else { "[         ]" };
+            let flag = if sensitive {
+                "[SENSITIVE]"
+            } else {
+                "[         ]"
+            };
             println!("  {flag}  {} : {}  [{fmt}]", msg.topic, display);
         }
         thread::sleep(Duration::from_millis(50));
@@ -848,14 +920,24 @@ fn payload_is_sensitive(display: &str, topic: &str) -> bool {
         return true; // JWT header (base64 encoded `{`)
     }
     let haystack = format!("{} {}", display.to_lowercase(), topic.to_lowercase());
-    for kw in &["password", "passwd", "secret", "token", "credential", "apikey", "api_key"] {
+    for kw in &[
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "credential",
+        "apikey",
+        "api_key",
+    ] {
         if haystack.contains(kw) {
             return true;
         }
     }
     let dot_parts: Vec<&str> = display.split('.').collect();
     if dot_parts.len() == 4
-        && dot_parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        && dot_parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
     {
         return true;
     }
@@ -864,7 +946,11 @@ fn payload_is_sensitive(display: &str, topic: &str) -> bool {
 
 fn detect_payload(topic: &str, payload: &[u8]) -> (&'static str, String) {
     if topic.starts_with("spBv1.0/") || topic.starts_with("spAv1.0/") {
-        let hex: String = payload.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+        let hex: String = payload
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         return ("sparkplug-b", hex);
     }
     if let Ok(s) = std::str::from_utf8(payload) {
@@ -883,7 +969,11 @@ fn detect_payload(topic: &str, payload: &[u8]) -> (&'static str, String) {
         }
         return ("utf8", trimmed.to_string());
     }
-    let hex: String = payload.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+    let hex: String = payload
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
     ("binary", hex)
 }
 
@@ -908,7 +998,14 @@ fn print_main_status(ms: &MainState, cs: &ConnState) {
         Some(u) => println!("  username      = {u}"),
         None => println!("  username      = (not set)"),
     }
-    println!("  password      = {}", if cs.password.is_some() { "(set)" } else { "(not set)" });
+    println!(
+        "  password      = {}",
+        if cs.password.is_some() {
+            "(set)"
+        } else {
+            "(not set)"
+        }
+    );
     if let Some(w) = &cs.will {
         println!("  will.topic    = {}", w.topic);
         println!("  will.qos      = {}", w.qos);
@@ -960,12 +1057,18 @@ fn print_msg_help() {
     println!("    filter [pattern]           show only messages matching topic/payload substring");
     println!("    topics                     list unique topics seen with message count");
     println!("    tree                       show observed topics as an indented hierarchy");
-    println!("    retained                   list topics with broker-retained payloads seen so far");
+    println!(
+        "    retained                   list topics with broker-retained payloads seen so far"
+    );
     println!("    sys                        subscribe to $SYS/# and display broker statistics");
     println!("    creds [user:pass]          test default MQTT credentials (or one specific pair)");
     println!("    spfuzz [options]           Sparkplug B fuzzer (run --dry-run first! see 'spfuzz help')");
-    println!("    acl [topic]                test wildcard ACL bypass (subscribe + publish probes)");
-    println!("    session <clientid> [secs]  hijack ClientID stored session, drain queued messages");
+    println!(
+        "    acl [topic]                test wildcard ACL bypass (subscribe + publish probes)"
+    );
+    println!(
+        "    session <clientid> [secs]  hijack ClientID stored session, drain queued messages"
+    );
     println!("    retain [secs]              hunt retained payloads, flag credentials/tokens");
     println!("    ping                       send PINGREQ");
     println!("    disconnect                 disconnect and return to connection console");
@@ -987,7 +1090,10 @@ fn read_line(prompt: &str) -> Result<String> {
 
 fn read_password(prompt: &str) -> Result<String> {
     // Use dialoguer for hidden password input.
-    dialoguer::Password::new().with_prompt(prompt.trim_end_matches(": ")).interact().map_err(Into::into)
+    dialoguer::Password::new()
+        .with_prompt(prompt.trim_end_matches(": "))
+        .interact()
+        .map_err(Into::into)
 }
 
 fn split_first(s: &str) -> (&str, &str) {

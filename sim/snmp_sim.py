@@ -5,10 +5,15 @@ Siemens SCALANCE X200.  Only the "public" community is accepted.
 
 Uses stdlib only — no third-party deps required.
 """
+# Accuracy audit (2026-08): standards-backed SNMPv2c fixture, not a SCALANCE
+# switch emulator. Sources: RFC 3416 (https://www.rfc-editor.org/rfc/rfc3416.html)
+# and RFC 3418 (https://www.rfc-editor.org/rfc/rfc3418.html).
+# Surface: community-gated GET/GETNEXT and mutable sysLocation only.
 from __future__ import annotations
 
 import argparse
 import socketserver
+import threading
 import time
 
 _START = time.monotonic()
@@ -26,6 +31,8 @@ SYS_LOCATION = (1,3,6,1,2,1,1,6,0)
 ENTERPRISE_OID = (1,3,6,1,4,1,4329,20,1,2,0,2)  # Siemens SCALANCE
 
 MIB_ORDER = [SYS_DESCR, SYS_OBJ_ID, SYS_UPTIME, SYS_CONTACT, SYS_NAME, SYS_LOCATION]
+_mutable_values = {SYS_CONTACT: b"", SYS_LOCATION: b"Lab"}
+_state_lock = threading.Lock()
 
 # ─── BER helpers ─────────────────────────────────────────────────────────────
 
@@ -127,8 +134,8 @@ def _decode_oid(data: bytes) -> tuple[int, ...]:
 
 def _parse_message(
     data: bytes,
-) -> tuple[str, int, int, list[tuple[int, ...]]]:
-    """Return (community, pdu_tag, req_id, oid_list)."""
+) -> tuple[str, int, int, list[tuple[tuple[int, ...], int, bytes]]]:
+    """Return community, PDU type, request ID, and parsed VarBinds."""
     _, msg, _ = _parse_tlv(data, 0)
     pos = 0
     _, _, pos = _parse_tlv(msg, pos)            # version
@@ -141,13 +148,14 @@ def _parse_message(
     _, _, pos2 = _parse_tlv(pdu_body, pos2)     # error-status
     _, _, pos2 = _parse_tlv(pdu_body, pos2)     # error-index
     _, vbl_body, _ = _parse_tlv(pdu_body, pos2) # VarBindList
-    oids: list[tuple[int, ...]] = []
+    varbinds: list[tuple[tuple[int, ...], int, bytes]] = []
     vpos = 0
     while vpos < len(vbl_body):
         _, vb_body, vpos = _parse_tlv(vbl_body, vpos)
-        _, oid_bytes, _ = _parse_tlv(vb_body, 0)
-        oids.append(_decode_oid(oid_bytes))
-    return community, pdu_tag, req_id, oids
+        _, oid_bytes, value_pos = _parse_tlv(vb_body, 0)
+        value_tag, value, _ = _parse_tlv(vb_body, value_pos)
+        varbinds.append((_decode_oid(oid_bytes), value_tag, value))
+    return community, pdu_tag, req_id, varbinds
 
 
 # ─── MIB lookup ──────────────────────────────────────────────────────────────
@@ -159,12 +167,11 @@ def _value_for(oid: tuple[int, ...]) -> bytes | None:
         return _enc_oid(ENTERPRISE_OID)
     if oid == SYS_UPTIME:
         return _timeticks(int((time.monotonic() - _START) * 100))
-    if oid == SYS_CONTACT:
-        return _octet(b"")
+    if oid in _mutable_values:
+        with _state_lock:
+            return _octet(_mutable_values[oid])
     if oid == SYS_NAME:
         return _octet(b"snmp-sim-01")
-    if oid == SYS_LOCATION:
-        return _octet(b"Lab")
     return None
 
 
@@ -198,7 +205,7 @@ class SnmpHandler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
         data, sock = self.request
         try:
-            community, pdu_tag, req_id, oids = _parse_message(data)
+            community, pdu_tag, req_id, requested = _parse_message(data)
         except Exception:
             return  # malformed — drop silently
 
@@ -208,18 +215,26 @@ class SnmpHandler(socketserver.BaseRequestHandler):
         varbinds: list[tuple[tuple[int, ...], bytes]] = []
 
         if pdu_tag == 0xA0:  # GetRequest
-            for oid in oids:
+            for oid, _, _ in requested:
                 val = _value_for(oid)
                 varbinds.append((oid, val if val is not None else _no_such_object()))
 
         elif pdu_tag == 0xA1:  # GetNextRequest
-            for oid in oids:
+            for oid, _, _ in requested:
                 nxt = _next_oid(oid)
                 if nxt is None:
                     varbinds.append((oid, _end_of_mib()))
                 else:
                     val = _value_for(nxt)
                     varbinds.append((nxt, val if val is not None else _no_such_object()))
+
+        elif pdu_tag == 0xA3:  # SetRequest — local, benign system strings only
+            for oid, value_tag, value in requested:
+                if oid not in _mutable_values or value_tag != 0x04:
+                    return
+                with _state_lock:
+                    _mutable_values[oid] = value
+                varbinds.append((oid, _octet(value)))
 
         else:
             return  # unsupported PDU type — drop

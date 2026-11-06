@@ -119,9 +119,11 @@
             <div class="flex flex-col gap-1">
               <label class="text-xs text-slate-400">Interface</label>
               <select class="bg-slate-800 border border-slate-600 text-slate-100 text-sm px-3 py-1.5 rounded"
-                      x-model="selectedIface">
+                      x-model="selectedIface"
+                      :disabled="interfaces.length === 0">
+                <option value="" x-show="interfaces.length === 0">No IPv4 interfaces found</option>
                 <template x-for="iface in interfaces" :key="iface.ip">
-                  <option :value="iface.ip" x-text="`${iface.name} (${iface.ip})`"></option>
+                  <option :value="iface.ip" x-text="`${iface.name} (${iface.ip} / ${iface.netmask})`"></option>
                 </template>
               </select>
             </div>
@@ -131,12 +133,11 @@
               <label class="text-xs text-slate-400">Vendor</label>
               <select class="bg-slate-800 border border-slate-600 text-slate-100 text-sm px-3 py-1.5 rounded"
                       x-model="scanVendor">
-                <option value="all">All</option>
-                <option value="beckhoff">Beckhoff</option>
-                <option value="enip">EtherNet/IP</option>
-                <option value="ewon">eWON</option>
-                <option value="schneider">Schneider</option>
-                <option value="mitsubishi">Mitsubishi</option>
+                <template x-for="protocol in scanProtocolOptions()" :key="protocol.slug">
+                  <option :value="protocol.slug"
+                          :title="protocol.transport"
+                          x-text="`${protocol.label} — ${protocol.transport}`"></option>
+                </template>
               </select>
             </div>
 
@@ -148,10 +149,55 @@
                      class="w-32 accent-cyan-500">
             </div>
 
+            <!-- Target subnet (optional) -->
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-slate-400">Target subnet (optional; enables All core probes)</label>
+              <input type="text" placeholder="e.g. 10.2.10.0/24"
+                     x-model="scanTarget"
+                     class="bg-slate-800 border border-slate-600 text-slate-100 text-sm px-3 py-1.5 rounded w-44 font-mono">
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <label class="text-xs text-slate-400" title="Currently enabled for the read-only Modbus, Schneider/Modicon, Siemens S7, Mitsubishi SLMP, Beckhoff ADS, EtherNet/IP, Omron FINS, and Phoenix Contact high-port scanners; other protocols use their default port until their rollout.">
+                Port override <span x-show="scanPortOverrideSupported()">(selected protocol)</span>
+              </label>
+              <input type="text" inputmode="numeric" placeholder="default"
+                     x-model="scanPort"
+                     :disabled="!scanPortOverrideSupported()"
+                     class="bg-slate-800 border border-slate-600 text-slate-100 text-sm px-3 py-1.5 rounded w-28 font-mono">
+            </div>
+
+            <div x-show="scanVendor === 'phoenix'" class="flex flex-col gap-1">
+              <label class="text-xs text-slate-400" title="Stored separately from the ProConOS device-information port and used only for later read-only WebVisit tag reads.">
+                WebVisit HTTP port
+              </label>
+              <input type="text" inputmode="numeric" placeholder="80 (default)"
+                     x-model="scanWebVisitPort"
+                     class="bg-slate-800 border border-slate-600 text-slate-100 text-sm px-3 py-1.5 rounded w-28 font-mono">
+            </div>
+
+            <div x-show="scanVendor === 'ewon'" class="flex flex-col gap-1">
+              <label class="text-xs text-slate-400" title="Stored separately from the UDP IPCONF discovery port and used only for later read-only eWON tag requests.">
+                eWON Web/API port
+              </label>
+              <input type="text" inputmode="numeric" placeholder="80 (default)"
+                     x-model="scanEwonWebPort"
+                     class="bg-slate-800 border border-slate-600 text-slate-100 text-sm px-3 py-1.5 rounded w-28 font-mono">
+            </div>
+
+            <div x-show="scanVendor === 'snmp'" class="flex flex-col gap-1">
+              <label class="text-xs text-slate-400" title="Required. SCADaver sends only this community and never guesses common values from the web scanner.">
+                SNMP community
+              </label>
+              <input type="text" autocomplete="off" placeholder="required"
+                     x-model="scanSnmpCommunity"
+                     class="bg-slate-800 border border-slate-600 text-slate-100 text-sm px-3 py-1.5 rounded w-36 font-mono">
+            </div>
+
             <!-- Scan button -->
             <div class="flex items-end">
               <button class="bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white px-5 py-1.5 rounded text-sm font-semibold"
-                      :disabled="scanning"
+                      :disabled="scanning || !selectedIface"
                       @click="scanNetwork()">
                 <span x-show="!scanning">Scan Network</span>
                 <span x-show="scanning">Scanning…</span>
@@ -173,16 +219,17 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <template x-for="dev in scanResults" :key="dev.ip">
+                  <template x-for="dev in scanResults" :key="`${dev.ip}-${dev.vendor}`">
                     <tr class="border-b border-slate-700/50 hover:bg-slate-800/50">
                       <td class="py-1.5 pr-4 font-mono text-cyan-300" x-text="dev.ip"></td>
                       <td class="py-1.5 pr-4">
                         <span class="uppercase text-xs px-2 py-0.5 rounded text-white"
                               :class="'badge-' + (dev.vendor || 'unknown')"
-                              x-text="dev.vendor || 'unknown'"></span>
+                              x-text="scanResultVendor(dev)"></span>
                       </td>
                       <td class="py-1.5 pr-4 text-slate-300 text-xs"
-                          x-text="dev.product_name || dev.name || dev.plc_type || ''"></td>
+                          :title="scanResultDetails(dev)"
+                          x-text="scanResultDetails(dev)"></td>
                       <td class="py-1.5">
                         <button class="text-xs text-cyan-400 hover:text-cyan-300"
                                 @click="addScanResult(dev)">+ Add</button>
@@ -399,7 +446,8 @@
                   </tbody>
                 </table>
               </template>
-              <p class="text-xs text-slate-600 mt-3">Tip: double-click any value to edit it and write it to the device. UDT members are written individually by their member path.</p>
+              <p x-show="!tagsReadOnly()" class="text-xs text-slate-600 mt-3">Tip: double-click any value to edit it and write it to the device. UDT members are written individually by their member path.</p>
+              <p x-show="tagsReadOnly()" class="text-xs text-slate-500 mt-3">Modbus, Schneider/Modicon, Siemens S7, Mitsubishi SLMP, Beckhoff ADS, EtherNet/IP, and Omron FINS values are read-only in the web interface.</p>
             </div>
           </template>
         </div>

@@ -2,6 +2,10 @@
 
 Responds to SNMPv2c community 'public' GET requests for sysDescr.0.
 """
+# Accuracy audit (2026-08): SNMPv2c CI protocol fixture, not a network-device
+# emulator. Sources: RFC 3416 (https://www.rfc-editor.org/rfc/rfc3416.html) and
+# RFC 3418 (https://www.rfc-editor.org/rfc/rfc3418.html).
+# Surface: authenticated-community sysDescr GET only.
 import asyncio
 from pysnmp.entity import engine, config
 from pysnmp.entity.rfc3413 import cmdrsp, context

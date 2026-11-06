@@ -8,11 +8,11 @@ use casket::vendors::beckhoff::ads;
 use casket::vendors::enip::enums;
 use casket::vendors::ewon::exploit;
 use casket::vendors::mitsubishi::slmp::SlmpValue;
+use casket::vendors::mqtt::client::{self, MqttDevice, MQTT_PORT};
 use casket::vendors::omron::fins::{OmronDevice, AREA_DM_WORD, FINS_TCP_PORT};
 use casket::vendors::rockwell::driver;
 use casket::vendors::schneider::session_hijack::{SchneiderDeviceInfo, SchneiderSession};
 use casket::vendors::siemens::scan as siemens_scan;
-use casket::vendors::mqtt::client::{self, MqttDevice, MQTT_PORT};
 use casket::vendors::snmp::oids;
 
 // ── core::bytes ──────────────────────────────────────────────────────────────
@@ -42,12 +42,15 @@ fn bytes_ip_to_hex_broadcast() {
 fn bytes_get_netid_roundtrip() {
     // ip_to_hex → get_netid_as_string should recover original octets
     let hex = bytes::ip_to_hex("10.0.0.1");
-    let parts: Vec<&str> = hex.as_bytes().chunks(2)
+    let parts: Vec<&str> = hex
+        .as_bytes()
+        .chunks(2)
         .map(|c| std::str::from_utf8(c).unwrap())
         .collect();
     let as_dotted = parts.join(".");
     // "0a.00.00.01" in decimal = "10.0.0.1"
-    let recovered: String = as_dotted.split('.')
+    let recovered: String = as_dotted
+        .split('.')
         .map(|h| u8::from_str_radix(h, 16).unwrap().to_string())
         .collect::<Vec<_>>()
         .join(".");
@@ -109,12 +112,18 @@ fn enip_device_type_unknown_shows_id() {
 
 #[test]
 fn oids_siemens_root_resolves() {
-    assert_eq!(oids::vendor_from_sys_oid(oids::SIEMENS_ROOT), Some("siemens"));
+    assert_eq!(
+        oids::vendor_from_sys_oid(oids::SIEMENS_ROOT),
+        Some("siemens")
+    );
 }
 
 #[test]
 fn oids_schneider_root_resolves() {
-    assert_eq!(oids::vendor_from_sys_oid(oids::SCHNEIDER_ROOT), Some("schneider"));
+    assert_eq!(
+        oids::vendor_from_sys_oid(oids::SCHNEIDER_ROOT),
+        Some("schneider")
+    );
 }
 
 #[test]
@@ -124,12 +133,18 @@ fn oids_apc_root_resolves_as_schneider() {
 
 #[test]
 fn oids_rockwell_root_resolves() {
-    assert_eq!(oids::vendor_from_sys_oid(oids::ROCKWELL_ROOT), Some("rockwell"));
+    assert_eq!(
+        oids::vendor_from_sys_oid(oids::ROCKWELL_ROOT),
+        Some("rockwell")
+    );
 }
 
 #[test]
 fn oids_beckhoff_root_resolves() {
-    assert_eq!(oids::vendor_from_sys_oid(oids::BECKHOFF_ROOT), Some("beckhoff"));
+    assert_eq!(
+        oids::vendor_from_sys_oid(oids::BECKHOFF_ROOT),
+        Some("beckhoff")
+    );
 }
 
 #[test]
@@ -225,7 +240,10 @@ fn driver_decode_dint_max() {
 #[test]
 fn driver_decode_real_one() {
     // 1.0_f32 LE bytes = [0x00, 0x00, 0x80, 0x3F]
-    assert_eq!(driver::decode_value(0xCA, &[0, 0, 0x00, 0x00, 0x80, 0x3F], None), "1");
+    assert_eq!(
+        driver::decode_value(0xCA, &[0, 0, 0x00, 0x00, 0x80, 0x3F], None),
+        "1"
+    );
 }
 
 #[test]
@@ -298,9 +316,24 @@ fn make_lit_template() -> driver::TemplateMap {
     //   offset 4  → SP   (setpoint)
     //   offset 8  → OUT  (output)
     let fields = vec![
-        driver::TemplateField { name: "PV".into(),  cip_type: 0xCA, type_info: 1, offset: 0  },
-        driver::TemplateField { name: "SP".into(),  cip_type: 0xCA, type_info: 1, offset: 4  },
-        driver::TemplateField { name: "OUT".into(), cip_type: 0xCA, type_info: 1, offset: 8  },
+        driver::TemplateField {
+            name: "PV".into(),
+            cip_type: 0xCA,
+            type_info: 1,
+            offset: 0,
+        },
+        driver::TemplateField {
+            name: "SP".into(),
+            cip_type: 0xCA,
+            type_info: 1,
+            offset: 4,
+        },
+        driver::TemplateField {
+            name: "OUT".into(),
+            cip_type: 0xCA,
+            type_info: 1,
+            offset: 8,
+        },
     ];
     let template_id: u16 = 0x08B; // matches tag_type & 0x0FFF for tag_type = 0x808B
     let mut map = driver::TemplateMap::new();
@@ -325,11 +358,11 @@ fn driver_decode_struct_real_fields_renders_named_values() {
     let out = driver::decode_value(tag_type, &cip_data, Some(&map));
 
     assert!(out.starts_with('{'), "expected struct output, got: {out}");
-    assert!(out.contains("PV:"),  "PV missing from: {out}");
-    assert!(out.contains("SP:"),  "SP missing from: {out}");
+    assert!(out.contains("PV:"), "PV missing from: {out}");
+    assert!(out.contains("SP:"), "SP missing from: {out}");
     assert!(out.contains("OUT:"), "OUT missing from: {out}");
-    assert!(out.contains("6.4"),  "PV value wrong in: {out}");
-    assert!(out.contains('5'),    "SP value wrong in: {out}");
+    assert!(out.contains("6.4"), "PV value wrong in: {out}");
+    assert!(out.contains('5'), "SP value wrong in: {out}");
 }
 
 #[test]
@@ -341,7 +374,10 @@ fn driver_decode_struct_no_template_falls_back_to_hex_display() {
     cip_data.extend_from_slice(&raw);
 
     let out = driver::decode_value(tag_type, &cip_data, None);
-    assert!(out.starts_with("STRUCT("), "expected STRUCT fallback, got: {out}");
+    assert!(
+        out.starts_with("STRUCT("),
+        "expected STRUCT fallback, got: {out}"
+    );
     assert!(out.contains("0x08B"), "template_id missing from: {out}");
     assert!(out.contains("12 bytes"), "byte count missing from: {out}");
 }
@@ -352,17 +388,32 @@ fn driver_decode_struct_mixed_types_dint_bool_real() {
     // For a BOOL member the descriptor's type_info word is the bit position, not a count.
     let template_id: u16 = 0x0AB;
     let fields = vec![
-        driver::TemplateField { name: "Count".into(), cip_type: 0xC4, type_info: 1, offset: 0 },
-        driver::TemplateField { name: "Active".into(), cip_type: 0xC1, type_info: 0, offset: 4 },
-        driver::TemplateField { name: "Rate".into(),  cip_type: 0xCA, type_info: 1, offset: 8 },
+        driver::TemplateField {
+            name: "Count".into(),
+            cip_type: 0xC4,
+            type_info: 1,
+            offset: 0,
+        },
+        driver::TemplateField {
+            name: "Active".into(),
+            cip_type: 0xC1,
+            type_info: 0,
+            offset: 4,
+        },
+        driver::TemplateField {
+            name: "Rate".into(),
+            cip_type: 0xCA,
+            type_info: 1,
+            offset: 8,
+        },
     ];
     let mut map = driver::TemplateMap::new();
     map.insert(template_id, driver::TemplateDef::from_fields(fields));
 
     let mut raw = Vec::new();
     raw.extend_from_slice(&42_i32.to_le_bytes()); // Count = 42
-    raw.push(1);                                    // Active = true
-    raw.extend_from_slice(&[0; 3]);                // padding to reach offset 8
+    raw.push(1); // Active = true
+    raw.extend_from_slice(&[0; 3]); // padding to reach offset 8
     raw.extend_from_slice(&std::f32::consts::PI.to_le_bytes()); // Rate ≈ 3.14
 
     let tag_type: u16 = 0x80AB;
@@ -370,35 +421,42 @@ fn driver_decode_struct_mixed_types_dint_bool_real() {
     cip_data.extend_from_slice(&raw);
 
     let out = driver::decode_value(tag_type, &cip_data, Some(&map));
-    assert!(out.contains("Count: 42"),       "Count wrong in: {out}");
-    assert!(out.contains("Active: true"),    "Active wrong in: {out}");
-    assert!(out.contains("Rate:"),           "Rate missing from: {out}");
-    assert!(out.contains("3.1"),             "Rate value wrong in: {out}");
+    assert!(out.contains("Count: 42"), "Count wrong in: {out}");
+    assert!(out.contains("Active: true"), "Active wrong in: {out}");
+    assert!(out.contains("Rate:"), "Rate missing from: {out}");
+    assert!(out.contains("3.1"), "Rate value wrong in: {out}");
 }
 
 #[test]
 fn driver_decode_struct_truncates_after_eight_fields() {
     // Nine fields → show 8, then "... (1 more fields)"
     let template_id: u16 = 0x0CD;
-    let fields: Vec<driver::TemplateField> = (0..9).map(|i| driver::TemplateField {
-        name: format!("F{i}"),
-        cip_type: 0xC4,
-        type_info: 1,
-        offset: u32::try_from(i * 4).unwrap(),
-    }).collect();
+    let fields: Vec<driver::TemplateField> = (0..9)
+        .map(|i| driver::TemplateField {
+            name: format!("F{i}"),
+            cip_type: 0xC4,
+            type_info: 1,
+            offset: u32::try_from(i * 4).unwrap(),
+        })
+        .collect();
     let mut map = driver::TemplateMap::new();
     map.insert(template_id, driver::TemplateDef::from_fields(fields));
 
     let mut raw = Vec::new();
-    for i in 0_i32..9 { raw.extend_from_slice(&i.to_le_bytes()); }
+    for i in 0_i32..9 {
+        raw.extend_from_slice(&i.to_le_bytes());
+    }
 
     let tag_type: u16 = 0x80CD;
     let mut cip_data = vec![(tag_type & 0xFF) as u8, (tag_type >> 8) as u8];
     cip_data.extend_from_slice(&raw);
 
     let out = driver::decode_value(tag_type, &cip_data, Some(&map));
-    assert!(out.contains("1 more field"), "truncation marker missing from: {out}");
-    assert!(!out.contains("F8:"),         "9th field should be hidden: {out}");
+    assert!(
+        out.contains("1 more field"),
+        "truncation marker missing from: {out}"
+    );
+    assert!(!out.contains("F8:"), "9th field should be hidden: {out}");
 }
 
 #[test]
@@ -406,8 +464,18 @@ fn driver_decode_struct_field_offset_beyond_data_skipped() {
     // Field whose offset exceeds the raw data length is silently skipped
     let template_id: u16 = 0x0EF;
     let fields = vec![
-        driver::TemplateField { name: "Present".into(), cip_type: 0xC4, type_info: 1, offset: 0   },
-        driver::TemplateField { name: "Missing".into(), cip_type: 0xC4, type_info: 1, offset: 100 },
+        driver::TemplateField {
+            name: "Present".into(),
+            cip_type: 0xC4,
+            type_info: 1,
+            offset: 0,
+        },
+        driver::TemplateField {
+            name: "Missing".into(),
+            cip_type: 0xC4,
+            type_info: 1,
+            offset: 100,
+        },
     ];
     let mut map = driver::TemplateMap::new();
     map.insert(template_id, driver::TemplateDef::from_fields(fields));
@@ -418,8 +486,14 @@ fn driver_decode_struct_field_offset_beyond_data_skipped() {
     cip_data.extend_from_slice(&raw);
 
     let out = driver::decode_value(tag_type, &cip_data, Some(&map));
-    assert!(out.contains("Present: 5"), "visible field missing from: {out}");
-    assert!(!out.contains("Missing"),   "out-of-bounds field should be absent: {out}");
+    assert!(
+        out.contains("Present: 5"),
+        "visible field missing from: {out}"
+    );
+    assert!(
+        !out.contains("Missing"),
+        "out-of-bounds field should be absent: {out}"
+    );
 }
 
 #[test]
@@ -430,14 +504,34 @@ fn driver_decode_struct_nested_udt_renders_outer_and_inner() {
     let outer_id: u16 = 0x0CC;
 
     let inner_fields = vec![
-        driver::TemplateField { name: "Lo".into(), cip_type: 0xCA, type_info: 1, offset: 0 },
-        driver::TemplateField { name: "Hi".into(), cip_type: 0xCA, type_info: 1, offset: 4 },
+        driver::TemplateField {
+            name: "Lo".into(),
+            cip_type: 0xCA,
+            type_info: 1,
+            offset: 0,
+        },
+        driver::TemplateField {
+            name: "Hi".into(),
+            cip_type: 0xCA,
+            type_info: 1,
+            offset: 4,
+        },
     ];
     // Outer field 1: REAL @ 0 (tag_type 0xCA)
     // Outer field 2: nested UDT @ 4 (tag_type 0x80BB — bit 15 set, template_id = inner_id)
     let outer_fields = vec![
-        driver::TemplateField { name: "Eng".into(), cip_type: 0xCA,          type_info: 1, offset: 0 },
-        driver::TemplateField { name: "Lim".into(), cip_type: 0x80BB | inner_id, type_info: 1, offset: 4 },
+        driver::TemplateField {
+            name: "Eng".into(),
+            cip_type: 0xCA,
+            type_info: 1,
+            offset: 0,
+        },
+        driver::TemplateField {
+            name: "Lim".into(),
+            cip_type: 0x80BB | inner_id,
+            type_info: 1,
+            offset: 4,
+        },
     ];
 
     let mut map = driver::TemplateMap::new();
@@ -472,14 +566,18 @@ fn ads_construct_readstate_packet_is_nonempty() {
     };
     let pkt = ads::construct_ams_packet(
         &route,
-        4,                      // cmd_id = ReadState
+        4, // cmd_id = ReadState
         &ads::AdsParams::ReadState,
         Some("00000001"),
         true,
     );
     assert!(!pkt.is_empty());
     // Every AMS packet starts with "0000" (TCP header prefix, reserved)
-    assert!(pkt.starts_with("0000"), "unexpected prefix: {}", &pkt[..8.min(pkt.len())]);
+    assert!(
+        pkt.starts_with("0000"),
+        "unexpected prefix: {}",
+        &pkt[..8.min(pkt.len())]
+    );
 }
 
 #[test]
@@ -492,7 +590,7 @@ fn ads_construct_read_packet_encodes_params() {
     };
     let pkt = ads::construct_ams_packet(
         &route,
-        2,                                          // cmd_id = Read
+        2, // cmd_id = Read
         &ads::AdsParams::Read(0xF020, 0, 4),
         Some("00000002"),
         true,
@@ -543,25 +641,36 @@ fn ads_decode_value_int_1337() {
 #[test]
 fn ads_decode_value_dint_neg1() {
     // DINT = i32 LE: -1 = [0xFF, 0xFF, 0xFF, 0xFF]
-    assert_eq!(ads::decode_ads_value("DINT", &[0xFF, 0xFF, 0xFF, 0xFF]), "-1");
+    assert_eq!(
+        ads::decode_ads_value("DINT", &[0xFF, 0xFF, 0xFF, 0xFF]),
+        "-1"
+    );
 }
 
 #[test]
 fn ads_decode_value_real_one() {
     // REAL = f32 LE: 1.0 = [0x00, 0x00, 0x80, 0x3F]
-    assert_eq!(ads::decode_ads_value("REAL", &[0x00, 0x00, 0x80, 0x3F]), "1");
+    assert_eq!(
+        ads::decode_ads_value("REAL", &[0x00, 0x00, 0x80, 0x3F]),
+        "1"
+    );
 }
 
 #[test]
 fn ads_decode_value_string_null_terminated() {
-    assert_eq!(ads::decode_ads_value("STRING(80)", b"hello\x00rest"), "\"hello\"");
+    assert_eq!(
+        ads::decode_ads_value("STRING(80)", b"hello\x00rest"),
+        "\"hello\""
+    );
 }
 
 #[test]
 fn ads_decode_value_unknown_type_hex_dump() {
     let result = ads::decode_ads_value("MYSTRUCT", &[0xDE, 0xAD]);
-    assert!(result.contains("de") || result.contains("DE") || result.contains("dead"),
-        "expected hex dump, got: {result}");
+    assert!(
+        result.contains("de") || result.contains("DE") || result.contains("dead"),
+        "expected hex dump, got: {result}"
+    );
 }
 
 // ── omron::fins ───────────────────────────────────────────────────────────────
@@ -724,11 +833,22 @@ fn mqtt_device_broker_info_none() {
 fn mqtt_build_connect_anon_packet_structure() {
     let pkt = client::build_connect("scadaver-probe", None, None);
     assert_eq!(pkt[0], 0x10, "first byte must be CONNECT (0x10)");
-    assert!(pkt.windows(4).any(|w| w == b"MQTT"), "protocol name MQTT must appear in packet");
+    assert!(
+        pkt.windows(4).any(|w| w == b"MQTT"),
+        "protocol name MQTT must appear in packet"
+    );
     // After "MQTT": protocol level 0x04 (3.1.1), then connect flags 0x02 (clean session only)
     let mqtt_pos = pkt.windows(4).position(|w| w == b"MQTT").unwrap();
-    assert_eq!(pkt[mqtt_pos + 4], 0x04, "protocol level must be 4 (MQTT 3.1.1)");
-    assert_eq!(pkt[mqtt_pos + 5], 0x02, "anonymous flags must be 0x02 (clean session only)");
+    assert_eq!(
+        pkt[mqtt_pos + 4],
+        0x04,
+        "protocol level must be 4 (MQTT 3.1.1)"
+    );
+    assert_eq!(
+        pkt[mqtt_pos + 5],
+        0x02,
+        "anonymous flags must be 0x02 (clean session only)"
+    );
 }
 
 #[test]
@@ -736,7 +856,11 @@ fn mqtt_build_connect_with_creds_flags_byte() {
     let pkt = client::build_connect("scadaver-spray", Some("admin"), Some("pass"));
     assert_eq!(pkt[0], 0x10, "first byte must be CONNECT (0x10)");
     let mqtt_pos = pkt.windows(4).position(|w| w == b"MQTT").unwrap();
-    assert_eq!(pkt[mqtt_pos + 5], 0xC2, "credentialed flags must be 0xC2 (username+password+clean session)");
+    assert_eq!(
+        pkt[mqtt_pos + 5],
+        0xC2,
+        "credentialed flags must be 0xC2 (username+password+clean session)"
+    );
 }
 
 #[test]
@@ -870,7 +994,10 @@ fn autodetect_probe_info_fields_accessible() {
 #[test]
 fn autodetect_sweep_outcome_no_device() {
     let outcome = SweepOutcome {
-        probe: ProbeInfo { label: "Test", transport: "UDP 161" },
+        probe: ProbeInfo {
+            label: "Test",
+            transport: "UDP 161",
+        },
         device: None,
     };
     assert!(outcome.device.is_none());

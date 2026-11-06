@@ -12,9 +12,9 @@ fn build_ewon_device_info_response() -> Vec<u8> {
     //   mac = data[32..38]                          (requires len >= 38)
     //   identifier = data[0..4]
     let mut resp = vec![0u8; 38];
-    resp[0..4].copy_from_slice(b"IPCO");   // identifier
-    resp[15] = 2;                           // device_info response type
-    // IP 127.0.0.1 stored reversed at bytes 20..24
+    resp[0..4].copy_from_slice(b"IPCO"); // identifier
+    resp[15] = 2; // device_info response type
+                  // IP 127.0.0.1 stored reversed at bytes 20..24
     resp[20] = 1;
     resp[21] = 0;
     resp[22] = 0;
@@ -27,10 +27,7 @@ fn build_ewon_device_info_response() -> Vec<u8> {
 #[test]
 fn loopback_ewon_scan_ip_finds_device() {
     // eWON probe sends to port 1507; mock must be bound there.
-    let server_sock = match UdpSocket::bind("0.0.0.0:1507") {
-        Ok(s) => s,
-        Err(_) => return, // port busy, skip
-    };
+    let Ok(server_sock) = UdpSocket::bind("0.0.0.0:1507") else { return }; // port busy, skip
     server_sock
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
@@ -46,7 +43,11 @@ fn loopback_ewon_scan_ip_finds_device() {
 
     // scan_ip sends two discovery packets then listens on port 1506 (or random fallback).
     let result = casket::vendors::ewon::scan::scan_ip("127.0.0.1", 2, true);
-    assert!(result.is_ok(), "eWON scan_ip should return Ok: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "eWON scan_ip should return Ok: {:?}",
+        result.err()
+    );
     let devs = result.unwrap();
     // At least one device should be discovered
     assert!(!devs.is_empty(), "should find at least one eWON device");

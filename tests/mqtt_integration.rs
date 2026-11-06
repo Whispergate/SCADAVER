@@ -21,7 +21,10 @@ fn broker_host() -> Option<String> {
 fn live_probe_returns_anonymous_device() {
     let Some(host) = broker_host() else { return };
     let dev = client::probe(&host, MQTT_PORT);
-    assert!(dev.is_some(), "probe should return a device on an open broker");
+    assert!(
+        dev.is_some(),
+        "probe should return a device on an open broker"
+    );
     let dev = dev.unwrap();
     assert!(dev.anonymous, "broker should accept anonymous connections");
     assert_eq!(dev.port, MQTT_PORT);
@@ -30,8 +33,7 @@ fn live_probe_returns_anonymous_device() {
 #[test]
 fn live_sys_topic_recon() {
     let Some(host) = broker_host() else { return };
-    let dev = client::probe(&host, MQTT_PORT)
-        .expect("probe must succeed against TEST_MQTT_HOST");
+    let dev = client::probe(&host, MQTT_PORT).expect("probe must succeed against TEST_MQTT_HOST");
     // mosquitto and amqtt both publish $SYS/broker/* as retained topics.
     // If broker_info is Some, verify the topic prefix.
     if let Some(info) = &dev.broker_info {
@@ -72,16 +74,26 @@ fn live_subscribe_publish_and_receive() {
     };
     let mut session = MqttSession::connect(&opts).expect("connect should succeed");
 
-    session.subscribe(TOPIC, 0).expect("subscribe should succeed");
+    session
+        .subscribe(TOPIC, 0)
+        .expect("subscribe should succeed");
     // Brief pause lets the SUBSCRIBE reach the broker before we publish.
     thread::sleep(Duration::from_millis(150));
-    session.publish(TOPIC, PAYLOAD, 0, false).expect("publish should succeed");
+    session
+        .publish(TOPIC, PAYLOAD, 0, false)
+        .expect("publish should succeed");
     // Reader thread polls every 100 ms; give it a full window.
     thread::sleep(Duration::from_millis(500));
 
     let msgs = session.drain_messages();
-    let found = msgs.iter().any(|m| m.topic == TOPIC && m.payload == PAYLOAD);
-    assert!(found, "should receive back the published message; got {} message(s)", msgs.len());
+    let found = msgs
+        .iter()
+        .any(|m| m.topic == TOPIC && m.payload == PAYLOAD);
+    assert!(
+        found,
+        "should receive back the published message; got {} message(s)",
+        msgs.len()
+    );
 
     session.disconnect().expect("disconnect should succeed");
 }
@@ -98,11 +110,17 @@ fn live_unsubscribe_stops_delivery() {
     };
     let mut session = MqttSession::connect(&opts).expect("connect should succeed");
 
-    session.subscribe(TOPIC, 0).expect("subscribe should succeed");
+    session
+        .subscribe(TOPIC, 0)
+        .expect("subscribe should succeed");
     thread::sleep(Duration::from_millis(150));
-    session.unsubscribe(TOPIC).expect("unsubscribe should succeed");
+    session
+        .unsubscribe(TOPIC)
+        .expect("unsubscribe should succeed");
     thread::sleep(Duration::from_millis(150));
-    session.publish(TOPIC, b"should-not-arrive", 0, false).expect("publish should succeed");
+    session
+        .publish(TOPIC, b"should-not-arrive", 0, false)
+        .expect("publish should succeed");
     thread::sleep(Duration::from_millis(500));
 
     let msgs = session.drain_messages();

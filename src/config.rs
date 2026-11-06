@@ -4,9 +4,12 @@ use std::path::PathBuf;
 /// Top-level structure of `~/.config/scadaver/config.toml`.
 #[derive(Deserialize, Default)]
 pub struct ConfigFile {
-    #[serde(default)] pub defaults: DefaultsConfig,
-    #[serde(default)] pub web: WebConfig,
-    #[serde(default)] pub mqtt: MqttConfig,
+    #[serde(default)]
+    pub defaults: DefaultsConfig,
+    #[serde(default)]
+    pub web: WebConfig,
+    #[serde(default)]
+    pub mqtt: MqttConfig,
 }
 
 #[derive(Deserialize, Default)]
@@ -78,6 +81,9 @@ pub fn ensure_sample_exists() {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Err(e) = std::fs::write(&path, SAMPLE_CONFIG) {
-        eprintln!("[!] Could not write sample config.toml to {}: {e}", path.display());
+        eprintln!(
+            "[!] Could not write sample config.toml to {}: {e}",
+            path.display()
+        );
     }
 }

@@ -4,8 +4,10 @@ use std::path::PathBuf;
 /// Top-level structure of `~/.config/scadaver/creds.toml`.
 #[derive(Deserialize, Default)]
 pub struct CredConfig {
-    #[serde(default)] pub siemens: SiemensCreds,
-    #[serde(default)] pub http: HttpCreds,
+    #[serde(default)]
+    pub siemens: SiemensCreds,
+    #[serde(default)]
+    pub http: HttpCreds,
 }
 
 /// `S7Comm` only uses a password (no username).
@@ -45,7 +47,10 @@ pub fn load_wordlist(path: &str) -> anyhow::Result<Vec<(String, String)>> {
     let pairs = text
         .lines()
         .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
-        .filter_map(|l| l.split_once(':').map(|(u, p)| (u.to_string(), p.to_string())))
+        .filter_map(|l| {
+            l.split_once(':')
+                .map(|(u, p)| (u.to_string(), p.to_string()))
+        })
         .collect();
     Ok(pairs)
 }
@@ -74,6 +79,9 @@ pub fn ensure_sample_exists() {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Err(e) = std::fs::write(&path, SAMPLE_TOML) {
-        eprintln!("[!] Could not write sample creds.toml to {}: {e}", path.display());
+        eprintln!(
+            "[!] Could not write sample creds.toml to {}: {e}",
+            path.display()
+        );
     }
 }

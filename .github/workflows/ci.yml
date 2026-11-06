@@ -13,8 +13,20 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: scadaver
+
     steps:
+      # scadaver at ./scadaver, casket at ./casket  →  path = "../casket" resolves correctly
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v4
+        with:
+          path: scadaver
+
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v4
+        with:
+          repository: Whispergate/casket
+          path: casket
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # stable
         with:
@@ -42,8 +54,11 @@ jobs:
           TEST_MQTT_HOST: 127.0.0.1
         run: cargo test --test mqtt_integration
 
-      - name: Install Python simulators
-        run: pip install asyncua
+      - name: Install Python simulators and independent protocol clients
+        run: pip install -r sim/requirements.txt -r sim/requirements-test.txt
+
+      - name: Simulator provenance and independent protocol checks
+        run: python3 -m unittest sim.test_run_all sim.test_protocol_conformance
 
       - name: Start external simulators
         run: |

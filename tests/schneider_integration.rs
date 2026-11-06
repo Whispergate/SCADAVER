@@ -12,21 +12,19 @@ fn build_schneider_response() -> Vec<u8> {
     let name = b"M340 CI-Test";
     let mut data = vec![0u8; 53 + name.len()];
     // firmware bytes at [48..52]: format is data[51].data[50].data[49].data[48]
-    data[48] = 14;  // patch
-    data[49] = 0;   // patch2
-    data[50] = 40;  // minor
-    data[51] = 2;   // major → "2.40.0.14"
+    data[48] = 14; // patch
+    data[49] = 0; // patch2
+    data[50] = 40; // minor
+    data[51] = 2; // major → "2.40.0.14"
     data[52..52 + name.len()].copy_from_slice(name);
     data
 }
 
 #[test]
 fn loopback_schneider_udp_discovers_device() {
+    use casket::vendors::schneider::scan::Transport;
     // Schneider scan sends to port 1740; mock must be bound there.
-    let server_sock = match UdpSocket::bind("0.0.0.0:1740") {
-        Ok(s) => s,
-        Err(_) => return, // port busy, skip
-    };
+    let Ok(server_sock) = UdpSocket::bind("0.0.0.0:1740") else { return }; // port busy, skip
     server_sock
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
@@ -41,11 +39,18 @@ fn loopback_schneider_udp_discovers_device() {
     thread::sleep(Duration::from_millis(50));
 
     // scan_ip_with_transport(ip, timeout, silent, port, Transport::Udp) — UDP only
-    use casket::vendors::schneider::scan::Transport;
     let result = casket::vendors::schneider::scan::scan_ip_with_transport(
-        "127.0.0.1", 2, true, 0, Transport::Udp,
+        "127.0.0.1",
+        2,
+        true,
+        0,
+        Transport::Udp,
     );
     // Either the mock response or the client's own probe arrives; in both cases the
     // function must not error. Firmware parsing is covered by scan.rs unit tests.
-    assert!(result.is_ok(), "Schneider scan should return Ok: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Schneider scan should return Ok: {:?}",
+        result.err()
+    );
 }

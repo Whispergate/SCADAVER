@@ -59,14 +59,23 @@ const EXPLOIT_CATALOG = {
             destructive: true,
         },
     ],
-    phoenix: [
+    modbus: [
         {
-            id: 'phoenix/passwords',
-            name: 'Password Dump',
-            desc: 'CVE-2016-8366: retrieve WebVisit HMI user passwords.',
+            id: 'modbus/map-quick',
+            name: 'Quick Map Read',
+            desc: 'Read the common holding-register, coil, input-register, and discrete-input ranges without modifying the device.',
+            params: [],
+        },
+        {
+            id: 'modbus/map-common',
+            name: 'Common Map Read',
+            desc: 'Read the broader common Modbus address ranges without modifying the device.',
             params: [],
         },
     ],
+    // Phoenix WebVisit is read-only in the web application. Password
+    // retrieval, control, and write endpoints are intentionally absent.
+    phoenix: [],
     beckhoff: [
         {
             id: 'beckhoff/reboot',
@@ -87,53 +96,10 @@ const EXPLOIT_CATALOG = {
         },
     ],
     siemens: [],
-    omron: [
-        {
-            id: 'omron/info',
-            name: 'Get Device Info (FINS)',
-            desc: 'Read controller model and version via FINS command 05 01 (Controller Data Read).',
-            params: [],
-        },
-        {
-            id: 'omron/cpu_status',
-            name: 'CPU Status',
-            desc: 'Read current CPU operating mode (Stop / Run / Monitor / Program) via FINS command 06 01.',
-            params: [],
-        },
-        {
-            id: 'omron/cpu_run',
-            name: 'CPU Run (Monitor mode)',
-            desc: 'Set CPU to Monitor mode via FINS command 04 01. Equivalent to pressing RUN on the keyswitch.',
-            params: [],
-            destructive: true,
-        },
-        {
-            id: 'omron/cpu_stop',
-            name: 'CPU Stop',
-            desc: 'Set CPU to Stop mode via FINS command 04 01. Halts program execution.',
-            params: [],
-            destructive: true,
-        },
-        {
-            id: 'omron/read_dm',
-            name: 'Read DM Words',
-            desc: 'Read 16-bit words from the DM (Data Memory) area via FINS.',
-            params: [
-                { name: 'username', label: 'Start Address (default 0)' },
-                { name: 'password', label: 'Count (default 10, max 100)' },
-            ],
-        },
-        {
-            id: 'omron/write_dm',
-            name: 'Write DM Words',
-            desc: 'Write 16-bit words to DM area via FINS. Username = start address, Password = space-separated values.',
-            params: [
-                { name: 'username', label: 'Start Address' },
-                { name: 'password', label: 'Values (space-separated, e.g. 100 200 300)' },
-            ],
-            destructive: true,
-        },
-    ],
+    // Omron FINS is discovery and tag-read only in the web interface. Live DM
+    // values are available through the Tags tab; legacy action cards (including
+    // CPU mode and DM writes) are intentionally not exposed.
+    omron: [],
     mitsubishi: [
         {
             id: 'mitsubishi/info',
@@ -186,7 +152,7 @@ const EXPLOIT_CATALOG = {
         {
             id: 'rockwell/identity',
             name: 'Get Device Identity',
-            desc: 'Read vendor, product name, revision, and serial number via EtherNet/IP List Identity (port 44818).',
+            desc: 'Read vendor, product name, revision, and serial number via EtherNet/IP List Identity (the saved device port, default 44818).',
             params: [],
         },
         {
@@ -249,7 +215,13 @@ function scadaApp() {
         interfaces: [],
         selectedIface: '',
         scanVendor: 'all',
+        protocols: [],
         scanTimeout: 5,
+        scanTarget: '',
+        scanPort: '',
+        scanWebVisitPort: '',
+        scanEwonWebPort: '',
+        scanSnmpCommunity: '',
         scanning: false,
         scanResults: [],
         probeIp: '',
@@ -293,18 +265,67 @@ function scadaApp() {
 
         // ── Lifecycle ──────────────────────────────────────────────────────
         async init() {
-            await Promise.all([this.loadDevices(), this.loadInterfaces()]);
+            await Promise.all([this.loadDevices(), this.loadInterfaces(), this.loadProtocols()]);
             this.wsConnect();
+        },
+
+        apiHeaders(headers = {}) {
+            return { ...headers, 'X-API-Key': this.apiKey };
+        },
+
+        async apiJson(url, options = {}) {
+            const response = await fetch(url, {
+                ...options,
+                headers: this.apiHeaders(options.headers || {}),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || data.success === false) {
+                throw new Error(data.error || `Request failed (${response.status})`);
+            }
+            return data;
+        },
+
+        async apiRequest(url, options = {}) {
+            const response = await fetch(url, {
+                ...options,
+                headers: this.apiHeaders(options.headers || {}),
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.error || `Request failed (${response.status})`);
+            }
+            return response;
+        },
+
+        authQuery(params = {}) {
+            const query = new URLSearchParams({ ...params, key: this.apiKey });
+            return `?${query.toString()}`;
+        },
+
+        isValidIpv4(value) {
+            const parts = value.trim().split('.');
+            return parts.length === 4 && parts.every(part => /^(0|[1-9]\d{0,2})$/.test(part)
+                && Number(part) >= 0 && Number(part) <= 255);
+        },
+
+        isValidIpv4Cidr(value) {
+            const [ip, prefix, ...extra] = value.trim().split('/');
+            return extra.length === 0 && this.isValidIpv4(ip)
+                && /^(?:[0-9]|[12][0-9]|3[0-2])$/.test(prefix || '');
+        },
+
+        isValidPort(value) {
+            return /^(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$/.test(value.trim());
         },
 
         // ── Devices ────────────────────────────────────────────────────────
         async loadDevices() {
             try {
-                const r = await fetch('/api/devices');
-                const data = await r.json();
+                const data = await this.apiJson('/api/devices');
                 this.devices = data.devices || [];
-            } catch {
+            } catch (e) {
                 this.devices = [];
+                this.showToast(`Could not load devices: ${e.message}`, 'error');
             }
         },
 
@@ -314,7 +335,7 @@ function scadaApp() {
                 this.eventsWs.close();
             }
             const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-            const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
+            const ws = new WebSocket(`${proto}://${location.host}/ws/events${this.authQuery()}`);
             this.eventsWs = ws;
 
             ws.onmessage = (ev) => {
@@ -337,19 +358,22 @@ function scadaApp() {
         },
 
         async addDevice(dev) {
-            await fetch('/api/devices', {
+            await this.apiJson('/api/devices', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                 body: JSON.stringify({ ip: dev.ip, vendor: dev.vendor, fields: dev }),
             });
             await this.loadDevices();
         },
 
         async exportDevices() {
-            const r = await fetch('/api/export', {
-                headers: { 'X-API-Key': this.apiKey },
-            });
-            if (!r.ok) { alert('Export failed: ' + r.status); return; }
+            let r;
+            try {
+                r = await this.apiRequest('/api/export');
+            } catch (e) {
+                this.showToast(`Export failed: ${e.message}`, 'error');
+                return;
+            }
             const blob = await r.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -360,7 +384,12 @@ function scadaApp() {
         },
 
         async removeDevice(ip) {
-            await fetch(`/api/devices/${ip}`, { method: 'DELETE' });
+            try {
+                await this.apiJson(`/api/devices/${ip}`, { method: 'DELETE' });
+            } catch (e) {
+                this.showToast(`Could not remove ${ip}: ${e.message}`, 'error');
+                return;
+            }
             if (this.selectedDevice?.ip === ip) {
                 this.selectedDevice = null;
                 this.tags = {};
@@ -392,35 +421,119 @@ function scadaApp() {
             return `badge-${vendor || 'unknown'}`;
         },
 
+        scanResultDetails(dev) {
+            return [
+                dev.protocol,
+                dev.port ? `TCP ${dev.port}` : '',
+                dev.identity_status === 'confirmed' ? 'confirmed Schneider identity' : '',
+                dev.identity_status === 'unverified' ? 'unverified Schneider-compatible device' : '',
+                dev.unit_id !== undefined ? `unit ${dev.unit_id}` : '',
+                dev.scan_scope ? `scope ${dev.scan_scope}` : '',
+                dev.product_name || dev.name || dev.plc_type || '',
+            ].filter(Boolean).join(' · ');
+        },
+
+        scanResultVendor(dev) {
+            if (dev.vendor === 'schneider' && dev.identity_status === 'unverified') {
+                return 'Schneider-compatible';
+            }
+            return dev.vendor || 'unknown';
+        },
+
         // ── Interfaces ─────────────────────────────────────────────────────
         async loadInterfaces() {
             try {
-                const r = await fetch('/api/interfaces');
-                const data = await r.json();
+                const data = await this.apiJson('/api/interfaces');
                 this.interfaces = data.interfaces || [];
-                if (this.interfaces.length > 0) {
+                if (this.interfaces.length > 0
+                    && !this.interfaces.some(iface => iface.ip === this.selectedIface)) {
                     this.selectedIface = this.interfaces[0].ip;
                 }
-            } catch {
+            } catch (e) {
                 this.interfaces = [];
+                this.selectedIface = '';
+                this.showToast(`Could not load interfaces: ${e.message}`, 'error');
             }
+        },
+
+        async loadProtocols() {
+            try {
+                const data = await this.apiJson('/api/protocols');
+                this.protocols = data.protocols || [];
+            } catch (e) {
+                this.protocols = [];
+                this.showToast(`Could not load core protocol catalog: ${e.message}`, 'error');
+            }
+        },
+
+        scanProtocolOptions() {
+            return [
+                {
+                    slug: 'all',
+                    label: 'All broadcast discovery',
+                    transport: 'Broadcast protocols; add a CIDR for all core probes',
+                },
+                ...this.protocols,
+            ];
+        },
+
+        scanPortOverrideSupported() {
+            return ['bacnet', 'dnp3', 'modbus', 'schneider', 'modicon', 'siemens', 's7', 'mitsubishi', 'beckhoff', 'ads', 'enip', 'rockwell', 'omron', 'fins', 'phoenix', 'ewon', 'iec104', 'snmp', 'mqtt', 'opcua'].includes(this.scanVendor);
         },
 
         // ── Scanner tab ────────────────────────────────────────────────────
         async scanNetwork() {
+            if (!this.selectedIface) {
+                this.showToast('Select an IPv4 interface before scanning.', 'error');
+                return;
+            }
+            if (this.scanTarget.trim() && !this.isValidIpv4Cidr(this.scanTarget)) {
+                this.showToast('Target subnet must be an IPv4 CIDR, for example 10.2.10.0/24.', 'error');
+                return;
+            }
+            if (this.scanPort.trim() && !this.isValidPort(this.scanPort)) {
+                this.showToast('Port override must be an integer from 1 to 65535.', 'error');
+                return;
+            }
+            if (this.scanPort.trim() && !this.scanPortOverrideSupported()) {
+                this.showToast('Port override is currently available for the selected protocol scanner.', 'error');
+                return;
+            }
+            if (this.scanWebVisitPort.trim() && !this.isValidPort(this.scanWebVisitPort)) {
+                this.showToast('WebVisit HTTP port must be an integer from 1 to 65535.', 'error');
+                return;
+            }
+            if (this.scanEwonWebPort.trim() && !this.isValidPort(this.scanEwonWebPort)) {
+                this.showToast('eWON Web/API port must be an integer from 1 to 65535.', 'error');
+                return;
+            }
+            if (this.scanVendor === 'snmp' && !this.scanSnmpCommunity.trim()) {
+                this.showToast('Enter the SNMP community to use for this read-only scan.', 'error');
+                return;
+            }
             this.scanning = true;
             this.scanResults = [];
             try {
-                const r = await fetch('/api/scan', {
+                const data = await this.apiJson('/api/scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({
                         vendor: this.scanVendor,
                         timeout: this.scanTimeout,
                         iface_ip: this.selectedIface,
+                        target_cidr: this.scanTarget,
+                        target_port: this.scanPort.trim() ? Number(this.scanPort) : null,
+                        webvisit_port: this.scanVendor === 'phoenix' && this.scanWebVisitPort.trim()
+                            ? Number(this.scanWebVisitPort)
+                            : null,
+                        web_port: this.scanVendor === 'ewon' && this.scanEwonWebPort.trim()
+                            ? Number(this.scanEwonWebPort)
+                            : null,
+                        snmp_community: this.scanVendor === 'snmp'
+                            ? this.scanSnmpCommunity.trim()
+                            : null,
                     }),
                 });
-                const data = await r.json();
                 if (data.error) {
                     this.showToast(data.error, 'error');
                 } else {
@@ -436,14 +549,17 @@ function scadaApp() {
 
         async probeIpTarget() {
             if (!this.probeIp.trim()) return;
+            if (!this.isValidIpv4(this.probeIp)) {
+                this.showToast('Probe IP must be a valid IPv4 address, for example 10.2.10.25.', 'error');
+                return;
+            }
             this.probing = true;
             try {
-                const r = await fetch('/api/scan/ip', {
+                const data = await this.apiJson('/api/scan/ip', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({ ip: this.probeIp.trim(), timeout: this.scanTimeout }),
                 });
-                const data = await r.json();
                 if (data.error) {
                     this.showToast(data.error, 'error');
                 } else {
@@ -468,7 +584,7 @@ function scadaApp() {
             this.portScanning = true;
             this.portScanResults = [];
             try {
-                const r = await fetch('/api/run/portscan', {
+                const data = await this.apiJson('/api/run/portscan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -477,7 +593,6 @@ function scadaApp() {
                         extra_ports: [],
                     }),
                 });
-                const data = await r.json();
                 this.portScanResults = data.ports || [];
                 this.showToast(`Found ${this.portScanResults.length} open port(s).`, 'success');
             } catch (e) {
@@ -493,7 +608,7 @@ function scadaApp() {
             this.tagsLoading = true;
             this.tagsError = '';
             try {
-                const r = await fetch('/api/device/tags', {
+                const data = await this.apiJson('/api/device/tags', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({
@@ -502,7 +617,6 @@ function scadaApp() {
                         cache: false,
                     }),
                 });
-                const data = await r.json();
                 if (data.error) {
                     this.tagsError = data.error;
                 } else {
@@ -520,7 +634,7 @@ function scadaApp() {
             this.tagsLoading = true;
             this.tagsError = '';
             try {
-                const r = await fetch('/api/device/tags', {
+                const data = await this.apiJson('/api/device/tags', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({
@@ -529,7 +643,6 @@ function scadaApp() {
                         cache: true,
                     }),
                 });
-                const data = await r.json();
                 if (data.error) {
                     this.tagsError = data.error;
                 } else {
@@ -542,7 +655,15 @@ function scadaApp() {
             }
         },
 
+        tagsReadOnly() {
+            return ['modbus', 'schneider', 'modicon', 'siemens', 's7', 'mitsubishi', 'slmp', 'beckhoff', 'ads', 'rockwell', 'enip', 'ethernet_ip', 'omron', 'fins', 'phoenix', 'webvisit', 'ewon', 'iec104', 'snmp', 'mqtt', 'bacnet', 'dnp3', 'opcua', 'opc-ua'].includes(this.selectedDevice?.vendor);
+        },
+
         startEdit(tag, value) {
+            if (this.tagsReadOnly()) {
+                this.showToast('These protocol tags are read-only in the web interface.', 'error');
+                return;
+            }
             this.editingTag = tag;
             this.editValue = String(value);
         },
@@ -557,6 +678,11 @@ function scadaApp() {
         // the backend never has to guess how to encode the text.
         async commitEdit(tagKey, field) {
             if (!this.selectedDevice) return;
+            if (this.tagsReadOnly()) {
+                this.showToast('These protocol tags are read-only in the web interface.', 'error');
+                this.cancelEdit();
+                return;
+            }
             const entry = this.tags[tagKey];
             const target = field ? `${tagKey}.${field.path}` : tagKey;
             const typeCode = field
@@ -566,7 +692,7 @@ function scadaApp() {
 
             this.writingTag = true;
             try {
-                const r = await fetch('/api/device/write', {
+                const data = await this.apiJson('/api/device/write', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({
@@ -577,7 +703,6 @@ function scadaApp() {
                         type_code: typeCode ?? null,
                     }),
                 });
-                const data = await r.json();
                 if (data.success) {
                     this.applyWrittenValue(tagKey, field, newValue);
                     this.showToast(`Write OK: ${target} = ${newValue}`, 'success');
@@ -616,15 +741,20 @@ function scadaApp() {
                 if (v === null || typeof v !== 'object') {
                     return {
                         key: k, value: String(v), fields: null,
-                        type: '', writable: true, writeType: null,
+                        type: '', writable: !this.tagsReadOnly(), writeType: null,
                     };
                 }
                 return {
                     key: k,
                     value: v._display ?? JSON.stringify(v),
-                    fields: Array.isArray(v._fields) ? v._fields : null,
+                    fields: Array.isArray(v._fields)
+                        ? v._fields.map(field => ({
+                            ...field,
+                            writable: !this.tagsReadOnly() && field.writable,
+                        }))
+                        : null,
                     type: v._type ?? '',
-                    writable: v._writable !== false,
+                    writable: !this.tagsReadOnly() && v._writable !== false,
                     writeType: v._write_type ?? null,
                 };
             });
@@ -644,7 +774,10 @@ function scadaApp() {
             const vendor = this.selectedDevice.vendor;
             const ip = this.selectedDevice.ip;
             const proto = `${location.protocol === 'https:' ? 'wss' : 'ws'}:`;
-            this.ws = new WebSocket(`${proto}//${location.host}/ws/monitor/${ip}?vendor=${vendor}`);
+            this.ws = new WebSocket(
+                `${proto}//${location.host}/ws/monitor/${encodeURIComponent(ip)}`
+                + this.authQuery({ vendor })
+            );
             this.monitorRunning = true;
             this.monitorError = '';
             this.monitorEmptyStreak = 0;
@@ -719,6 +852,7 @@ function scadaApp() {
         // ── Exploits tab ───────────────────────────────────────────────────
         availableExploits() {
             const vendor = this.selectedDevice?.vendor || '';
+            if (this.tagsReadOnly()) return [];
             const vendorExploits = EXPLOIT_CATALOG[vendor] || [];
             const commonExploits = EXPLOIT_CATALOG['common'] || [];
             return [...vendorExploits, ...commonExploits];
@@ -742,7 +876,7 @@ function scadaApp() {
             this.exploitRunning[expl.id] = true;
             this.exploitResults[expl.id] = '';
             try {
-                const r = await fetch(`/api/exploit/${expl.id}`, {
+                const data = await this.apiJson(`/api/exploit/${expl.id}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
                     body: JSON.stringify({
@@ -751,7 +885,6 @@ function scadaApp() {
                         password: params.password || '',
                     }),
                 });
-                const data = await r.json();
                 if (data.success) {
                     this.exploitResults[expl.id] = data.output || '(no output)';
                     this.showToast(`${expl.name}: success`, 'success');

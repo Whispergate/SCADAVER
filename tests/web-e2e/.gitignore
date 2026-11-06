@@ -1,0 +1,5 @@
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+.web-e2e-devices.db

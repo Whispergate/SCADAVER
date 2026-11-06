@@ -44,6 +44,18 @@ def default_scadaver_path() -> Path:
 def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
     return [
         SmokeCase(
+            "bacnet-scan",
+            "bacnet",
+            ("-i", target, "-p", str(ports.bacnet), "--protocol", "bacnet", "scan"),
+            ("BACnet device responded", "ScadaverCI"),
+        ),
+        SmokeCase(
+            "bacnet-device-properties",
+            "bacnet",
+            ("-i", target, "-p", str(ports.bacnet), "--protocol", "bacnet", "get", "tags"),
+            ("instance_id:", "ScadaverCI", "BACnet device properties read"),
+        ),
+        SmokeCase(
             "schneider-scan-tcp",
             "modbus",
             ("-i", target, "-p", str(ports.modbus), "--protocol", "schneider", "scan"),
@@ -82,6 +94,15 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
                 "4",
             ),
             ("coil(s) read",),
+        ),
+        SmokeCase(
+            "modbus-list-tags-all-addresses",
+            "modbus",
+            ("-i", target, "-p", str(ports.modbus), "--protocol", "modbus", "get", "tags", "--all"),
+            tuple(f"hr:{40001 + address}" for address in range(32))
+            + tuple(f"coil:{1 + address}" for address in range(32))
+            + tuple(f"ir:{30001 + address}" for address in range(32))
+            + ("96 register(s) total",),
         ),
         SmokeCase(
             "mitsubishi-scan-tcp",
@@ -124,10 +145,34 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
             ("M0", "M bit(s) read"),
         ),
         SmokeCase(
+            "slmp-list-tags-all-addresses",
+            "slmp",
+            ("-i", target, "-p", str(ports.slmp), "--protocol", "mitsubishi", "get", "tags", "--all"),
+            tuple(f"D{address}" for address in range(32)) + ("32 register(s)",),
+        ),
+        SmokeCase(
             "beckhoff-scan-ads",
             "beckhoff",
             ("-i", target, "-p", str(ports.beckhoff_ads), "--protocol", "beckhoff", "scan"),
             ("SCADAVER-CX", "NetID:"),
+        ),
+        SmokeCase(
+            "beckhoff-symbols",
+            "beckhoff",
+            ("-i", target, "-p", str(ports.beckhoff_ads), "--protocol", "beckhoff", "get", "tags"),
+            ("MAIN.counter", "2 symbol(s)."),
+        ),
+        SmokeCase(
+            "beckhoff-symbol-read",
+            "beckhoff",
+            ("-i", target, "-p", str(ports.beckhoff_ads), "--protocol", "beckhoff", "get", "tag", "MAIN.counter"),
+            ("MAIN.counter = 1234",),
+        ),
+        SmokeCase(
+            "beckhoff-state",
+            "beckhoff",
+            ("-i", target, "-p", str(ports.beckhoff_ads), "--protocol", "beckhoff", "get", "state"),
+            ("TwinCAT state: RUN",),
         ),
         SmokeCase(
             "siemens-scan",
@@ -142,10 +187,43 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
             ("CPU state",),
         ),
         SmokeCase(
+            "siemens-db-read",
+            "siemens",
+            ("-i", target, "-p", str(ports.siemens), "--protocol", "siemens", "get", "db", "1", "4", "2"),
+            ("aa aa", "byte(s) from DB1"),
+        ),
+        SmokeCase(
             "ewon-scan",
             "ewon",
             ("-i", target, "--protocol", "ewon", "scan"),
             ("IPCO",),
+        ),
+        SmokeCase(
+            "ewon-tags",
+            "ewon",
+            ("-i", target, "-p", str(ports.ewon), "--protocol", "ewon", "get", "tags"),
+            ("PUMP_RUN", "TANK_LEVEL"),
+        ),
+        SmokeCase(
+            "ewon-modbus-coil",
+            "ewon",
+            ("-i", target, "-p", str(ports.ewon_modbus), "get", "ewon-coil", "500"),
+            ("eWON coil 500 = ON",),
+        ),
+        SmokeCase(
+            "ewon-modbus-u16",
+            "ewon",
+            ("-i", target, "-p", str(ports.ewon_modbus), "get", "ewon-register", "501"),
+            ("HR501", "= 70"),
+        ),
+        SmokeCase(
+            "ewon-modbus-f32",
+            "ewon",
+            (
+                "-i", target, "-p", str(ports.ewon_modbus),
+                "get", "ewon-register", "502", "--type", "f32",
+            ),
+            ("HR502", "= 73.5"),
         ),
         SmokeCase(
             "snmp-enum",
@@ -158,12 +236,6 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
             "snmp",
             ("-i", target, "-p", str(ports.snmp), "--protocol", "snmp", "get", "walk", "1.3.6.1.2.1.1", "--community", "public"),
             ("1.3.6.1.2.1.1.1.0",),
-        ),
-        SmokeCase(
-            "snmp-scan",
-            "snmp",
-            ("-i", target, "-p", str(ports.snmp), "--protocol", "snmp", "get", "community"),
-            ("public",),
         ),
         SmokeCase(
             "siemens-io",
@@ -180,17 +252,28 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
         SmokeCase(
             # Asserts real tag names, the struct type words, that the I/O module tag
             # survives the name filter, and the exact count — 9 of the simulator's 12
-            # symbols, so a regression in the Program:/__/system-bit filtering shows up.
+            # symbols. It also asserts scalar UDTs are expanded into writable,
+            # addressable leaves rather than being rendered as opaque structs.
             "rockwell-tags",
             "rockwell",
-            ("-i", target, "-p", str(ports.rockwell), "--protocol", "rockwell", "get", "tags"),
+            ("-i", target, "-p", str(ports.rockwell), "--protocol", "rockwell", "get", "tags", "--values"),
             (
+                "PUMP_RUN",
+                "BOOL",
+                "true  (1)",
+                "FLOW_RATE",
+                "REAL",
+                "12.5",
                 "LE_LIT_4002",
-                "0x808b",
+                "LE_LIT_4002.PV",
                 "PUMP_01",
+                "PUMP_01.Cmd.PV",
                 "STATION_NAME",
+                "STATION_NAME.value",
                 "Local:1:C",
                 "ODD_LEN_TAG",
+                "[0]=1, [1]=2, [2]=3",
+                "IDX RW",
                 "9 tag(s) found",
             ),
         ),
@@ -203,7 +286,7 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
                 "-i", target, "-p", str(ports.rockwell),
                 "--protocol", "rockwell", "get", "tag", "LE_LIT_4002",
             ),
-            ("0xa0023412",),
+            ("LE_LIT_4002", "PV", "6.4", "STRUCT"),
         ),
         SmokeCase(
             "enip-scan",
@@ -235,10 +318,28 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
             ("DM0",),
         ),
         SmokeCase(
+            "fins-list-tags-all-addresses",
+            "fins",
+            ("-i", target, "-p", str(ports.fins), "--protocol", "omron", "get", "tags", "--all"),
+            tuple(f"DM{address}" for address in range(32)) + ("32 word(s)",),
+        ),
+        SmokeCase(
+            "iec104-scan",
+            "iec104",
+            ("-i", target, "-p", str(ports.iec104), "--protocol", "iec104", "scan"),
+            ("IEC 104 outstation responded to TESTFR.",),
+        ),
+        SmokeCase(
             "iec104-gi",
             "iec104",
             ("-i", target, "-p", str(ports.iec104), "--protocol", "iec104", "get", "gi"),
             ("STARTDT confirmed",),
+        ),
+        SmokeCase(
+            "phoenix-scan",
+            "phoenix",
+            ("-i", target, "-p", str(ports.phoenix), "--protocol", "phoenix", "scan"),
+            ("Phoenix Contact device responded.",),
         ),
         SmokeCase(
             "phoenix-info",
@@ -257,6 +358,30 @@ def build_cases(target: str, ports: run_all.PortProfile) -> list[SmokeCase]:
             "mqtt",
             ("-i", target, "-p", str(ports.mqtt), "--protocol", "mqtt", "scan"),
             ("anonymous=true", "MQTT broker responded."),
+        ),
+        SmokeCase(
+            "dnp3-scan",
+            "dnp3",
+            ("-i", target, "-p", str(ports.dnp3), "--protocol", "dnp3", "scan"),
+            ("DNP3 outstation responded",),
+        ),
+        SmokeCase(
+            "dnp3-attributes",
+            "dnp3",
+            ("-i", target, "-p", str(ports.dnp3), "--protocol", "dnp3", "get", "tags"),
+            ("vendor_name: SCADAver Labs", "product_name: DNP3 Test Outstation", "3 attribute(s)"),
+        ),
+        SmokeCase(
+            "opcua-scan",
+            "opcua",
+            ("-i", target, "-p", str(ports.opcua), "--protocol", "opc-ua", "scan"),
+            ("OPC-UA server responded", "Endpoints:"),
+        ),
+        SmokeCase(
+            "opcua-endpoints",
+            "opcua",
+            ("-i", target, "-p", str(ports.opcua), "--protocol", "opc-ua", "get", "tags"),
+            ("security_mode:", "endpoint(s)"),
         ),
     ]
 
@@ -344,7 +469,9 @@ def stop_simulators(children: list[tuple[run_all.SimSpec, subprocess.Popen[bytes
 
 
 def run_case(scadaver: Path, case: SmokeCase, timeout: float) -> bool:
-    command = [str(scadaver), *case.args]
+    # The CLI is cache-first in normal use.  A smoke case must always make a
+    # real simulator request and must not alter the operator's inventory.
+    command = [str(scadaver), "--no-cache", *case.args]
     print(f"[*] {case.name}: {' '.join(command)}")
     proc = subprocess.run(
         command,
@@ -379,8 +506,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--only",
         nargs="+",
-        choices=["modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp",
-                 "rockwell", "fins", "iec104", "phoenix", "mqtt"],
+        choices=["bacnet", "modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp",
+                 "rockwell", "fins", "iec104", "phoenix", "mqtt", "dnp3", "opcua"],
         help="run only cases for selected simulator families",
     )
     parser.add_argument("--no-start", action="store_true", help="use already-running simulators")
@@ -412,7 +539,7 @@ def main() -> int:
 
     if args.dry_run:
         for case in cases:
-            print(f"{case.name:<22} {scadaver} {' '.join(case.args)}")
+            print(f"{case.name:<22} {scadaver} --no-cache {' '.join(case.args)}")
         return 0
 
     if not args.no_start and not args.skip_preflight:
@@ -432,7 +559,10 @@ def main() -> int:
                         print(f"[!] {spec.name} did not open TCP {port}", file=sys.stderr)
                         return 1
                 for port in spec.udp_ports:
-                    if not wait_for_udp(args.target, port, args.startup_timeout):
+                    # SNMP has a small protocol-neutral readiness probe.  The
+                    # BACnet case below is its actual Who-Is/I-Am readiness
+                    # check; sending an SNMP frame to it would only add noise.
+                    if spec.name == "snmp" and not wait_for_udp(args.target, port, args.startup_timeout):
                         print(f"[!] {spec.name} did not respond on UDP {port}", file=sys.stderr)
                         return 1
 

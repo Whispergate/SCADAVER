@@ -2,6 +2,10 @@
 
 Supports pymodbus 2.x, 3.x, and 3.5+ (new ModbusTcpServer API).
 """
+# Accuracy audit (2026-08): CI-only Modbus TCP protocol fixture, not a PLC
+# emulator. Source: Modbus Application Protocol V1.1b3
+# (https://www.modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf).
+# Surface: deterministic coils, inputs, holding and input registers for CI reads.
 import asyncio
 import sys
 

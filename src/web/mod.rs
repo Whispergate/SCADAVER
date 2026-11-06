@@ -25,18 +25,20 @@ async fn run(host: &str, port: u16, api_key: Option<String>) -> Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid listen address '{host}:{port}': {e}"))?;
 
-    let token = api_key.unwrap_or_else(generate_token);
+    let token = test_api_key().or(api_key).unwrap_or_else(generate_token);
     let app = routes::build_router(token.clone());
     let url = format!("http://{addr}");
     println!("[*] SCADAver web interface - {url}/?key={token}");
     println!("[*] API key: {token}  (required for write/exploit endpoints)");
     println!("[*] Press Ctrl-C to stop.");
 
-    let url_with_key = format!("{url}/?key={token}");
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(600));
-        open_browser(&url_with_key);
-    });
+    if !no_browser_requested() {
+        let url_with_key = format!("{url}/?key={token}");
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            open_browser(&url_with_key);
+        });
+    }
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -45,6 +47,23 @@ async fn run(host: &str, port: u16, api_key: Option<String>) -> Result<()> {
     axum::serve(listener, app)
         .await
         .map_err(|e| anyhow::anyhow!("Server error: {e}"))
+}
+
+/// Browser automation uses this to prevent an interactive window from opening.
+/// It is also useful for a deliberately headless local deployment.
+fn no_browser_requested() -> bool {
+    std::env::var("SCADAVER_NO_BROWSER").as_deref() == Ok("1")
+}
+
+/// The deterministic API key is deliberately limited to the loopback-only test
+/// harness. Regular starts still use configured keys or a random session token.
+fn test_api_key() -> Option<String> {
+    if std::env::var("SCADAVER_TEST_LOOPBACK").as_deref() != Ok("1") {
+        return None;
+    }
+    std::env::var("SCADAVER_TEST_API_KEY")
+        .ok()
+        .filter(|key| !key.is_empty())
 }
 
 fn open_browser(url: &str) {

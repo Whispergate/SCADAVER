@@ -3,6 +3,11 @@
 Provides UDP discovery on 48899 and ADS/TCP responses for state, info,
 symbol upload, scalar reads, and writes. This is for local SCADAver smoke tests.
 """
+# Accuracy audit (2026-08): source-traced ADS/AMS test fixture, not a TwinCAT
+# runtime or hardware emulator. Sources: Beckhoff ADS protocol documentation
+# (https://infosys.beckhoff.com/content/1033/tcadscommon/12440276875.html) and
+# ADS device state documentation (https://infosys.beckhoff.com/content/1033/tcadscommon/12440280843.html).
+# Surface: discovery, state, symbol upload, and selected scalar read/write paths.
 
 import argparse
 import os
@@ -34,8 +39,11 @@ SYMBOLS = [
     },
 ]
 
-ADSIGRP_SYM_UPLOADINFO = 0xF00F
-ADSIGRP_SYM_UPLOAD = 0xF00B
+# TcAdsCommon.h: the groups used by Casket's current ADS implementation.
+ADSIGRP_SYM_UPLOADINFO = 0xF00C
+ADSIGRP_SYM_UPLOAD = 0xF011
+_ads_state = 5  # ADS_STATE_RUN
+_state_lock = threading.Lock()
 
 
 def discovery_frame() -> bytes:
@@ -108,14 +116,14 @@ def split_ams_request(request: bytes) -> bytes:
 
 def ams_response(request: bytes, ads_data: bytes, error: int = 0) -> bytes:
     body = split_ams_request(request)
-    if len(body) < 36:
+    if len(body) < 32:
         return b""
     dst_netid = body[8:14]
     dst_port = body[14:16]
     src_netid = body[0:6]
     src_port = body[6:8]
     cmd = body[16:18]
-    invoke = body[32:36]
+    invoke = body[28:32]
 
     response_body = bytearray()
     response_body.extend(dst_netid)
@@ -133,17 +141,28 @@ def ams_response(request: bytes, ads_data: bytes, error: int = 0) -> bytes:
 
 
 def handle_ads(request: bytes) -> bytes:
+    global _ads_state
     body = split_ams_request(request)
-    if len(body) < 36:
+    # The AMS header is 32 bytes. ReadState has no ADS payload, so requiring
+    # 36 bytes incorrectly discards that valid read-only request.
+    if len(body) < 32:
         return b""
 
     cmd = struct.unpack_from("<H", body, 16)[0]
-    ads_data = body[36:]
+    ads_data = body[32:]
 
     if cmd == 4:
-        return ams_response(request, b"\x00\x00\x00\x00" + struct.pack("<H", 5) + b"\x00\x00")
+        with _state_lock:
+            ads_state = _ads_state
+        return ams_response(
+            request,
+            b"\x00\x00\x00\x00" + struct.pack("<H", ads_state) + b"\x00\x00",
+        )
 
     if cmd == 5:
+        if len(ads_data) >= 2:
+            with _state_lock:
+                _ads_state = struct.unpack_from("<H", ads_data, 0)[0]
         return ams_response(request, b"\x00\x00\x00\x00")
 
     if cmd == 3 and len(ads_data) >= 12:

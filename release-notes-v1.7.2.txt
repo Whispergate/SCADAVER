@@ -1,0 +1,30 @@
+## What's new since v1.5.4
+
+### Modbus TCP detection (all interfaces)
+- CIDR sweep now probes port 502 directly after autodetect — Modbus TCP devices were silently dropped before
+- TUI single-IP scan falls back to TCP 502 + FC3 when probe_all finds nothing
+- TUI broadcast scan has a dedicated Modbus TCP /24 sweep menu entry (32-host batches)
+- Web broadcast scan routes vendor=modbus to a TCP /24 sweep instead of Schneider UDP
+
+### CLI/TUI/web parity
+- get tags --protocol modbus/bacnet/dnp3/opcua now works in CLI (previously bailed)
+- get tags --protocol modbus reads FC1 coils, FC3 holding regs, FC4 input regs
+- get tag --protocol iec104/ewon/mqtt/modbus all implemented in CLI (were unimplemented)
+- get discrete-input [start] [count] new CLI subcommand for Modbus FC2
+- Web POST /api/exploit/modbus/map-quick and modbus/map-common added
+- Web POST /api/device/tags with vendor=s7 now works (s7 alias for siemens)
+
+### Credentials support (v1.7.0)
+- get tags/tag --username/--password for Siemens S7, eWON, MQTT
+- Web /api/device/tags and /api/device/write accept username/password fields
+
+### Web and exploit additions (v1.6.0)
+- BACnet, DNP3, OPC-UA exploit routes reachable via POST /api/exploit/:id
+- GET /api/info works for EnIP, Schneider, Mitsubishi, SNMP
+- TUI Phoenix list/read tags now populate the tag browser for [W] writes
+- Modbus write with no hr:/coil: prefix gives a clear format hint
+
+### Fixes
+- eWON tag lookup type mismatch fixed (Vec<(String,String)> not a HashMap)
+- All 16 Protocol variants handled in CLI get tags — no more unreachable bail
+- Modbus write format hint shown before generic fallback

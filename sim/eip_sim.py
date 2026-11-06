@@ -15,6 +15,13 @@ the Rust parser, so a passing run is independent evidence that the parser is cor
 Symbol enumeration and Template Read both chunk their replies and report CIP status 0x06
 (Partial Transfer) so the client's multi-packet paths are always exercised.
 """
+# Accuracy audit (2026-08): source-traced EtherNet/IP/CIP fixture, not a
+# ControlLogix emulator or an ODVA conformance implementation. ODVA's official
+# specification catalogue is subscription-controlled
+# (https://www.odva.org/subscriptions-services/specifications/); pycomm3
+# (https://github.com/ottowayi/pycomm3) is a public interoperability reference.
+# Surface: ListIdentity, RegisterSession, selected identity/symbol/template/tag
+# read-write services, and intentional partial transfers.
 import argparse
 import os
 import socketserver
@@ -374,17 +381,33 @@ def parse_symbolic_path(path):
 
 
 def resolve_member(dotted):
-    """Walk a dotted path to the owning struct value and the leaf template member.
+    """Walk a symbolic path to its owning value and scalar leaf, if any.
 
-    Returns (tag_name, byte_offset, member_tuple) or None. Only scalar leaves resolve;
-    this is what lets the simulator verify a member write landed at the right offset.
+    Returns ``(tag_name, byte_offset, member_tuple)``.  Root atomic array
+    elements (for example ``LEVEL_ARRAY[0]``) are scalar leaves too; supporting
+    them matters because Logix clients read an array sample through precisely
+    that symbolic path.
     """
     parts = dotted.split(".")
-    tag = parts[0]
+    root, _, root_idx = parts[0].partition("[")
+    if root_idx and not root_idx.endswith("]"):
+        return None
+    try:
+        root_index = int(root_idx.rstrip("]")) if root_idx else None
+    except ValueError:
+        return None
+    tag = root
     if tag not in SYMBOL_BY_NAME:
         return None
-    stype, _ = SYMBOL_BY_NAME[tag]
+    stype, root_value = SYMBOL_BY_NAME[tag]
     if len(parts) == 1:
+        if root_index is not None:
+            if ((stype >> 13) & 0x03) == 0 or stype & STRUCT:
+                return None
+            width = ATOMIC_WIDTHS.get(stype & 0xFF)
+            if width is None or root_index < 0 or (root_index + 1) * width > len(root_value):
+                return None
+            return (tag, root_index * width, (tag, 0, stype & 0x1FFF, 0))
         return (tag, 0, None)
     if not stype & STRUCT:
         return None

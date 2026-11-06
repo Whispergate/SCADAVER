@@ -19,6 +19,12 @@ class RunAllTests(unittest.TestCase):
         self.assertEqual(1102, profile.siemens)
         self.assertEqual(8080, profile.ewon)
 
+    def test_full_profile_enables_the_read_only_schneider_identity_fixture(self) -> None:
+        profile = run_all.PROFILES["high"]
+        spec = next(spec for spec in run_all.build_specs("127.0.0.1", profile) if spec.name == "modbus")
+        self.assertIn("--identity", spec.args)
+        self.assertIn("schneider", spec.args)
+
     def test_beckhoff_command_includes_tcp_and_udp_ports(self) -> None:
         profile = run_all.PROFILES["canonical"]
         spec = [
@@ -36,6 +42,7 @@ class RunAllTests(unittest.TestCase):
         names = {case.simulator for case in smoke.build_cases("127.0.0.1", run_all.PROFILES["high"])}
         self.assertEqual(
             {
+                "bacnet",
                 "modbus",
                 "slmp",
                 "beckhoff",
@@ -46,6 +53,9 @@ class RunAllTests(unittest.TestCase):
                 "fins",
                 "iec104",
                 "phoenix",
+                "mqtt",
+                "dnp3",
+                "opcua",
             },
             names,
         )

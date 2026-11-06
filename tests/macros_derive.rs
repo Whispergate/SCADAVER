@@ -50,9 +50,18 @@ fn into_device_info_maps_fields() {
     assert_eq!(info.fields["firmware"], "3.1.4");
     assert_eq!(info.fields["serial"], "SN-0042");
     assert_eq!(info.fields["hw_revision"], "rev-C");
-    assert!(!info.fields.contains_key("_state"),   "skipped field must be absent");
-    assert!(!info.fields.contains_key("revision"), "original name shadowed by rename must be absent");
-    assert!(!info.fields.contains_key("ip"),       "ip field must not appear in fields map");
+    assert!(
+        !info.fields.contains_key("_state"),
+        "skipped field must be absent"
+    );
+    assert!(
+        !info.fields.contains_key("revision"),
+        "original name shadowed by rename must be absent"
+    );
+    assert!(
+        !info.fields.contains_key("ip"),
+        "ip field must not appear in fields map"
+    );
 }
 
 #[test]
@@ -66,7 +75,10 @@ fn optional_field_absent_when_none() {
         revision: "rev-A".to_string(),
     };
     let info = d.into_device_info();
-    assert!(!info.fields.contains_key("serial"), "None optional must be absent from fields");
+    assert!(
+        !info.fields.contains_key("serial"),
+        "None optional must be absent from fields"
+    );
 }
 
 #[test]
@@ -87,10 +99,22 @@ fn mqtt_device_into_device_info_via_macro() {
     assert_eq!(info.vendor, "mqtt");
     assert_eq!(info.ip, "192.168.1.100");
     assert_eq!(info.fields["broker_info"], "mosquitto 2.0.18");
-    assert!(!info.fields.contains_key("_port"),      "skipped field must be absent");
-    assert!(!info.fields.contains_key("_anonymous"), "skipped field must be absent");
-    assert!(!info.fields.contains_key("_sparkplug"), "skipped field must be absent");
-    assert!(!info.fields.contains_key("ip"),         "ip field must not appear in fields map");
+    assert!(
+        !info.fields.contains_key("_port"),
+        "skipped field must be absent"
+    );
+    assert!(
+        !info.fields.contains_key("_anonymous"),
+        "skipped field must be absent"
+    );
+    assert!(
+        !info.fields.contains_key("_sparkplug"),
+        "skipped field must be absent"
+    );
+    assert!(
+        !info.fields.contains_key("ip"),
+        "ip field must not appear in fields map"
+    );
 }
 
 #[test]
@@ -103,5 +127,8 @@ fn mqtt_device_broker_info_none_absent_from_fields() {
         _sparkplug: false,
     };
     let info = dev.into_device_info();
-    assert!(!info.fields.contains_key("broker_info"), "None optional must be absent from fields");
+    assert!(
+        !info.fields.contains_key("broker_info"),
+        "None optional must be absent from fields"
+    );
 }

@@ -1,2 +1,5 @@
-// Library target stub — scadaver is now a binary-only tool.
-// All protocol implementations live in the `casket` crate.
+// scadaver library target — exposes the shared ops dispatch and domain types
+// for use by integration tests and future library consumers.
+
+pub mod ops;
+pub mod protocol;

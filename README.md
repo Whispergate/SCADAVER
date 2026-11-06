@@ -94,7 +94,7 @@ Use `scadaver --help` and `scadaver <command> --help` for the authoritative comm
 | EtherNet/IP and CIP | TCP/UDP 44818 | ListIdentity, controller identity, Logix tag and UDT enumeration | Typed and raw tag writes |
 | SLMP / MC Protocol 3E | TCP 5007, UDP 5561 | MELSEC discovery and D/M device reads | D word, M bit, and controller-state writes |
 | FINS | TCP/UDP 9600 | SYSMAC discovery, device information, CPU state, DM reads | DM writes and CPU-state changes |
-| eWON IPCONF and HTTP | UDP 1507, TCP 80 | IPCONF discovery and device metadata | Authorized credential-store validation |
+| eWON IPCONF, HTTP, and published Modbus tags | UDP 1507, TCP 80, 502 | IPCONF discovery, device metadata, and HTTP tag view | Published Modbus coil/register reads and writes when explicitly configured on the Flexy |
 | ProConOS and WebVisit | TCP 1962, 80/8080 | Controller identity and WebVisit tag enumeration | Tag writes and password-retrieval validation |
 | SNMPv1/v2c | UDP 161 | Community discovery, GET, GETNEXT, walk, system and topology data | Guarded SNMP SET |
 | IEC 60870-5-104 | TCP 2404 | TESTFR detection and General Interrogation | Single and double commands |
@@ -104,7 +104,7 @@ Use `scadaver --help` and `scadaver <command> --help` for the authoritative comm
 | OPC UA Binary | TCP 4840 | HEL/ACK, secure-channel setup, endpoint and security-mode discovery | Read-only endpoint assessment |
 | Generic HTTP(S) | TCP 80, 443, 8080 | OT port scanning and web endpoint checks | Default-credential and Shellshock validation |
 
-The all-protocol host and CIDR sweep includes BACnet, DNP3, and OPC UA. The explicit `--protocol` choices currently exposed by the CLI are `beckhoff`, `siemens`, `schneider`, `modbus`, `rockwell`, `mitsubishi`, `omron`, `phoenix`, `ewon`, `snmp`, `iec104`, `enip`, and `mqtt`.
+The all-protocol host and CIDR sweep includes BACnet, DNP3, and OPC UA. The explicit `--protocol` choices exposed by the CLI are `bacnet`, `beckhoff`, `dnp3`, `siemens`, `schneider`, `modbus`, `rockwell`, `mitsubishi`, `omron`, `phoenix`, `ewon`, `snmp`, `iec104`, `enip`, `mqtt`, and `opc-ua` (also accepted as `opcua`).
 
 ### Scan Fingerprint Hardening
 
@@ -132,6 +132,9 @@ scadaver [OPTIONS] [COMMAND]
 | `--timeout <SECONDS>` | `-t` | config or `5` | Override the network timeout |
 | `--protocol <PROTOCOL>` | | autodetect | Select a supported targeted or broadcast protocol |
 | `--stealth` | `-z` | config or off | Shuffle probes and add jitter |
+| `--live` | | off | Query the device now and update its protocol-specific inventory/cache |
+| `--no-cache` | | off | Query live without reading or changing the local inventory |
+| `--confirm-stale` | | off | Permit a write when matching inventory is older than 48 hours |
 
 | Command | Purpose |
 | --- | --- |
@@ -145,6 +148,29 @@ scadaver [OPTIONS] [COMMAND]
 | `mqtt` | Open the interactive MQTT client shell |
 | `import` | Import hosts and open ports from nmap XML |
 | `export` | Export the device database as JSON or CSV |
+
+### eWON Flexy published Modbus tags
+
+When an authorized Flexy has published Modbus variables enabled, use the
+dedicated commands below. They use standard Modbus TCP with Flexy's default
+unit ID `100`; use `--unit-id` only when the device configuration differs.
+`-p 0` resolves to Modbus TCP port `502`.
+
+```sh
+# Read a coil and a 16-bit holding register
+scadaver -i 10.0.0.50 get ewon-coil 500
+scadaver -i 10.0.0.50 get ewon-register 501 --type u16
+
+# Read/write a 32-bit or float value. Flexy ordering is low 16-bit word first.
+scadaver -i 10.0.0.50 get ewon-register 502 --type f32
+scadaver -i 10.0.0.50 set ewon-register 502 73.5 --type f32
+scadaver -i 10.0.0.50 set ewon-coil 500 off
+```
+
+Supported register types are `u16`, `i16`, `u32`, `i32`, and `f32`. Only write
+variables that are explicitly published as writable in the authorized device;
+`set tag --protocol ewon` remains unsupported because the legacy eWON HTTP tag
+view has no standard safe write API.
 
 ### Terminal UI
 
@@ -315,15 +341,20 @@ scadaver -i 10.0.0.40 --protocol rockwell scan
 # Device identity: vendor, product type, product code, revision, serial, product name
 scadaver -i 10.0.0.40 --protocol rockwell get info
 
-# Full Logix tag table with UDT template expansion
+# Readable Logix tag table: named types and type-level RW/RO capability
 scadaver -i 10.0.0.40 --protocol rockwell get tags
 
-# Read one named tag (handles fragmented reads, UDT flattening)
+# Bounded live-value sample (first 50 tags); UDTs are decoded through templates
+scadaver -i 10.0.0.40 --protocol rockwell get tags --values
+
+# Read one named tag (typed scalar decoding; UDT templates are expanded)
 scadaver -i 10.0.0.40 --protocol rockwell get tag MAIN.conveyor_speed
 scadaver -i 10.0.0.40 --protocol rockwell get tag Program:SafetyPLC.EmergencyStop
 ```
 
 UDT fields are recursively expanded; BOOL arrays and packed BOOLs are handled automatically.
+Colour is automatic in an interactive terminal. Use `--color always` or `--color never`
+to override it, and add `-v` to any command for the complete safe diagnostic chain.
 
 ### Mitsubishi SLMP
 
@@ -393,11 +424,13 @@ scadaver -i 10.0.0.90 get gi
 ### DNP3
 
 ```sh
-# Detect DNP3 on port 20000 (Reset Link States + Request Link Status)
-# Returns outstation address, then reads Group 0 device attributes:
-# vendor_name, product_name, firmware_version, hardware_version,
-# device_serial, device_name, user_assigned_location
+# Detect the lab DNP3 outstation on port 20000 (master 1, outstation 10).
+# Broadcasts are deliberately not used because compliant DNP3 outstations do
+# not answer broadcast traffic.
 scadaver -i 10.0.0.95 --protocol dnp3 scan
+
+# Read Group 0 device attributes.
+scadaver -i 10.0.0.95 --protocol dnp3 get tags
 ```
 
 Integrity polling (Class 0 data request) returns up to 32 frames.
@@ -437,9 +470,11 @@ scadaver -i 10.0.0.110 get walk 1.3.6.1.2.1.2 -c public       # interfaces only
 ### OPC UA
 
 ```sh
-# Endpoint discovery: returns URL, security mode (None/Sign/SignAndEncrypt),
-# security policy, and whether anonymous access is permitted
+# Transport detection performs HEL/ACK only.
 scadaver -i 10.0.0.120 --protocol opcua scan
+
+# Endpoint discovery completes HEL, OpenSecureChannel, and GetEndpoints.
+scadaver -i 10.0.0.120 --protocol opcua get tags
 ```
 
 ## Write and Control
@@ -717,6 +752,22 @@ scadaver -i 10.0.0.60 --protocol mqtt scan
 
 Returns: anonymous access, first `$SYS/broker/*` topic and value, and whether Sparkplug B traffic was observed on `spBv1.0/#`.
 
+### Direct CLI publish and read-back
+
+Normal MQTT publishes are events: a client that connects later cannot read a prior
+non-retained message. For a repeatable lab write/read-back, publish a retained value,
+then use a fresh live read. `--type auto` accepts even-length hexadecimal text as
+bytes; use `--type text` to make the payload unambiguous.
+
+```sh
+# Local lab example: publish retained UTF-8 text, then read it from a new session.
+scadaver set tag scadaver/demo=running --type text --retain --protocol mqtt -i 127.0.0.1 -p 1883
+scadaver get tag scadaver/demo --protocol mqtt -i 127.0.0.1 -p 1883 --live
+
+# Clear the retained test value when finished.
+scadaver set tag scadaver/demo= --type text --retain --protocol mqtt -i 127.0.0.1 -p 1883
+```
+
 ### Interactive Shell
 
 ```sh
@@ -840,7 +891,22 @@ python scripts/fetch_refs.py
 
 ## Database
 
+Successful targeted scans and `--live` reads save a protocol-specific endpoint,
+tags, and observed values. Normal `get` commands are cache-first and show the
+record age; add `--live` to refresh a target. This lets one host retain, for
+example, independent Modbus and EtherNet/IP ports without one discovery
+overwriting the other. Writes require a matching inventory record no older than
+48 hours unless `--confirm-stale` is supplied.
+
 ```sh
+# Live discovery and compact cached follow-up reads
+scadaver -i 10.0.0.50 -p 44818 --protocol rockwell scan
+scadaver --live -i 10.0.0.50 --protocol rockwell get tags --values
+scadaver -i 10.0.0.50 --protocol rockwell get tags
+
+# Inspect saved protocol endpoints and cached values for one host
+scadaver db show --ip 10.0.0.50
+
 # Add a device manually
 scadaver db add --ip 10.0.0.50 --vendor siemens
 
@@ -868,7 +934,18 @@ The simulator suite provides protocol stubs on unprivileged ports by default:
 ```sh
 python sim/run_all.py --profile high
 python sim/smoke.py --profile high
+python sim/write_smoke.py --profile high
 ```
+
+For an isolated eWON Flexy published-Modbus read/write/read-back/restore test
+that does not require the rest of the suite, build SCADaver and run:
+
+```sh
+python sim/ewon_smoke.py --scadaver target/release/scadaver
+```
+
+On Windows, use `target\release\scadaver.exe`. The eWON smoke starts its own
+loopback HTTP and Modbus listeners on high ports and stops them on completion.
 
 Start selected simulators with `--only`, for example:
 

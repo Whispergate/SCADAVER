@@ -19,12 +19,14 @@ SIM_DIR = Path(__file__).resolve().parent
 
 @dataclass(frozen=True)
 class PortProfile:
+    bacnet: int
     modbus: int
     slmp: int
     beckhoff_ads: int
     beckhoff_discovery: int
     siemens: int
     ewon: int
+    ewon_modbus: int
     snmp: int
     rockwell: int
     fins: int
@@ -32,16 +34,21 @@ class PortProfile:
     phoenix: int
     phoenix_http: int
     mqtt: int
+    dnp3: int
+    opcua: int
 
 
 PROFILES = {
     "canonical": PortProfile(
+        bacnet=47808,
         modbus=502,
         slmp=5007,
         beckhoff_ads=48898,
         beckhoff_discovery=48899,
         siemens=102,
         ewon=80,
+        # Kept separate from the generic Modbus fixture, which owns TCP/502.
+        ewon_modbus=1503,
         snmp=161,
         rockwell=44818,
         fins=9600,
@@ -49,14 +56,18 @@ PROFILES = {
         phoenix=1962,
         phoenix_http=8080,
         mqtt=1883,
+        dnp3=20000,
+        opcua=4840,
     ),
     "high": PortProfile(
+        bacnet=14780,
         modbus=1502,
         slmp=15007,
         beckhoff_ads=14898,
         beckhoff_discovery=48899,
         siemens=1102,
         ewon=8080,
+        ewon_modbus=18002,
         snmp=1161,
         rockwell=14818,
         fins=19600,
@@ -64,6 +75,8 @@ PROFILES = {
         phoenix=11962,
         phoenix_http=11980,
         mqtt=11883,
+        dnp3=22000,
+        opcua=14840,
     ),
 }
 
@@ -89,6 +102,7 @@ def valid_port(value: int, name: str) -> int:
 def selected_ports(args: argparse.Namespace) -> PortProfile:
     profile = PROFILES[args.profile]
     return PortProfile(
+        bacnet=valid_port(args.bacnet_port or profile.bacnet, "bacnet port"),
         modbus=valid_port(args.modbus_port or profile.modbus, "modbus port"),
         slmp=valid_port(args.slmp_port or profile.slmp, "slmp port"),
         beckhoff_ads=valid_port(
@@ -101,6 +115,9 @@ def selected_ports(args: argparse.Namespace) -> PortProfile:
         ),
         siemens=valid_port(args.siemens_port or profile.siemens, "siemens port"),
         ewon=valid_port(args.ewon_port or profile.ewon, "ewon port"),
+        ewon_modbus=valid_port(
+            args.ewon_modbus_port or profile.ewon_modbus, "ewon modbus port"
+        ),
         snmp=valid_port(args.snmp_port or profile.snmp, "snmp port"),
         rockwell=valid_port(args.rockwell_port or profile.rockwell, "rockwell port"),
         fins=valid_port(args.fins_port or profile.fins, "fins port"),
@@ -110,15 +127,33 @@ def selected_ports(args: argparse.Namespace) -> PortProfile:
             args.phoenix_http_port or profile.phoenix_http, "phoenix http port"
         ),
         mqtt=valid_port(args.mqtt_port or profile.mqtt, "mqtt port"),
+        dnp3=valid_port(args.dnp3_port or profile.dnp3, "dnp3 port"),
+        opcua=valid_port(args.opcua_port or profile.opcua, "opcua port"),
     )
 
 
 def build_specs(host: str, ports: PortProfile) -> list[SimSpec]:
     return [
         SimSpec(
+            "bacnet",
+            "../scripts/sim_bacnet.py",
+            ("--host", host, "--port", str(ports.bacnet)),
+            udp_ports=(ports.bacnet,),
+        ),
+        SimSpec(
             "modbus",
             "modbus_sim.py",
-            ("--host", host, "--port", str(ports.modbus)),
+            (
+                "--host",
+                host,
+                "--port",
+                str(ports.modbus),
+                # The full high-port lab profile also exercises the
+                # Schneider/Modicon FC43 identity path. Direct invocations of
+                # modbus_sim.py remain generic unless explicitly opted in.
+                "--identity",
+                "schneider",
+            ),
             tcp_ports=(ports.modbus,),
         ),
         SimSpec(
@@ -150,8 +185,11 @@ def build_specs(host: str, ports: PortProfile) -> list[SimSpec]:
         SimSpec(
             "ewon",
             "ewon_sim.py",
-            ("--host", host, "--port", str(ports.ewon)),
-            tcp_ports=(ports.ewon,),
+            (
+                "--host", host, "--port", str(ports.ewon),
+                "--modbus-port", str(ports.ewon_modbus),
+            ),
+            tcp_ports=(ports.ewon, ports.ewon_modbus),
         ),
         SimSpec(
             "snmp",
@@ -192,6 +230,18 @@ def build_specs(host: str, ports: PortProfile) -> list[SimSpec]:
             "mqtt_sim.py",
             ("--host", host, "--port", str(ports.mqtt)),
             tcp_ports=(ports.mqtt,),
+        ),
+        SimSpec(
+            "dnp3",
+            "dnp3_sim.py",
+            ("--host", host, "--port", str(ports.dnp3)),
+            tcp_ports=(ports.dnp3,),
+        ),
+        SimSpec(
+            "opcua",
+            "opcua_sim.py",
+            ("--host", host, "--port", str(ports.opcua)),
+            tcp_ports=(ports.opcua,),
         ),
     ]
 
@@ -261,13 +311,20 @@ def print_scadaver_hints(host: str, ports: PortProfile) -> None:
     print(f"  scadaver scan beckhoff -i {target} --port {ports.beckhoff_ads}")
     print(f"  scadaver scan siemens -i {target} --port {ports.siemens}")
     print(f"  scadaver scan ewon -i {target} --port {ports.ewon}")
+    print(f"  scadaver scan bacnet -i {target} --port {ports.bacnet}")
+    print(f"  scadaver scan dnp3 -i {target} --port {ports.dnp3}")
+    print(f"  scadaver scan opc-ua -i {target} --port {ports.opcua}")
+    print(f"  scadaver -i {target} -p {ports.ewon_modbus} get ewon-register 501")
     print(f"  scadaver snmp enum -t {target} --port {ports.snmp}")
     print(f"  scadaver -i {target} -p {ports.mqtt} --protocol mqtt scan")
     print(f"  scadaver mqtt --host {target} --port {ports.mqtt}")
 
 
 def install_dependencies() -> None:
-    req = SIM_DIR / "requirements.txt"
+    # The managed suite includes BACnet, OPC-UA, and protocol conformance
+    # checks; use the fully pinned test requirements rather than the old
+    # Modbus/MQTT-only convenience file.
+    req = SIM_DIR / "requirements-test.txt"
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(req)])
 
 
@@ -340,11 +397,13 @@ def parse_args() -> argparse.Namespace:
         help="IP address to bind all simulators (default: 0.0.0.0)",
     )
     parser.add_argument("--modbus-port", type=int)
+    parser.add_argument("--bacnet-port", type=int)
     parser.add_argument("--slmp-port", type=int)
     parser.add_argument("--beckhoff-ads-port", type=int)
     parser.add_argument("--beckhoff-discovery-port", type=int)
     parser.add_argument("--siemens-port", type=int)
     parser.add_argument("--ewon-port", type=int)
+    parser.add_argument("--ewon-modbus-port", type=int)
     parser.add_argument("--snmp-port", type=int)
     parser.add_argument("--rockwell-port", type=int)
     parser.add_argument("--fins-port", type=int)
@@ -352,11 +411,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--phoenix-port", type=int)
     parser.add_argument("--phoenix-http-port", type=int)
     parser.add_argument("--mqtt-port", type=int)
+    parser.add_argument("--dnp3-port", type=int)
+    parser.add_argument("--opcua-port", type=int)
     parser.add_argument(
         "--only",
         nargs="+",
-        choices=["modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp",
-                 "rockwell", "fins", "iec104", "phoenix", "mqtt"],
+        choices=["bacnet", "modbus", "slmp", "beckhoff", "siemens", "ewon", "snmp",
+                 "rockwell", "fins", "iec104", "phoenix", "mqtt", "dnp3", "opcua"],
         help="start only selected simulators",
     )
     parser.add_argument(

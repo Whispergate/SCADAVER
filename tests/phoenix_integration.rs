@@ -5,8 +5,10 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
 
-fn serve_phoenix(listener: TcpListener) {
-    let Ok((mut s, _)) = listener.accept() else { return };
+fn serve_phoenix(listener: &TcpListener) {
+    let Ok((mut s, _)) = listener.accept() else {
+        return;
+    };
     let _ = s.set_read_timeout(Some(Duration::from_millis(500)));
 
     let mut buf = [0u8; 4096];
@@ -50,15 +52,20 @@ fn serve_phoenix(listener: TcpListener) {
 fn loopback_phoenix_get_device_info() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    thread::spawn(move || serve_phoenix(listener));
+    thread::spawn(move || serve_phoenix(&listener));
     thread::sleep(Duration::from_millis(50));
 
     let result = casket::vendors::phoenix::control::get_device_info("127.0.0.1", port, true);
-    assert!(result.is_ok(), "Phoenix get_device_info should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Phoenix get_device_info should succeed: {:?}",
+        result.err()
+    );
     let dev = result.unwrap();
     assert!(
         dev.plc_type.contains("CI-Phoenix"),
-        "plc_type should contain CI-Phoenix, got: {}", dev.plc_type
+        "plc_type should contain CI-Phoenix, got: {}",
+        dev.plc_type
     );
     assert!(dev.firmware.is_some(), "firmware should be Some");
 }
