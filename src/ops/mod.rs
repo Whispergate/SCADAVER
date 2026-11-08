@@ -2234,6 +2234,7 @@ fn collect_modbus_points(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn exploit_modbus_map(ip: &str, port: u16, input: &str, out: &dyn Fn(&str)) {
     use casket::vendors::schneider::modbus;
     let ranges = match parse_modbus_map_input(input) {
@@ -3499,21 +3500,21 @@ pub fn run_action(
         ("schneider" | "modicon", 6) | ("modbus", 2) => exploit_modbus_map(ip, port, input, out),
         ("schneider" | "modicon", 7) | ("modbus", 3) => exploit_modbus_map(ip, port, "all", out),
         ("schneider" | "modicon", 8) | ("modbus", 4) => {
-            exploit_modbus_holding(ip, port, input, out)
+            exploit_modbus_holding(ip, port, input, out);
         }
         ("schneider" | "modicon", 9) | ("modbus", 5) => exploit_modbus_coils(ip, port, input, out),
         ("schneider" | "modicon", 10) | ("modbus", 6) => exploit_modbus_input(ip, port, input, out),
         ("schneider" | "modicon", 11) | ("modbus", 7) => {
-            exploit_modbus_discrete(ip, port, input, out)
+            exploit_modbus_discrete(ip, port, input, out);
         }
         ("schneider" | "modicon", 12) | ("modbus", 8) => {
-            exploit_modbus_write_coil(ip, port, input, out)
+            exploit_modbus_write_coil(ip, port, input, out);
         }
         ("schneider" | "modicon", 13) | ("modbus", 9) => {
-            exploit_modbus_write_register(ip, port, input, out)
+            exploit_modbus_write_register(ip, port, input, out);
         }
         ("schneider" | "modicon", 14) | ("modbus", 10) => {
-            exploit_modbus_write_registers(ip, port, input, out)
+            exploit_modbus_write_registers(ip, port, input, out);
         }
         ("schneider" | "modicon", 15) => exploit_fc90_stop(ip, port, out),
         ("schneider" | "modicon", 16) => exploit_fc90_start(ip, port, out),

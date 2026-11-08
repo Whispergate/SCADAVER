@@ -30,19 +30,34 @@ jobs:
           toolchain: stable
           components: clippy
 
+      # mosquitto 2.x cannot read a config from /tmp when the packaged AppArmor profile is
+      # enforced ("Unable to open config file /tmp/mosquitto.conf"). The config goes in conf.d
+      # and the packaged unit is restarted. The readiness loop fails loudly with the broker log
+      # instead of letting the MQTT suite discover a dead broker three steps later.
       - name: Start Mosquitto broker
         run: |
           sudo apt-get install -y mosquitto mosquitto-clients
-          printf 'allow_anonymous true\nlistener 1883\n' > /tmp/mosquitto.conf
-          mosquitto -d -c /tmp/mosquitto.conf
-          sleep 2
+          printf 'listener 1883 127.0.0.1\nallow_anonymous true\n' \
+            | sudo tee /etc/mosquitto/conf.d/ci.conf >/dev/null
+          sudo systemctl restart mosquitto
+          for i in $(seq 1 20); do
+            if mosquitto_pub -h 127.0.0.1 -p 1883 -t ci/probe -m up >/dev/null 2>&1; then
+              echo "mosquitto listening on 127.0.0.1:1883"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "mosquitto did not accept a publish after 20s"
+          sudo systemctl status mosquitto --no-pager || true
+          sudo journalctl -u mosquitto --no-pager | tail -n 30 || true
+          exit 1
 
       - name: Build
         run: cargo build --verbose
 
-      # No `cargo fmt --check` yet: the tree has 339 formatting diffs. Land one mechanical
-      # `cargo fmt --all` commit first, then add the gate. Reviewing it with `git diff -w`
-      # keeps it honest.
+      - name: Format
+        run: cargo fmt --all -- --check
+
       - name: Clippy
         run: cargo clippy -- -D warnings
 
