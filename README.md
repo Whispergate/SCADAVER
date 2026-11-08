@@ -61,6 +61,13 @@ The protocol library is pulled from GitHub at a pinned tag, so you do not need a
 repository. If you are working on `casket` itself, add an untracked `.cargo/config.toml`
 with a `[patch]` pointing at your local checkout. See `docs/build.md`.
 
+## Documentation
+
+- [Architecture](docs/architecture.md): the layers, the invariants, and what changed in 1.8.
+- [Building and testing](docs/build.md): the gates, the pinned dependency, and the simulator
+  setup.
+- [Safe mode](docs/safe-mode.md): what the mutating-verb guard refuses and why.
+
 ## Quick Start
 
 Start with read-only discovery and enumeration against an authorized lab target:

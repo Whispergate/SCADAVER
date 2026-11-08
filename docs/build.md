@@ -1,5 +1,8 @@
 # Building and testing SCADAVER
 
+The layer map and the invariants live in [architecture.md](architecture.md); this page is about
+running the gates.
+
 ## The dependency is pinned to a tag
 
 `Cargo.toml` pins the ICS protocol library to a git tag, never a branch:
@@ -35,6 +38,14 @@ scripts/golden.sh sim            # simulators UP: discovery and interrogation mu
 scripts/check-parity.sh          # no surface may call casket directly
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all
+```
+
+The three shell scripts need a POSIX shell. In PowerShell, typing `scripts/golden.sh` opens the file
+in Notepad because `.sh` has no executable association on Windows. Call Git's bash by path:
+
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" scripts/golden.sh nosim
+& "C:\Program Files\Git\bin\bash.exe" scripts/check-parity.sh
 ```
 
 `tests/golden/` holds one fixture per case, named by the `[name]` prefix in
