@@ -1,0 +1,14 @@
+# Simulators must be UP on the fixed ports:
+#   modbus 127.0.0.1:21502   python sim/modbus_sim.py --host 127.0.0.1 --port 21502
+#   dnp3   127.0.0.1:33001   python sim/dnp3_sim.py   --host 127.0.0.1 --port 33001
+#   siemens 127.0.0.1:11202  python sim/siemens_sim.py --host 127.0.0.1 --port 11202
+#
+# Each line is "[name] <args...>"; the fixture lives at tests/golden/sim/<name>.txt.
+# The scan cases pin the discovery output; the info cases pin the interrogation
+# output, which is the part a refactor is most likely to change.
+[modbus-scan] --protocol modbus --ip 127.0.0.1 --port 21502 --timeout 2 scan
+[dnp3-scan] --protocol dnp3 --ip 127.0.0.1 --port 33001 --timeout 2 scan
+[siemens-scan] --protocol siemens --ip 127.0.0.1 --port 11202 --timeout 2 scan
+[modbus-info] --protocol modbus --ip 127.0.0.1 --port 21502 --timeout 2 --live get info
+[dnp3-info] --protocol dnp3 --ip 127.0.0.1 --port 33001 --timeout 2 --live get info
+[siemens-info] --protocol siemens --ip 127.0.0.1 --port 11202 --timeout 2 --live get info

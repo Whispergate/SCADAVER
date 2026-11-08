@@ -1,0 +1,11 @@
+# Simulators must be DOWN for this file. Each line is "[name] <args...>"; the
+# fixture lives at tests/golden/nosim/<name>.txt.
+#
+# Purpose: prove the deterministic no-response text for each protocol. If a
+# simulator is running on one of these ports, the capture is wrong and the diff
+# fails, which is the signal to kill the simulator and re-capture.
+#
+# Grammar is the README's: global flags first, verb last.
+[modbus] --protocol modbus --ip 127.0.0.1 --port 21502 --timeout 2 scan
+[dnp3] --protocol dnp3 --ip 127.0.0.1 --port 33001 --timeout 2 scan
+[siemens] --protocol siemens --ip 127.0.0.1 --port 11202 --timeout 2 scan

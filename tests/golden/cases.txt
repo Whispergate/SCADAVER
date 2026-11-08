@@ -1,0 +1,7 @@
+# One CLI invocation per line; the --protocol value names the golden file.
+# Grammar is the README's: global flags first, verb last. `scan ip` is not a subcommand
+# and `s7` is not a value the parser accepts (`siemens` is), so neither may appear here.
+# No simulator runs, so each case captures the deterministic no-response text.
+--protocol modbus --ip 127.0.0.1 --port 21502 --timeout 2 scan
+--protocol dnp3 --ip 127.0.0.1 --port 33001 --timeout 2 scan
+--protocol siemens --ip 127.0.0.1 --port 11202 --timeout 2 scan
