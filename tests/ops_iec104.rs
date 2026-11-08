@@ -51,7 +51,12 @@ fn iec104_scan_reports_a_link_test_response() {
     let _sim = Simulator::spawn(PORT);
 
     let outcome = scadaver::ops::scan_ip(Protocol::Iec104, "127.0.0.1", PORT, 2);
-    assert_eq!(outcome.records.len(), 1, "one outstation expected, got {:?}", outcome.messages);
+    assert_eq!(
+        outcome.records.len(),
+        1,
+        "one outstation expected, got {:?}",
+        outcome.messages
+    );
     let record = &outcome.records[0];
     assert_eq!(record.protocol, Protocol::Iec104);
     assert_eq!(record.port, PORT);
@@ -63,6 +68,8 @@ fn iec104_scan_reports_a_link_test_response() {
 fn iec104_with_nothing_listening_is_a_message_not_a_panic() {
     let outcome = scadaver::ops::scan_ip(Protocol::Iec104, "127.0.0.1", 1, 1);
     assert!(outcome.records.is_empty());
-    assert!(outcome.messages.iter().any(|m| m.text.contains("No IEC 104")));
+    assert!(outcome
+        .messages
+        .iter()
+        .any(|m| m.text.contains("No IEC 104")));
 }
-

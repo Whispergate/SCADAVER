@@ -1,4 +1,4 @@
-﻿//! TUI frontend for scadaver.
+//! TUI frontend for scadaver.
 //!
 //! MQTT topic browser, live message display, and topic table layout were informed by
 //! `mqttui` by `EdJoPaTo`: <https://github.com/EdJoPaTo/mqttui>
@@ -2213,7 +2213,10 @@ fn scan_broadcast_ewon(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
 }
 
 /// Returns `(network_address, host_bit_count)` for the given IP and netmask.
-fn compute_sweep_prefix(ip: std::net::Ipv4Addr, mask: std::net::Ipv4Addr) -> (std::net::Ipv4Addr, u32) {
+fn compute_sweep_prefix(
+    ip: std::net::Ipv4Addr,
+    mask: std::net::Ipv4Addr,
+) -> (std::net::Ipv4Addr, u32) {
     let net = u32::from(ip) & u32::from(mask);
     let host_bits = (!u32::from(mask)).count_ones();
     (std::net::Ipv4Addr::from(net), host_bits)
@@ -2247,7 +2250,8 @@ fn scan_broadcast_modbus(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>)
         // Subnet wider than /24 — sweeping the full range could mean 65k+ hosts.
         // Fall back to the /24 that contains the local address.
         let _ = tx.send(ScanEvent::Output(
-            "[!] Subnet is wider than /24; sweeping only the /24 containing the local address".into(),
+            "[!] Subnet is wider than /24; sweeping only the /24 containing the local address"
+                .into(),
         ));
         let octets = v4.octets();
         let p = format!("{}.{}.{}.", octets[0], octets[1], octets[2]);
@@ -2433,7 +2437,16 @@ fn run_exploit_for(
             None
         };
 
-        dispatch_exploit(&vendor, idx, &ip, port, &input, stored_pw.as_deref(), out, &tx);
+        dispatch_exploit(
+            &vendor,
+            idx,
+            &ip,
+            port,
+            &input,
+            stored_pw.as_deref(),
+            out,
+            &tx,
+        );
     });
 }
 
@@ -2776,7 +2789,12 @@ fn exploit_beckhoff_symbols(
     out(&sep);
     for s in &symbols {
         let value = s.value_str.as_deref().unwrap_or("-");
-        out(&crate::ops::fmt_ads_symbol_row(&s.name, &s.type_name, value, s.size));
+        out(&crate::ops::fmt_ads_symbol_row(
+            &s.name,
+            &s.type_name,
+            value,
+            s.size,
+        ));
     }
     out(&sep);
     out(&format!("[+] {} symbol(s)", symbols.len()));
@@ -6668,5 +6686,4 @@ mod tests {
         terminal.draw(|f| app.draw(f)).unwrap();
         // No assertion — just verify no panic on empty state.
     }
-
 }

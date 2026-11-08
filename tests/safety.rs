@@ -279,7 +279,9 @@ fn default_fragile_path_sits_beside_the_config() {
     // config.toml: %APPDATA%\scadaver on Windows, $XDG_CONFIG_HOME or ~/.config elsewhere.
     let path = safety::default_fragile_path();
     assert_eq!(
-        path.parent().and_then(|dir| dir.file_name()).and_then(|n| n.to_str()),
+        path.parent()
+            .and_then(|dir| dir.file_name())
+            .and_then(|n| n.to_str()),
         Some("scadaver"),
         "{}",
         path.display()
@@ -301,7 +303,11 @@ fn default_fragile_path_sits_beside_the_config() {
     }
     #[cfg(not(windows))]
     assert!(
-        path.ends_with(Path::new(".config").join("scadaver").join("fragile_hosts.txt")),
+        path.ends_with(
+            Path::new(".config")
+                .join("scadaver")
+                .join("fragile_hosts.txt")
+        ),
         "{}",
         path.display()
     );

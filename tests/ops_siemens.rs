@@ -51,7 +51,12 @@ fn siemens_scan_returns_typed_fields() {
     let _sim = Simulator::spawn(PORT);
 
     let outcome = scadaver::ops::scan_ip(Protocol::Siemens, "127.0.0.1", PORT, 2);
-    assert_eq!(outcome.records.len(), 1, "one device expected, got {:?}", outcome.messages);
+    assert_eq!(
+        outcome.records.len(),
+        1,
+        "one device expected, got {:?}",
+        outcome.messages
+    );
     let record = &outcome.records[0];
     assert_eq!(record.protocol, Protocol::Siemens);
     assert_eq!(record.port, PORT);
@@ -63,7 +68,10 @@ fn siemens_scan_returns_typed_fields() {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
-    assert!(hardware.contains("6ES7"), "expected the module order number, got {hardware:?}");
+    assert!(
+        hardware.contains("6ES7"),
+        "expected the module order number, got {hardware:?}"
+    );
     assert_eq!(record.identity.as_deref(), Some(hardware.as_str()));
 
     let open_ports = record
@@ -72,7 +80,9 @@ fn siemens_scan_returns_typed_fields() {
         .and_then(serde_json::Value::as_array)
         .expect("open_ports is an array");
     assert!(
-        open_ports.iter().any(|p| p.as_u64() == Some(u64::from(PORT))),
+        open_ports
+            .iter()
+            .any(|p| p.as_u64() == Some(u64::from(PORT))),
         "the scanned port should be reported open"
     );
 }
@@ -86,4 +96,3 @@ fn siemens_with_nothing_listening_is_a_message_not_a_panic() {
         .iter()
         .any(|m| m.text.contains("No Siemens S7 data")));
 }
-

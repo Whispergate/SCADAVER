@@ -76,7 +76,10 @@ fn omron_scan_returns_typed_records() {
     assert_eq!(field_text(&record.fields, "model"), "CP1E");
     assert_eq!(field_text(&record.fields, "version"), "V1.0");
     assert_eq!(
-        record.fields.get("node").and_then(serde_json::Value::as_u64),
+        record
+            .fields
+            .get("node")
+            .and_then(serde_json::Value::as_u64),
         Some(1),
         "server node from the negotiation frame"
     );

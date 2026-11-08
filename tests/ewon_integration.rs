@@ -27,7 +27,9 @@ fn build_ewon_device_info_response() -> Vec<u8> {
 #[test]
 fn loopback_ewon_scan_ip_finds_device() {
     // eWON probe sends to port 1507; mock must be bound there.
-    let Ok(server_sock) = UdpSocket::bind("0.0.0.0:1507") else { return }; // port busy, skip
+    let Ok(server_sock) = UdpSocket::bind("0.0.0.0:1507") else {
+        return;
+    }; // port busy, skip
     server_sock
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();

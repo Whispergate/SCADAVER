@@ -30,7 +30,9 @@ const LIST_ID_RESP: &[u8] = &[
 #[test]
 fn loopback_enip_list_identity_parse() {
     // Try to bind the EtherNet/IP discovery port; skip if busy.
-    let Ok(server_sock) = UdpSocket::bind("127.0.0.1:44818") else { return };
+    let Ok(server_sock) = UdpSocket::bind("127.0.0.1:44818") else {
+        return;
+    };
     server_sock
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();

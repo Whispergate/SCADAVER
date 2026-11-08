@@ -28,11 +28,8 @@ pub fn scan_ip(ip: &str, port: u16, timeout: u64) -> Outcome {
         return outcome;
     };
 
-    let attributes = client::read_device_attributes_with_port(
-        ip,
-        effective_port,
-        Duration::from_secs(timeout),
-    );
+    let attributes =
+        client::read_device_attributes_with_port(ip, effective_port, Duration::from_secs(timeout));
 
     let mut fields = BTreeMap::new();
     fields.insert(
@@ -57,7 +54,10 @@ pub fn scan_ip(ip: &str, port: u16, timeout: u64) -> Outcome {
         identity,
         fields,
     });
-    outcome.say(Level::Success, format!("DNP3 outstation on {ip}:{effective_port}."));
+    outcome.say(
+        Level::Success,
+        format!("DNP3 outstation on {ip}:{effective_port}."),
+    );
 
     outcome
 }

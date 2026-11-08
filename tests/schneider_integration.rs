@@ -24,7 +24,9 @@ fn build_schneider_response() -> Vec<u8> {
 fn loopback_schneider_udp_discovers_device() {
     use casket::vendors::schneider::scan::Transport;
     // Schneider scan sends to port 1740; mock must be bound there.
-    let Ok(server_sock) = UdpSocket::bind("0.0.0.0:1740") else { return }; // port busy, skip
+    let Ok(server_sock) = UdpSocket::bind("0.0.0.0:1740") else {
+        return;
+    }; // port busy, skip
     server_sock
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();

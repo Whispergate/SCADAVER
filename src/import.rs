@@ -23,57 +23,54 @@ pub fn parse_nmap_xml(path: &str) -> anyhow::Result<Vec<NmapHost>> {
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(ref e) | Event::Empty(ref e)) => {
-                match e.name().as_ref() {
-                    b"host" => {
-                        current = Some(NmapHost {
-                            ip: String::new(),
-                            hostnames: Vec::new(),
-                            open_ports: Vec::new(),
-                            is_up: true,
-                        });
-                    }
-                    b"status" => {
-                        if let Some(ref mut host) = current {
-                            let state = attr_val(e, b"state").unwrap_or_default();
-                            host.is_up = state == "up";
-                        }
-                    }
-                    b"address" => {
-                        if let Some(ref mut host) = current {
-                            let addr_type = attr_val(e, b"addrtype").unwrap_or_default();
-                            if addr_type == "ipv4" {
-                                if let Some(addr) = attr_val(e, b"addr") {
-                                    host.ip = addr;
-                                }
-                            }
-                        }
-                    }
-                    b"hostname" => {
-                        if let Some(ref mut host) = current {
-                            if let Some(name) = attr_val(e, b"name") {
-                                if !name.is_empty() {
-                                    host.hostnames.push(name);
-                                }
-                            }
-                        }
-                    }
-                    b"port" => {
-                        if current.is_some() {
-                            port_open = false;
-                            current_port =
-                                attr_val(e, b"portid").and_then(|s| s.parse::<u16>().ok());
-                        }
-                    }
-                    b"state" => {
-                        let state = attr_val(e, b"state").unwrap_or_default();
-                        if state == "open" {
-                            port_open = true;
-                        }
-                    }
-                    _ => {}
+            Ok(Event::Start(ref e) | Event::Empty(ref e)) => match e.name().as_ref() {
+                b"host" => {
+                    current = Some(NmapHost {
+                        ip: String::new(),
+                        hostnames: Vec::new(),
+                        open_ports: Vec::new(),
+                        is_up: true,
+                    });
                 }
-            }
+                b"status" => {
+                    if let Some(ref mut host) = current {
+                        let state = attr_val(e, b"state").unwrap_or_default();
+                        host.is_up = state == "up";
+                    }
+                }
+                b"address" => {
+                    if let Some(ref mut host) = current {
+                        let addr_type = attr_val(e, b"addrtype").unwrap_or_default();
+                        if addr_type == "ipv4" {
+                            if let Some(addr) = attr_val(e, b"addr") {
+                                host.ip = addr;
+                            }
+                        }
+                    }
+                }
+                b"hostname" => {
+                    if let Some(ref mut host) = current {
+                        if let Some(name) = attr_val(e, b"name") {
+                            if !name.is_empty() {
+                                host.hostnames.push(name);
+                            }
+                        }
+                    }
+                }
+                b"port" => {
+                    if current.is_some() {
+                        port_open = false;
+                        current_port = attr_val(e, b"portid").and_then(|s| s.parse::<u16>().ok());
+                    }
+                }
+                b"state" => {
+                    let state = attr_val(e, b"state").unwrap_or_default();
+                    if state == "open" {
+                        port_open = true;
+                    }
+                }
+                _ => {}
+            },
             Ok(Event::End(ref e)) => match e.name().as_ref() {
                 b"port" => {
                     if let (Some(ref mut host), Some(port), true) =

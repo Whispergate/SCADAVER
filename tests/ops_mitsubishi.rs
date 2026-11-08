@@ -81,10 +81,19 @@ fn mitsubishi_scan_returns_typed_records() {
     );
     assert_eq!(field_text(&record.fields, "protocol"), "slmp_tcp");
     assert_eq!(
-        record.fields.get("slmp_port").and_then(serde_json::Value::as_u64),
+        record
+            .fields
+            .get("slmp_port")
+            .and_then(serde_json::Value::as_u64),
         Some(u64::from(PORT))
     );
-    assert_eq!(record.fields.get("count").and_then(serde_json::Value::as_u64), Some(1));
+    assert_eq!(
+        record
+            .fields
+            .get("count")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
     assert_eq!(record.identity.as_deref(), Some(plc_type.as_str()));
 }
 

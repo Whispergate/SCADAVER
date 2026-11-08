@@ -122,9 +122,7 @@ pub fn refuse_if_mutating(name: &str) -> Result<(), String> {
 /// not exist, loaded an empty fragile list, and still reported itself as on.
 #[must_use]
 pub fn default_fragile_path() -> PathBuf {
-    config_base()
-        .join("scadaver")
-        .join("fragile_hosts.txt")
+    config_base().join("scadaver").join("fragile_hosts.txt")
 }
 
 fn config_base() -> PathBuf {
@@ -221,7 +219,10 @@ mod tests {
         // Same convention as `dirs::config_dir()`: <config base>/scadaver/fragile_hosts.txt.
         let fragile = default_fragile_path();
         assert_eq!(
-            fragile.parent().and_then(|dir| dir.file_name()).and_then(|n| n.to_str()),
+            fragile
+                .parent()
+                .and_then(|dir| dir.file_name())
+                .and_then(|n| n.to_str()),
             Some("scadaver"),
             "{fragile:?}"
         );
@@ -231,7 +232,8 @@ mod tests {
         );
         #[cfg(windows)]
         assert!(
-            std::env::var_os("APPDATA").is_none_or(|appdata| fragile.starts_with(PathBuf::from(appdata))),
+            std::env::var_os("APPDATA")
+                .is_none_or(|appdata| fragile.starts_with(PathBuf::from(appdata))),
             "{fragile:?} should start under %APPDATA%"
         );
     }

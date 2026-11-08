@@ -987,18 +987,10 @@ mod tests {
     #[test]
     fn partial_upserts_retain_prior_observations() {
         let db = memory_db();
-        db.upsert_data_points(
-            "127.0.0.1",
-            "modbus",
-            &[("hr:40001", Some("UINT16"), "1")],
-        )
-        .unwrap();
-        db.upsert_data_points(
-            "127.0.0.1",
-            "modbus",
-            &[("co:1", Some("BOOL"), "ON")],
-        )
-        .unwrap();
+        db.upsert_data_points("127.0.0.1", "modbus", &[("hr:40001", Some("UINT16"), "1")])
+            .unwrap();
+        db.upsert_data_points("127.0.0.1", "modbus", &[("co:1", Some("BOOL"), "ON")])
+            .unwrap();
 
         let points = db.load_data_points("127.0.0.1", "modbus").unwrap();
         assert_eq!(2, points.len());
@@ -1012,10 +1004,7 @@ mod tests {
         db.upsert_data_points(
             "127.0.0.1",
             "mitsubishi",
-            &[
-                ("d:0", Some("UINT16"), "0"),
-                ("m:0", Some("BOOL"), "OFF"),
-            ],
+            &[("d:0", Some("UINT16"), "0"), ("m:0", Some("BOOL"), "OFF")],
         )
         .unwrap();
 
@@ -1038,12 +1027,8 @@ mod tests {
     #[test]
     fn invalidation_is_scoped_to_one_protocol() {
         let db = memory_db();
-        db.upsert_data_points(
-            "127.0.0.1",
-            "modbus",
-            &[("hr:40001", Some("UINT16"), "1")],
-        )
-        .unwrap();
+        db.upsert_data_points("127.0.0.1", "modbus", &[("hr:40001", Some("UINT16"), "1")])
+            .unwrap();
         db.upsert_data_points(
             "127.0.0.1",
             "rockwell",
@@ -1052,12 +1037,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(1, db.invalidate_data_points("127.0.0.1", "modbus").unwrap());
-        assert!(db.load_data_points("127.0.0.1", "modbus").unwrap().is_empty());
+        assert!(db
+            .load_data_points("127.0.0.1", "modbus")
+            .unwrap()
+            .is_empty());
         assert_eq!(
             1,
-            db.load_data_points("127.0.0.1", "rockwell")
-                .unwrap()
-                .len()
+            db.load_data_points("127.0.0.1", "rockwell").unwrap().len()
         );
     }
 

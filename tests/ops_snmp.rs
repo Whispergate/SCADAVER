@@ -35,7 +35,10 @@ impl Simulator {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
                 if tx.send(line).is_err() {
                     break;
                 }

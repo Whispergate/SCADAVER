@@ -1870,8 +1870,9 @@ fn run_get(
         } => {
             use casket::vendors::siemens::s7comm;
             let s7_port = if port == 0 { 102 } else { port };
-            let pb =
-                crate::display::spinner_start(&format!("Reading DB{db}:{offset}+{len} from {ip}â€¦"));
+            let pb = crate::display::spinner_start(&format!(
+                "Reading DB{db}:{offset}+{len} from {ip}â€¦"
+            ));
             let result =
                 s7comm::read_data_block(ip, db, offset, len, s7_port, timeout, password.as_deref());
             pb.finish_and_clear();
@@ -2412,8 +2413,9 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
         Some(Protocol::Mqtt) => {
             use casket::vendors::mqtt::client;
             let mqtt_port = if port == 0 { client::MQTT_PORT } else { port };
-            let pb =
-                crate::display::spinner_start(&format!("Probing MQTT broker at {ip}:{mqtt_port}â€¦"));
+            let pb = crate::display::spinner_start(&format!(
+                "Probing MQTT broker at {ip}:{mqtt_port}â€¦"
+            ));
             let result = client::probe(ip, mqtt_port);
             pb.finish_and_clear();
             match result {
@@ -2445,7 +2447,8 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
         }
         Some(Protocol::Schneider) => {
             use casket::vendors::schneider::scan::{self, Transport};
-            let pb = crate::display::spinner_start(&format!("Querying Schneider device at {ip}â€¦"));
+            let pb =
+                crate::display::spinner_start(&format!("Querying Schneider device at {ip}â€¦"));
             let devs = scan::scan_ip_with_transport(ip, timeout, false, port, Transport::Both)
                 .unwrap_or_default();
             pb.finish_and_clear();
@@ -2470,7 +2473,8 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
         }
         Some(Protocol::Mitsubishi) => {
             use casket::vendors::mitsubishi::scan::{self, Transport};
-            let pb = crate::display::spinner_start(&format!("Querying Mitsubishi MELSEC at {ip}â€¦"));
+            let pb =
+                crate::display::spinner_start(&format!("Querying Mitsubishi MELSEC at {ip}â€¦"));
             let devs = scan::scan_ip_with_transport(ip, timeout, false, port, Transport::Both)
                 .unwrap_or_default();
             pb.finish_and_clear();
@@ -2494,7 +2498,8 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
         Some(Protocol::Snmp) => {
             use casket::vendors::snmp::{client, oids};
             let snmp_port = if port == 0 { 161 } else { port };
-            let pb = crate::display::spinner_start(&format!("Querying SNMP at {ip}:{snmp_port}â€¦"));
+            let pb =
+                crate::display::spinner_start(&format!("Querying SNMP at {ip}:{snmp_port}â€¦"));
             let mut found = Vec::new();
             for &c in oids::COMMON_COMMUNITIES {
                 if let Ok(val) = client::get(ip, snmp_port, c, oids::SYS_DESCR) {
@@ -2547,7 +2552,8 @@ fn get_state(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resu
         Some(Protocol::Mitsubishi) => {
             use casket::vendors::mitsubishi::scan::{self, Transport};
             let slmp_port = if port == 0 { 5006 } else { port };
-            let pb = crate::display::spinner_start(&format!("Probing Mitsubishi MELSEC at {ip}â€¦"));
+            let pb =
+                crate::display::spinner_start(&format!("Probing Mitsubishi MELSEC at {ip}â€¦"));
             let devs = scan::scan_ip_with_transport(ip, 5, true, slmp_port, Transport::Both)
                 .unwrap_or_default();
             pb.finish_and_clear();
@@ -2697,10 +2703,11 @@ fn get_tags(
                             .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
                             .map_or(tag.tag_type & !0x6000, u16::from_le_bytes);
                         let value = driver::decode_value(element_type, payload, templates.as_ref());
-                        array_elements_by_name
-                            .entry(name)
-                            .or_default()
-                            .push((0, element_type, value));
+                        array_elements_by_name.entry(name).or_default().push((
+                            0,
+                            element_type,
+                            value,
+                        ));
                         active_array_tags.push(tag);
                         values_by_name.insert(name, "[0]=â€¦".into());
                     } else {
@@ -2712,7 +2719,8 @@ fn get_tags(
                 let value = raw.as_deref().map_or_else(
                     || "unavailable".to_string(),
                     |payload| {
-                        let decoded = driver::decode_value(tag.tag_type, payload, templates.as_ref());
+                        let decoded =
+                            driver::decode_value(tag.tag_type, payload, templates.as_ref());
                         if tag.dimensions > 0 {
                             format!("[{decoded}, â€¦]")
                         } else {
@@ -2868,14 +2876,18 @@ fn get_tags(
                                 .iter()
                                 .map(move |leaf| (format!("{parent}.{}", leaf.path), leaf.writable))
                         })
-                        .chain(array_elements_by_name.iter().flat_map(|(parent, elements)| {
-                            elements.iter().map(move |(index, cip_type, _)| {
-                                (
-                                    format!("{parent}[{index}]"),
-                                    driver::is_writable_type(*cip_type),
-                                )
-                            })
-                        }))
+                        .chain(
+                            array_elements_by_name
+                                .iter()
+                                .flat_map(|(parent, elements)| {
+                                    elements.iter().map(move |(index, cip_type, _)| {
+                                        (
+                                            format!("{parent}[{index}]"),
+                                            driver::is_writable_type(*cip_type),
+                                        )
+                                    })
+                                }),
+                        )
                         .collect();
                     if !members.is_empty() {
                         let member_refs: Vec<(&str, bool)> = members
@@ -2922,10 +2934,7 @@ fn get_tags(
                     "  {:>5}  {}  {}  {}  {}  {}",
                     tag.instance_id,
                     crate::display::tag_name(&pad_to_width(&tag.name, 32)),
-                    crate::display::type_name(&pad_to_width(
-                        &driver::type_name(tag.tag_type),
-                        18
-                    )),
+                    crate::display::type_name(&pad_to_width(&driver::type_name(tag.tag_type), 18)),
                     crate::display::numeric(&pad_to_width(dims, 4)),
                     rendered_value,
                     access,
@@ -3083,8 +3092,9 @@ fn get_tags(
         Some(Protocol::Mitsubishi) => {
             use casket::vendors::mitsubishi::slmp;
             let slmp_port = if port == 0 { 5007 } else { port };
-            let pb =
-                crate::display::spinner_start(&format!("Reading Mitsubishi D registers on {ip}â€¦"));
+            let pb = crate::display::spinner_start(&format!(
+                "Reading Mitsubishi D registers on {ip}â€¦"
+            ));
             let result = slmp::read_word_devices(ip, slmp_port, "D", 0, 32);
             pb.finish_and_clear();
             let vals = result?;
@@ -3176,7 +3186,8 @@ fn get_tags(
         Some(Protocol::Snmp) => {
             use casket::vendors::snmp::{client, enumerate};
             let snmp_port = if port == 0 { 161 } else { port };
-            let pb = crate::display::spinner_start(&format!("Discovering SNMP community on {ip}â€¦"));
+            let pb =
+                crate::display::spinner_start(&format!("Discovering SNMP community on {ip}â€¦"));
             let community = client::discover_community(ip, snmp_port);
             pb.finish_and_clear();
             let Some(community) = community else {
@@ -3638,8 +3649,9 @@ fn get_tags_mqtt(
         session::{ConnectOptions, MqttSession},
     };
     let mqtt_port = if port == 0 { client::MQTT_PORT } else { port };
-    let pb =
-        crate::display::spinner_start(&format!("Subscribing to MQTT broker at {ip}:{mqtt_port}â€¦"));
+    let pb = crate::display::spinner_start(&format!(
+        "Subscribing to MQTT broker at {ip}:{mqtt_port}â€¦"
+    ));
     let opts = ConnectOptions {
         host: ip.to_string(),
         port: mqtt_port,
@@ -3681,8 +3693,9 @@ fn get_tags_mqtt(
 fn get_tags_iec104(ip: &str, port: u16, cache: bool) -> Result<()> {
     use casket::vendors::iec104::client;
     let iec_port = if port == 0 { client::IEC104_PORT } else { port };
-    let pb =
-        crate::display::spinner_start(&format!("Enumerating IEC 104 objects on {ip}:{iec_port}â€¦"));
+    let pb = crate::display::spinner_start(&format!(
+        "Enumerating IEC 104 objects on {ip}:{iec_port}â€¦"
+    ));
     let result =
         client::connect(ip, iec_port).and_then(|mut s| client::general_interrogation(&mut s));
     pb.finish_and_clear();
@@ -4201,7 +4214,9 @@ fn run_set(
             let s7_port = if port == 0 { 102 } else { port };
             let bytes = parse_hex(&data);
             if bytes.is_empty() {
-                bail!("Invalid hex data '{data}' â€” expected even-length hex string, e.g. deadbeef");
+                bail!(
+                    "Invalid hex data '{data}' â€” expected even-length hex string, e.g. deadbeef"
+                );
             }
             crate::display::print_info(&format!(
                 "Writing {} byte(s) to DB{db}:{offset} on {ip}â€¦",
@@ -4439,9 +4454,7 @@ fn set_tag(
     live_type_lookup: bool,
 ) -> Result<()> {
     let Some((name, hex_val)) = assignment.split_once('=') else {
-        bail!(
-            "Tag assignment must be NAME=VALUE, e.g. PUMP_RUN=true or FLOW_RATE=12.5"
-        );
+        bail!("Tag assignment must be NAME=VALUE, e.g. PUMP_RUN=true or FLOW_RATE=12.5");
     };
     if retain && proto != Some(Protocol::Mqtt) {
         bail!("--retain is supported only for MQTT publishes");
@@ -5224,9 +5237,7 @@ fn mqtt_payload(value: &str, type_hint: &str) -> Result<Vec<u8>> {
                 Ok(value.as_bytes().to_vec())
             }
         }
-        unsupported => bail!(
-            "Unsupported MQTT --type '{unsupported}'; use auto, text, or hex"
-        ),
+        unsupported => bail!("Unsupported MQTT --type '{unsupported}'; use auto, text, or hex"),
     }
 }
 
@@ -5341,8 +5352,8 @@ fn ellipsize(value: &str, width: usize) -> String {
 mod tests {
     use super::{
         decode_ewon_register, decode_rockwell_payload, diagnostic_context, ellipsize,
-        encode_ewon_register, mqtt_payload, parse_hex, rockwell_atomic_type_from_name, set_operation_supported,
-        EwonRegisterType, Protocol, SetNoun,
+        encode_ewon_register, mqtt_payload, parse_hex, rockwell_atomic_type_from_name,
+        set_operation_supported, EwonRegisterType, Protocol, SetNoun,
     };
 
     #[test]

@@ -61,7 +61,12 @@ pub fn print_banner() {
     println!("{}", BANNER.cyan().bold());
     println!(
         "{}",
-        concat!("            Unified ICS Red Team Multi-Tool v", env!("CARGO_PKG_VERSION"), " (Rust)").cyan()
+        concat!(
+            "            Unified ICS Red Team Multi-Tool v",
+            env!("CARGO_PKG_VERSION"),
+            " (Rust)"
+        )
+        .cyan()
     );
     println!(
         "{}",

@@ -50,15 +50,15 @@ impl Protocol {
             // The old table said 67, which is BOOTP: nothing ever used it, and the legacy arm
             // reported it while actually discovering on IPCONF 1507.
             Self::Ewon => v::ewon::scan::IPCONF_DISCOVERY_PORT,
-            Self::Iec104 => v::iec104::client::IEC104_PORT,     // 2404
+            Self::Iec104 => v::iec104::client::IEC104_PORT, // 2404
             Self::Mitsubishi => v::mitsubishi::slmp::DEFAULT_PORT, // 5007
-            Self::Mqtt => v::mqtt::client::MQTT_PORT,           // 1883
-            Self::Omron => v::omron::fins::FINS_TCP_PORT,       // 9600
-            Self::OpcUa => v::opcua::client::OPCUA_PORT,        // 4840
-            Self::Phoenix => 1_962,                             // ops.rs:443
-            Self::Siemens => v::siemens::s7comm::S7_PORT,       // 102
-            Self::Snmp => v::snmp::client::SNMP_PORT,           // 161
-            Self::Bacnet => v::bacnet::client::BACNET_PORT,     // 47808
+            Self::Mqtt => v::mqtt::client::MQTT_PORT,       // 1883
+            Self::Omron => v::omron::fins::FINS_TCP_PORT,   // 9600
+            Self::OpcUa => v::opcua::client::OPCUA_PORT,    // 4840
+            Self::Phoenix => 1_962,                         // ops.rs:443
+            Self::Siemens => v::siemens::s7comm::S7_PORT,   // 102
+            Self::Snmp => v::snmp::client::SNMP_PORT,       // 161
+            Self::Bacnet => v::bacnet::client::BACNET_PORT, // 47808
         }
     }
 

@@ -28,7 +28,9 @@ fn build_beckhoff_response() -> Vec<u8> {
 
 #[test]
 fn loopback_beckhoff_discover_ip_finds_device() {
-    let Ok(server_sock) = UdpSocket::bind("0.0.0.0:48899") else { return }; // port busy on CI, skip
+    let Ok(server_sock) = UdpSocket::bind("0.0.0.0:48899") else {
+        return;
+    }; // port busy on CI, skip
     server_sock
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();

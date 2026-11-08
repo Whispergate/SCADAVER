@@ -60,7 +60,9 @@ fn serve_dnp3(listener: &TcpListener) {
 #[test]
 fn loopback_dnp3_detect_succeeds() {
     // detect() hard-codes port 20000; bind mock there, skip if busy.
-    let Ok(listener) = TcpListener::bind(format!("127.0.0.1:{DNP3_PORT}")) else { return };
+    let Ok(listener) = TcpListener::bind(format!("127.0.0.1:{DNP3_PORT}")) else {
+        return;
+    };
     thread::spawn(move || serve_dnp3(&listener));
     thread::sleep(Duration::from_millis(50));
 

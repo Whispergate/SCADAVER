@@ -82,7 +82,9 @@ fn bacnet_port_constant() {
 fn loopback_bacnet_scan_ip_returns_device() {
     let _lock = BACNET_PORT_LOCK.lock().unwrap();
     // client hardcodes BACNET_PORT — must bind same port; skip if busy
-    let Ok(sock) = UdpSocket::bind("127.0.0.1:47808") else { return };
+    let Ok(sock) = UdpSocket::bind("127.0.0.1:47808") else {
+        return;
+    };
     let _ = sock.set_read_timeout(Some(Duration::from_millis(500)));
     // scan_ip sends 1 Who-Is + 4 Read-Property = 5 UDP exchanges
     thread::spawn(move || serve_bacnet(&sock, 5));
@@ -105,7 +107,9 @@ fn loopback_bacnet_scan_ip_returns_device() {
 #[test]
 fn loopback_bacnet_read_object_name() {
     let _lock = BACNET_PORT_LOCK.lock().unwrap();
-    let Ok(sock) = UdpSocket::bind("127.0.0.1:47808") else { return };
+    let Ok(sock) = UdpSocket::bind("127.0.0.1:47808") else {
+        return;
+    };
     let _ = sock.set_read_timeout(Some(Duration::from_millis(500)));
     // scan_ip (5) + one explicit read_property call (1) = 6 exchanges
     thread::spawn(move || serve_bacnet(&sock, 6));
@@ -130,7 +134,9 @@ fn loopback_bacnet_read_object_name() {
 #[test]
 fn loopback_bacnet_no_response_returns_none() {
     let _lock = BACNET_PORT_LOCK.lock().unwrap();
-    let Ok(_sock) = UdpSocket::bind("127.0.0.1:47808") else { return };
+    let Ok(_sock) = UdpSocket::bind("127.0.0.1:47808") else {
+        return;
+    };
     // Port is bound but no mock thread spawned — client must time out cleanly.
     let result = scan_ip("127.0.0.1", 1);
     assert!(

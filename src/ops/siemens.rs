@@ -9,8 +9,8 @@
 
 use crate::model::{EndpointRecord, Level, Outcome};
 use crate::protocol::Protocol;
-use casket::vendors::siemens::scan::{self, SiemensDevice};
 use casket::vendors::siemens::s7comm;
+use casket::vendors::siemens::scan::{self, SiemensDevice};
 use std::collections::BTreeMap;
 
 /// Probe one host. `port = 0` means the registered default, which keeps the casket sweep
@@ -42,7 +42,11 @@ pub fn scan_ip(ip: &str, port: u16, timeout: u64) -> Outcome {
             hardware,
             firmware,
             cpu_state,
-            open_ports: if found { vec![effective_port] } else { Vec::new() },
+            open_ports: if found {
+                vec![effective_port]
+            } else {
+                Vec::new()
+            },
         }
     };
 
