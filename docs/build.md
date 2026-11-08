@@ -42,6 +42,13 @@ cargo fmt --all
 capture: the harness used to write whatever it saw and still print `golden ok`, which made it
 green on a tree with no fixtures. Re-capture only with `--update`, in the matching simulator state.
 
+The wrong simulator state and real drift print the same way, so the harness now probes
+127.0.0.1:21502, :33001 and :11202 before it runs a case and exits 2 naming the port:
+`nosim needs the simulators DOWN, but 127.0.0.1:21502 is listening`, or the `sim` mirror when a
+port is closed. Without that check, a leftover simulator from an earlier run reads as code drift
+(a siemens simulator on 11202 answered during a `nosim` run on 2026-11-08 and the only symptom was
+`DRIFT in siemens`). A `sim` run with a port closed used to fail on all six cases at once.
+
 Clippy is not the same binary here and on CI. The crate enables the pedantic group, so a stable
 toolchain bump turns new pedantic lints into CI failures that a local run on the older toolchain
 cannot see: 1.99 added `assert_is_empty`, which demands `assert_eq!`/`assert_ne!` against an empty
@@ -101,6 +108,13 @@ port could be read but never written. It now uses `device_fins_port`, the same a
 tag pane still treats a failed read as "no tags", so a controller that answers short now shows an
 empty DM row instead of a partial one; the error exists, the pane has nowhere to put it yet.
 
+Ignored tests drift, because no gate runs them. `omron_web_actions_go_through_ops_against_the_simulator`
+still expected the `DmRange` wording ("at least 1") for a zero-word read, but the route rejects the
+count itself before `ops` sees it, with `Invalid DM word count: 0 (must be 1–100)`. It failed on
+2026-11-08 the first time it was run with the command in Last verified, and now asserts the route's
+message. That command is `--lib`, not `--bin scadaver`, because the web unit tests live in the
+library after the `main.rs` split; the old form now runs zero tests and prints `ok`.
+
 `omron/cpu_run` used to send Monitor (0x02), which is what the old `fins::set_cpu_mode(.., true)`
 wrapper sends, while `scadaver set-cpu-mode run` sends Run (0x01). A browser click and a CLI
 command therefore put the controller in different states. The route now sends Run (0x01) and says
@@ -154,19 +168,22 @@ on a 2 GB machine, and kill it afterwards.
 2026-11-08, Windows 10, MSVC, cargo 1.98.0, casket v0.1.1 (`04d10467`):
 
 - `cargo check --all-targets`: clean
-- `cargo clippy --all-targets -- -D warnings`: exit 0
+- `cargo clippy --all-targets -- -D warnings`: exit 0 (clippy 0.1.98)
 - `cargo fmt --all -- --check`: clean
-- `cargo test -- --test-threads=1`: 360 passed, 0 failed, 35 ignored
-- `scripts/golden.sh nosim`: 3 cases, `golden ok`
-- `scripts/golden.sh sim`: 6 cases, `golden ok`
+- `cargo test -- --test-threads=1`: 315 passed, 0 failed, 35 ignored (350 discovered, so every
+  test either passed or is marked `#[ignore]`; `--list` was counted to check that, because a
+  result total that does not add up is how a test binary that runs nothing hides)
+- `scripts/golden.sh nosim`: 3 cases, `golden ok`, with every simulator port closed
+- `scripts/golden.sh sim`: 6 cases, `golden ok` (modbus 21502, dnp3 33001, siemens 11202)
 - `scripts/check-parity.sh`: red, 109 / 53 / 142 direct `casket::` lines (see above)
-- `cargo test --bin scadaver omron_web -- --ignored`: 2 passed (FINS simulator on 19600/19601)
+- `cargo test --lib omron_web -- --ignored`: 2 passed (FINS simulator on 19600/19601)
 
-Of those 360 runs, 46 are the same tests run twice. `src/lib.rs` exposes `model`, `ops`,
-`protocol` and `safety` for the integration tests, and `src/main.rs` declares the same files again
-as binary-private modules, so the lib test binary and the bin test binary both run them and the
-tree compiles twice. 314 unique tests. The fix is to make `main.rs` a thin `use scadaver::...`
-consumer, which is a build-time win, not a correctness one.
+`src/lib.rs` now owns every module and `src/main.rs` is a thin `use scadaver::...` consumer, so
+each module compiles once and each unit test runs once. Before that split the binary declared the
+same files again as private modules, so both test binaries ran them and the tree compiled twice:
+46 of the 361 runs were the same test twice. The suite is 46 runs shorter (315) with the same
+unique tests, and `cargo check --no-default-features --lib` still builds `model`, `ops`,
+`protocol` and `safety` on their own, because the CLI surfaces sit behind the `cli` feature.
 
 `src/ops/mod.rs` is the other thing that grew without a boundary. The address-range maps moved
 out to `src/ops/ranges.rs` on 2026-11-08 (tables, devices, parse and chunk helpers, 16 unit tests
@@ -178,6 +195,18 @@ without changing one byte of output. `ops` re-exports them, so callers still say
 writes bare LF. `scripts/golden.sh` strips CR from the case line and from both sides of the
 diff; without that, every case fails as a clap "unrecognized subcommand" error on the trailing
 carriage return, and every fixture diff is one long CRLF-to-LF change.
+
+The banner line carries the crate version, so `scripts/golden.sh` normalises that one token on
+both sides before diffing. Without it, a version bump rewrote all nine fixtures and buried the
+real drift: 1.7.2 to 1.8.0 did exactly that. The version is still covered, by
+`env!("CARGO_PKG_VERSION")` in the banner and by the release workflow, which takes the changelog
+body from `## [<tag without v>]`.
+
+Cutting a release: set `version` in `Cargo.toml`, add the matching `## [x.y.z] - <date>` section
+at the top of `CHANGELOG.md`, run the five gates, commit, then tag `vx.y.z` and push the branch
+before the tag. The release workflow builds four binaries and publishes the crate; the publish
+step needs the `CARGO_REGISTRY_TOKEN` secret, and without it the binaries still upload while the
+crate does not.
 
 Earlier runs on the 2 GB Pi are why this page says Windows: one `cargo check --lib` took 8m 00s
 there and two later attempts rebooted the machine. Superseded gate numbers belong in the commit

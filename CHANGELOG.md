@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.0] - 2026-11-08
+
+This release is the protocol layer. Every protocol now has one place that owns its codec and its
+socket call, and the three surfaces (CLI, TUI, web) render typed results instead of talking to the
+`casket` dependency themselves.
+
+### Added
+
+- `src/ops/`: one module per protocol (bacnet, beckhoff, dnp3, enip, ewon, iec104, mitsubishi,
+  modbus, mqtt, omron, opcua, phoenix, rockwell, schneider, siemens, snmp). Each returns a typed
+  `Outcome` plus errors that name the operation, and none of them print.
+- `src/ops/ranges.rs`: Modbus and SLMP address tables, range parsers and chunkers, with unit
+  coverage, so map operations take a validated range rather than two loose integers.
+- `src/protocol.rs`: one registry of protocol names, display names and default ports. It replaces
+  three private copies; the CLI's copy had eWON on port 80 while the registry said 1507.
+- `src/model.rs`: shared record types (`EndpointRecord`, `Outcome`, `ValueChange`) used by the
+  surfaces and by the import/database layer.
+- `src/safety.rs` and `docs/safe-mode.md`: safe mode, fragile-host refusal that states its reason,
+  and a mutating-verb table so writes need an explicit opt-in.
+- Web UI: rebuilt routes and static app, with per-protocol panels, an exploit runner and a live
+  tag reader.
+- `sim/`: Python simulators for thirteen protocols (beckhoff, dnp3, enip, ewon, fins, iec104,
+  modbus, mqtt, opcua, phoenix, siemens, slmp, snmp) plus a conformance writer that checks the
+  Rust client against an independent library rather than against itself.
+- `scripts/golden.sh` with `tests/golden/`: output fixtures per case, in a "simulators down" and a
+  "simulators up" mode, so CLI output cannot drift silently.
+- `scripts/check-parity.sh`: fails when a surface calls `casket` directly instead of going through
+  `ops`. The remaining count per file is the backlog, not a pass.
+- `docs/build.md`: build steps, which Python carries the simulator dependencies, the simulator
+  matrix, and the parity rule.
+
+### Changed
+
+- The TUI is 2,343 lines lighter (876 added, 3,219 removed) because its per-protocol socket code
+  moved into `ops`. `cli.rs` keeps the rendering and the cache writes.
+- eWON register and coil verbs keep port 0 when no port is given, so the Modbus codec chooses 502
+  instead of inheriting the IPCONF discovery port 1507 from the registry.
+- Web `omron/cpu_run` sends Run (0x01), which matches both its name and `set-cpu-mode run`. It used
+  to send Monitor (0x02), so a browser click and a CLI command left the controller in different
+  states.
+- `omron/read_dm` rejects a word count outside 1..=100 with a message naming the value and the
+  range, instead of clamping to 100 and reporting success.
+- FINS DM reads treat a short reply as an error that states how many words came back; a
+  non-numeric set token and a non-zero end code are errors rather than quiet successes.
+- `src/main.rs` is a thin consumer of the library, so each module compiles once and its unit tests
+  run once. 46 duplicate test runs are gone from a suite that otherwise stayed at the same count.
+
+### Fixed
+
+- eWON coil read takes the bit from the raw value instead of comparing the display string to `ON`.
+- Modbus and SLMP map chunking refuse an address range the parsers cannot produce instead of
+  clamping the address to `u16::MAX`.
+- Golden harness strips CR from case lines and from both diff sides, so `core.autocrlf=true` no
+  longer turns every case into a clap usage error.
+- Golden harness refuses to run in the wrong simulator state and names the closed or listening
+  port, instead of reporting code drift.
+- 35 emptiness assertions print the value on failure, which is what clippy 1.99's
+  `assert_is_empty` requires and what makes a CI failure say which records were present.
+- CI: the Mosquitto broker config lives in `conf.d` because AppArmor blocks `/tmp`; clippy runs on
+  all targets; formatting is a gate.
+
 ## [1.7.2] - 2026-08-29
 
 ### Added

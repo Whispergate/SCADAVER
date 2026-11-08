@@ -1,17 +1,7 @@
-mod cli;
-mod config;
-mod creds;
-mod db;
-mod display;
-mod import;
-mod model;
-mod mqtt_shell;
-mod net;
-mod ops;
-mod protocol;
-mod safety;
-mod tui;
-mod web;
+// The binary is a thin consumer of the library (`src/lib.rs` compiles every module
+// once), so a module is compiled and its unit tests run once, not once per target.
+
+use scadaver::{cli, config, creds, db, display, safety, tui, web};
 
 fn print_disclaimer() {
     eprintln!("SCADAVER \u{2014} authorized security research tool. For lab and CTF use only.");

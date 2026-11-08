@@ -22,6 +22,27 @@ case "$mode" in
 esac
 
 dir="tests/golden/$mode"
+
+# The three ports the cases point at. A `nosim` run with a simulator up is not a no-sim
+# run: the scan finds a device and the diff fails on the response, which reads exactly
+# like code drift (siemens on 11202 did that on 2026-11-08). Probe first and name the
+# port, so the next step is "stop the simulator", not "find the regression". A `sim` run
+# with a port closed fails the other way, on every case at once.
+sim_ports="21502 33001 11202"
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+for p in $sim_ports; do
+  if [ "$mode" = nosim ] && port_open "$p"; then
+    echo "nosim needs the simulators DOWN, but 127.0.0.1:$p is listening" >&2
+    echo "  stop it and re-run; the nosim fixtures were captured with every port closed" >&2
+    exit 2
+  fi
+  if [ "$mode" = sim ] && ! port_open "$p"; then
+    echo "sim needs the simulators UP, but 127.0.0.1:$p is closed" >&2
+    echo "  start the three simulators (docs/build.md, Simulators) and re-run" >&2
+    exit 2
+  fi
+done
+
 mkdir -p "$dir"
 drift=0
 missing=0
@@ -32,6 +53,13 @@ ran=0
 # healthy tree reads as fixture drift. Strip CR once here, before the name/args split, so
 # both modes see the same line.
 cr=$(printf '\r')
+
+# The banner carries the crate version, so a version bump rewrote every fixture and buried
+# the one real drift under nine cosmetic ones (v1.7.2 to v1.8.0 did exactly that). Normalise
+# that single token on both sides. The version itself is not untested by doing so: the binary
+# prints env!("CARGO_PKG_VERSION"), the tag is the version, and the release workflow fails if
+# the crate and the tag disagree.
+norm_version() { sed -E 's/Multi-Tool v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.]+)? /Multi-Tool vX /'; }
 
 while IFS= read -r line; do
   line=${line%"$cr"}
@@ -57,7 +85,7 @@ while IFS= read -r line; do
     echo "MISSING fixture $file" >&2
     echo "  capture it with '$0 $mode --update' and the simulators in the right state" >&2
     missing=1
-  elif ! diff -u <(tr -d "$cr" <"$file") <(printf '%s\n' "$out"); then
+  elif ! diff -u <(tr -d "$cr" <"$file" | norm_version) <(printf '%s\n' "$out" | norm_version); then
     echo "DRIFT in $name" >&2
     drift=1
   fi

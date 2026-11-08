@@ -4899,7 +4899,12 @@ mod tests {
 
         let empty = run_exploit("omron/read_dm", TEST_LOOPBACK_IP, 19601, "0", "0")
             .expect_err("a zero-word read is not a request");
-        assert!(format!("{empty}").contains("at least 1"), "got: {empty}");
+        // The route rejects the count itself (before ops::omron sees it), so this is the
+        // route's wording, not the DmRange message: it names the value and the range.
+        assert!(
+            format!("{empty}").contains("Invalid DM word count: 0"),
+            "got: {empty}"
+        );
 
         let past_the_end = run_exploit("omron/read_dm", TEST_LOOPBACK_IP, 19601, "65530", "32")
             .expect_err("DM65530 plus 32 words cannot exist");
