@@ -48,7 +48,7 @@ cli = [
 capture = ["casket/capture"]
 
 [dependencies]
-casket = { git = "https://github.com/Whispergate/casket", tag = "v0.1.1" }
+casket = { version = "0.1.1", git = "https://github.com/Whispergate/casket", tag = "v0.1.1" }
 anyhow = "1"
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
