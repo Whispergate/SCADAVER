@@ -58,8 +58,10 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
+      # --all-targets so integration tests are linted too: `cargo clippy` alone checks the lib
+      # and bins, and rustfmt-triggered lints in tests/ then only show up on a developer machine.
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       # Phase 4 flips this to blocking. It fails today by design: cli.rs, tui.rs and
       # web/routes.rs still call casket directly (127, 53 and 156 times).

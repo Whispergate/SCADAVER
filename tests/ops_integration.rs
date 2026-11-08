@@ -59,7 +59,7 @@ fn ops_modbus_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Modbus, "127.0.0.1", 21502, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -91,7 +91,7 @@ fn ops_enip_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Enip, "127.0.0.1", 34818, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -124,7 +124,7 @@ fn ops_siemens_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Siemens, "127.0.0.1", 11202, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -159,7 +159,7 @@ fn ops_beckhoff_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Beckhoff, "127.0.0.1", 38898, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -192,7 +192,7 @@ fn ops_bacnet_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Bacnet, "127.0.0.1", 47909, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -220,7 +220,7 @@ fn ops_mitsubishi_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Mitsubishi, "127.0.0.1", 25007, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -247,7 +247,7 @@ fn ops_omron_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Omron, "127.0.0.1", 29600, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -281,7 +281,7 @@ fn ops_iec104_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Iec104, "127.0.0.1", 22404, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -314,7 +314,7 @@ fn ops_phoenix_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Phoenix, "127.0.0.1", 21962, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -342,7 +342,7 @@ fn ops_ewon_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Ewon, "127.0.0.1", 18080, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -368,7 +368,7 @@ fn ops_snmp_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Snmp, "127.0.0.1", 21161, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -396,7 +396,7 @@ fn ops_mqtt_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Mqtt, "127.0.0.1", 21883, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -424,7 +424,7 @@ fn ops_dnp3_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Dnp3, "127.0.0.1", 33001, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -452,7 +452,7 @@ fn ops_opcua_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::OpcUa, "127.0.0.1", 44840, 10, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -487,7 +487,7 @@ fn ops_schneider_scan_high_port() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let result = scadaver::ops::scan_ip_report(Protocol::Schneider, "127.0.0.1", 21503, 5, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
 
     assert!(
@@ -585,7 +585,7 @@ fn ops_run_action_siemens_cpu_state() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let ok = scadaver::ops::run_action("siemens/0", "127.0.0.1", 11202, "", None, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
     assert!(
         ok,
@@ -611,7 +611,7 @@ fn ops_run_action_modbus_map_quick() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let ok = scadaver::ops::run_action("modbus/0", "127.0.0.1", 21502, "", None, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
     assert!(
         ok,
@@ -631,7 +631,7 @@ fn ops_run_action_snmp_sys_info() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let ok = scadaver::ops::run_action("snmp/0", "127.0.0.1", 21161, "", None, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
     assert!(
         ok,
@@ -659,7 +659,7 @@ fn ops_run_action_beckhoff_info() {
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
     let ok = scadaver::ops::run_action("beckhoff/0", "127.0.0.1", 38898, "", None, &|s| {
-        lines.lock().unwrap().push(s.to_string())
+        lines.lock().unwrap().push(s.to_string());
     });
     assert!(
         ok,
