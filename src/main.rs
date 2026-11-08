@@ -1,13 +1,15 @@
 mod cli;
 mod config;
-mod protocol;
 mod creds;
 mod db;
 mod display;
 mod import;
+mod model;
 mod mqtt_shell;
 mod net;
 mod ops;
+mod protocol;
+mod safety;
 mod tui;
 mod web;
 
@@ -28,6 +30,27 @@ fn main() {
     });
     display::set_byte_format(args.byte_format);
     let verbose = args.verbose;
+
+    if args.safe_mode {
+        safety::enable(
+            safety::DEFAULT_INTERVAL,
+            safety::fragile_hosts_from_file(&safety::default_fragile_path()),
+        );
+        if args.command.is_some() {
+            // Classify what the operator typed, not the parsed enum: the argv words are what the
+            // marker list is about, and it keeps the CLI types free of a Debug requirement.
+            let typed = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+            if let Err(reason) = safety::refuse_if_mutating(&typed) {
+                eprintln!("{reason}");
+                std::process::exit(2);
+            }
+        }
+        eprintln!(
+            "safe mode: {} ms between probes, {} fragile host(s) listed",
+            safety::DEFAULT_INTERVAL.as_millis(),
+            safety::fragile_count()
+        );
+    }
 
     let launch_tui = args.command.is_none() || matches!(args.command, Some(cli::Verb::Tui));
     let launch_web = matches!(args.command, Some(cli::Verb::Web { .. }));

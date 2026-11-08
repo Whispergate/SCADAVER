@@ -18,15 +18,12 @@ jobs:
         working-directory: scadaver
 
     steps:
-      # scadaver at ./scadaver, casket at ./casket  →  path = "../casket" resolves correctly
+      # The protocol library is pinned by tag in Cargo.toml, so there is no second checkout.
+      # A sibling checkout here is what hid the drift that turned main red in August: CI
+      # compiled against casket main while the working tree compiled against a local copy.
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v4
         with:
           path: scadaver
-
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v4
-        with:
-          repository: Whispergate/casket
-          path: casket
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # stable
         with:
@@ -43,8 +40,21 @@ jobs:
       - name: Build
         run: cargo build --verbose
 
+      # No `cargo fmt --check` yet: the tree has 339 formatting diffs. Land one mechanical
+      # `cargo fmt --all` commit first, then add the gate. Reviewing it with `git diff -w`
+      # keeps it honest.
       - name: Clippy
         run: cargo clippy -- -D warnings
+
+      # Phase 4 flips this to blocking. It fails today by design: cli.rs, tui.rs and
+      # web/routes.rs still call casket directly (127, 53 and 156 times).
+      # - name: No surface may call casket directly
+      #   run: bash scripts/check-parity.sh
+
+      # The ops_* suites spawn python simulators inside `cargo test`, so the interpreter has
+      # to be ready before the first test run, not after it.
+      - name: Install Python simulators and independent protocol clients
+        run: pip install -r sim/requirements.txt -r sim/requirements-test.txt
 
       - name: Test
         run: cargo test --verbose
@@ -53,9 +63,6 @@ jobs:
         env:
           TEST_MQTT_HOST: 127.0.0.1
         run: cargo test --test mqtt_integration
-
-      - name: Install Python simulators and independent protocol clients
-        run: pip install -r sim/requirements.txt -r sim/requirements-test.txt
 
       - name: Simulator provenance and independent protocol checks
         run: python3 -m unittest sim.test_run_all sim.test_protocol_conformance

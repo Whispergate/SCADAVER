@@ -1,6 +1,109 @@
 use std::time::Duration;
 
+use crate::model::{Level, Message, Outcome};
 use crate::protocol::Protocol;
+
+pub mod bacnet;
+pub mod beckhoff;
+pub mod dnp3;
+pub mod enip;
+pub mod ewon;
+pub mod iec104;
+pub mod mitsubishi;
+pub mod modbus;
+pub mod mqtt;
+pub mod omron;
+pub mod opcua;
+pub mod phoenix;
+pub mod rockwell;
+pub mod schneider;
+pub mod siemens;
+pub mod snmp;
+
+// ---------------------------------------------------------------------------
+// Typed entry points. A surface calls these and renders the result. Nothing
+// here prints, and nothing here returns a JSON blob whose keys each caller has
+// to re-derive.
+// ---------------------------------------------------------------------------
+
+/// Scan one endpoint and return typed records instead of printing them.
+///
+/// Protocols are migrated one at a time: Modbus is native, everything else still
+/// runs through the legacy reporting path below and comes back as messages with
+/// `records` empty. Phase 3 moves the surfaces onto this function; phase 2 empties
+/// the second arm protocol by protocol.
+#[must_use]
+// Phase 3 wires the surfaces to this; remove the attribute then.
+#[allow(dead_code)]
+pub fn scan_ip(protocol: Protocol, ip: &str, port: u16, timeout: u64) -> Outcome {
+    // Safe mode gates every probe, whichever surface asked for it.
+    if let Err(text) = crate::safety::pre_scan(protocol, ip) {
+        return Outcome {
+            records: Vec::new(),
+            messages: vec![Message {
+                level: Level::Error,
+                text,
+            }],
+        };
+    }
+    // Every variant is listed. A new protocol fails the build here instead of silently
+    // falling through to the legacy reporting path, which is how the old code drifted.
+    match protocol {
+        Protocol::Bacnet => bacnet::scan_ip(ip, port, timeout),
+        Protocol::Beckhoff => beckhoff::scan_ip(ip, port, timeout),
+        Protocol::Dnp3 => dnp3::scan_ip(ip, port, timeout),
+        Protocol::Enip => enip::scan_ip(ip, port, timeout),
+        Protocol::Ewon => ewon::scan_ip(ip, port, timeout),
+        Protocol::Iec104 => iec104::scan_ip(ip, port, timeout),
+        Protocol::Mitsubishi => mitsubishi::scan_ip(ip, port, timeout),
+        Protocol::Modbus => modbus::scan_ip(ip, port, timeout),
+        Protocol::Mqtt => mqtt::scan_ip(ip, port, timeout),
+        Protocol::Omron => omron::scan_ip(ip, port, timeout),
+        Protocol::OpcUa => opcua::scan_ip(ip, port, timeout),
+        Protocol::Phoenix => phoenix::scan_ip(ip, port, timeout),
+        Protocol::Rockwell => rockwell::scan_ip(ip, port, timeout),
+        Protocol::Schneider => schneider::scan_ip(ip, port, timeout),
+        Protocol::Siemens => siemens::scan_ip(ip, port, timeout),
+        Protocol::Snmp => snmp::scan_ip(ip, port, timeout),
+    }
+}
+
+/// Wrap the reporting path so callers get an `Outcome` even for a protocol that has
+/// not been migrated yet. The `[+]`/`[!]`/`[-]` prefixes are decoded here, once, and
+/// never reach a surface.
+// Phase 3 wires the surfaces to this; remove the attribute then.
+#[allow(dead_code)]
+fn legacy_scan(protocol: Protocol, ip: &str, port: u16, timeout: u64) -> Outcome {
+    // `Fn`, not `FnMut`, so the collector needs interior mutability. That constraint is
+    // exactly why every surface wrote its own collector instead of reusing one.
+    let lines = std::cell::RefCell::new(Vec::new());
+    let _ = scan_ip_report(protocol, ip, port, timeout, &|line: &str| {
+        lines.borrow_mut().push(line.to_string());
+    });
+
+    let mut outcome = Outcome::default();
+    for line in lines.into_inner() {
+        outcome.messages.push(Message {
+            level: level_of(&line),
+            text: line,
+        });
+    }
+    outcome
+}
+
+// Phase 3 wires the surfaces to this; remove the attribute then.
+#[allow(dead_code)]
+fn level_of(line: &str) -> Level {
+    if line.starts_with("[+]") {
+        Level::Success
+    } else if line.starts_with("[!]") {
+        Level::Warn
+    } else if line.starts_with("[-]") {
+        Level::Error
+    } else {
+        Level::Info
+    }
+}
 
 // Output-line prefixes understood by all three surfaces (CLI, TUI, Web).
 // CLI: strip prefix → display::print_success/warn/error / println!
@@ -17,7 +120,7 @@ use crate::protocol::Protocol;
 /// device did not respond or an error occurred (error already emitted via
 /// `out`). Caching and display formatting are the caller's responsibility.
 #[allow(clippy::too_many_lines)]
-pub fn scan_ip(
+pub fn scan_ip_report(
     protocol: Protocol,
     ip: &str,
     port: u16,
@@ -48,7 +151,9 @@ pub fn scan_ip(
                 out("[!] No eWON response.");
                 return None;
             }
-            let effective_port = if port == 0 { 67 } else { port };
+            // 67 was the old table's value (BOOTP); casket discovers on IPCONF 1507. Keep the
+            // legacy arm truthful until phase 3 retires it.
+            let effective_port = if port == 0 { 1507 } else { port };
             out(&format!("[+] Found {} eWON response(s).", devs.len()));
             Some(serde_json::json!({
                 "vendor": "ewon",

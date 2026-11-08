@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Retry without cutting a new tag. The v1.7.2 run sat queued for 24 hours and was
+  # cancelled, which looks like a build failure and is not one.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,6 +16,7 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       tag: ${{ github.ref_name }}
     steps:
@@ -45,6 +49,7 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: create-release
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
       matrix:
         include:

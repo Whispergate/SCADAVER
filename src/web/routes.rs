@@ -1499,9 +1499,6 @@ fn broadcast_scan_on_interface(
     }
 
     if scan_dnp3_tcp {
-        use casket::vendors::dnp3::client;
-        use std::time::Duration;
-
         let port = target_port.expect("DNP3 scan requires an explicit port");
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
         for batch in hosts.chunks(16) {
@@ -1510,22 +1507,34 @@ fn broadcast_scan_on_interface(
                 .map(|ip| {
                     let ip = ip.clone();
                     std::thread::spawn(move || {
-                        client::detect_with_port(&ip, port, Duration::from_secs(3))
-                            .map(|device| (ip, device))
+                        // Typed path: link-status detection plus the group 0
+                        // attribute read, behind the shared safety gate.
+                        crate::ops::scan_ip(crate::protocol::Protocol::Dnp3, &ip, port, timeout)
+                            .records
+                            .into_iter()
+                            .next()
                     })
                 })
                 .collect();
             for handle in handles {
-                let Some((ip, device)) = handle.join().ok().flatten() else {
+                let Some(record) = handle.join().ok().flatten() else {
                     continue;
                 };
+                // The record carries the outstation as 0x-prefixed text, and the
+                // web contract has always been a JSON number, so convert back.
+                let outstation_addr = record
+                    .fields
+                    .get("outstation")
+                    .and_then(Value::as_str)
+                    .and_then(|raw| u16::from_str_radix(raw.trim_start_matches("0x"), 16).ok())
+                    .map_or(Value::Null, |addr| json!(addr));
                 devices.push(json!({
-                    "ip": ip,
+                    "ip": record.ip,
                     "vendor": "dnp3",
                     "protocol": "dnp3_tcp",
-                    "port": port,
-                    "dnp3_port": port,
-                    "outstation_addr": device.outstation_addr,
+                    "port": record.port,
+                    "dnp3_port": record.port,
+                    "outstation_addr": outstation_addr,
                     "discovery_transport": "tcp_link_status",
                     "interface": iface.ip,
                     "scan_scope": scan_scope,
@@ -1645,8 +1654,6 @@ fn broadcast_scan_on_interface(
     }
 
     if scan_siemens_tcp {
-        use casket::vendors::siemens::s7comm;
-
         let port = target_port.expect("Siemens S7 scan requires an explicit port");
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
 
@@ -1656,34 +1663,31 @@ fn broadcast_scan_on_interface(
                 .map(|ip| {
                     let ip = ip.clone();
                     std::thread::spawn(move || {
-                        // `get_device_snapshot` performs only COTP/S7Comm setup
-                        // plus SZL identity/state reads. It is deliberately used
-                        // directly so an explicit port does not trigger an
-                        // additional scan of the default Siemens ports.
-                        let (hardware, firmware, cpu_state) =
-                            s7comm::get_device_snapshot(&ip, port, timeout);
-                        if hardware.is_none() && firmware.is_none() && cpu_state == "Unknown" {
-                            None
-                        } else {
-                            Some((ip, hardware, firmware, cpu_state))
-                        }
+                        // Typed path. `ops::siemens` keeps the explicit-port case to a
+                        // single COTP/S7Comm conversation, so converting here does not
+                        // reintroduce the default-port sweep the old arm avoided.
+                        crate::ops::scan_ip(crate::protocol::Protocol::Siemens, &ip, port, timeout)
+                            .records
+                            .into_iter()
+                            .next()
                     })
                 })
                 .collect();
 
             for handle in handles {
-                let Some((ip, hardware, firmware, cpu_state)) = handle.join().ok().flatten() else {
+                let Some(record) = handle.join().ok().flatten() else {
                     continue;
                 };
+                let field = |key: &str| record.fields.get(key).cloned().unwrap_or(Value::Null);
                 devices.push(json!({
-                    "ip": ip,
+                    "ip": record.ip,
                     "vendor": "siemens",
                     "protocol": "s7comm",
-                    "port": port,
-                    "s7_port": port,
-                    "hardware": hardware,
-                    "firmware": firmware,
-                    "cpu_state": cpu_state,
+                    "port": record.port,
+                    "s7_port": record.port,
+                    "hardware": field("hardware"),
+                    "firmware": field("firmware"),
+                    "cpu_state": field("cpu_state"),
                     "discovery_transport": "tcp",
                     "interface": iface.ip,
                     "scan_scope": scan_scope,
@@ -1693,8 +1697,6 @@ fn broadcast_scan_on_interface(
     }
 
     if scan_omron_tcp {
-        use casket::vendors::omron::fins;
-
         let port = target_port.expect("Omron FINS scan requires an explicit port");
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
 
@@ -1704,26 +1706,31 @@ fn broadcast_scan_on_interface(
                 .map(|ip| {
                     let ip = ip.clone();
                     std::thread::spawn(move || {
-                        fins::get_device_info_tcp(&ip, port)
-                            .ok()
-                            .map(|device| (ip, device))
+                        // Typed path: the same read-only FINS identity probe the
+                        // handler used to call directly, plus the shared safety
+                        // gate every probe now goes through.
+                        crate::ops::scan_ip(crate::protocol::Protocol::Omron, &ip, port, timeout)
+                            .records
+                            .into_iter()
+                            .next()
                     })
                 })
                 .collect();
 
             for handle in handles {
-                let Some((ip, device)) = handle.join().ok().flatten() else {
+                let Some(record) = handle.join().ok().flatten() else {
                     continue;
                 };
+                let field = |key: &str| record.fields.get(key).cloned().unwrap_or(Value::Null);
                 devices.push(json!({
-                    "ip": ip,
+                    "ip": record.ip,
                     "vendor": "omron",
                     "protocol": "fins_tcp",
-                    "port": port,
-                    "fins_port": port,
-                    "node": device.node_addr,
-                    "model": device.model,
-                    "version": device.version,
+                    "port": record.port,
+                    "fins_port": record.port,
+                    "node": field("node"),
+                    "model": field("model"),
+                    "version": field("version"),
                     "discovery_transport": "tcp_identity",
                     "interface": iface.ip,
                     "scan_scope": scan_scope,
@@ -1783,8 +1790,6 @@ fn broadcast_scan_on_interface(
     }
 
     if scan_iec104_tcp {
-        use casket::vendors::iec104::client;
-
         let port = target_port.expect("IEC-104 scan requires an explicit port");
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
         for batch in hosts.chunks(16) {
@@ -1792,19 +1797,26 @@ fn broadcast_scan_on_interface(
                 .iter()
                 .map(|ip| {
                     let ip = ip.clone();
-                    std::thread::spawn(move || client::probe(&ip, port).then_some(ip))
+                    std::thread::spawn(move || {
+                        // TESTFR activation/confirmation only, as before; the record
+                        // carries no protocol fields of its own.
+                        crate::ops::scan_ip(crate::protocol::Protocol::Iec104, &ip, port, timeout)
+                            .records
+                            .into_iter()
+                            .next()
+                    })
                 })
                 .collect();
             for handle in handles {
-                let Some(ip) = handle.join().ok().flatten() else {
+                let Some(record) = handle.join().ok().flatten() else {
                     continue;
                 };
                 devices.push(json!({
-                    "ip": ip,
+                    "ip": record.ip,
                     "vendor": "iec104",
                     "protocol": "iec60870_5_104",
-                    "port": port,
-                    "iec104_port": port,
+                    "port": record.port,
+                    "iec104_port": record.port,
                     "discovery_transport": "tcp_testfr",
                     "interface": iface.ip,
                     "scan_scope": scan_scope,
@@ -1856,8 +1868,6 @@ fn broadcast_scan_on_interface(
     }
 
     if scan_mqtt_tcp {
-        use casket::vendors::mqtt::client;
-
         let port = target_port.expect("MQTT scan requires an explicit port");
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
         for batch in hosts.chunks(16) {
@@ -1865,22 +1875,30 @@ fn broadcast_scan_on_interface(
                 .iter()
                 .map(|ip| {
                     let ip = ip.clone();
-                    std::thread::spawn(move || client::probe(&ip, port).map(|device| (ip, device)))
+                    std::thread::spawn(move || {
+                        // Anonymous CONNECT plus $SYS/Sparkplug recon; `probe` owns
+                        // its own timing, so the scan timeout is advisory here.
+                        crate::ops::scan_ip(crate::protocol::Protocol::Mqtt, &ip, port, timeout)
+                            .records
+                            .into_iter()
+                            .next()
+                    })
                 })
                 .collect();
             for handle in handles {
-                let Some((ip, device)) = handle.join().ok().flatten() else {
+                let Some(record) = handle.join().ok().flatten() else {
                     continue;
                 };
+                let field = |key: &str| record.fields.get(key).cloned().unwrap_or(Value::Null);
                 devices.push(json!({
-                    "ip": ip,
+                    "ip": record.ip,
                     "vendor": "mqtt",
                     "protocol": "mqtt_3_1_1",
-                    "port": port,
-                    "mqtt_port": port,
-                    "anonymous": device.anonymous,
-                    "sparkplug": device.sparkplug,
-                    "broker_info": device.broker_info,
+                    "port": record.port,
+                    "mqtt_port": record.port,
+                    "anonymous": field("anonymous"),
+                    "sparkplug": field("sparkplug"),
+                    "broker_info": field("broker_info"),
                     "discovery_transport": "tcp_connect",
                     "interface": iface.ip,
                     "scan_scope": scan_scope,
@@ -2786,9 +2804,10 @@ async fn api_exploit_inner(
     let password = req.password.clone();
     let port = req.port;
 
-    let result =
-        tokio::task::spawn_blocking(move || run_exploit(&exploit_id, &ip, port, &username, &password))
-            .await;
+    let result = tokio::task::spawn_blocking(move || {
+        run_exploit(&exploit_id, &ip, port, &username, &password)
+    })
+    .await;
 
     match result {
         Ok(Ok(output)) => {
@@ -2847,9 +2866,21 @@ fn web_exploit_is_allowed(id: &str) -> bool {
 }
 
 #[allow(clippy::too_many_lines)] // single-responsibility match dispatch over many exploit types
-fn run_exploit(id: &str, ip: &str, port: u16, username: &str, password: &str) -> anyhow::Result<String> {
+fn run_exploit(
+    id: &str,
+    ip: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+) -> anyhow::Result<String> {
     // Use the caller-supplied port when non-zero; otherwise fall back to the protocol default.
-    let eff_port = |def: u16| -> u16 { if port == 0 { def } else { port } };
+    let eff_port = |def: u16| -> u16 {
+        if port == 0 {
+            def
+        } else {
+            port
+        }
+    };
     match id {
         "ewon/creds" => {
             let users = casket::vendors::ewon::exploit::exploit(ip, 0, "adm", 20);
@@ -3422,7 +3453,8 @@ fn run_exploit(id: &str, ip: &str, port: u16, username: &str, password: &str) ->
                 .and_then(|s| s.trim().parse().ok())
                 .unwrap_or(16)
                 .min(200);
-            let data = s7comm::read_data_block(ip, db, offset, length, eff_port(102), 5, pw.as_deref())?;
+            let data =
+                s7comm::read_data_block(ip, db, offset, length, eff_port(102), 5, pw.as_deref())?;
             let hex: String = data.iter().fold(String::new(), |mut s, b| {
                 let _ = write!(s, "{b:02x} ");
                 s
@@ -3455,7 +3487,8 @@ fn run_exploit(id: &str, ip: &str, port: u16, username: &str, password: &str) ->
                 .step_by(2)
                 .filter_map(|i| u8::from_str_radix(&hex_str[i..i + 2], 16).ok())
                 .collect();
-            let ok = s7comm::write_data_block(ip, db, offset, &data, eff_port(102), 5, pw.as_deref())?;
+            let ok =
+                s7comm::write_data_block(ip, db, offset, &data, eff_port(102), 5, pw.as_deref())?;
             if ok {
                 Ok(format!(
                     "Wrote {} bytes to DB{db} offset {offset} on {ip}.",
@@ -5183,6 +5216,14 @@ mod tests {
         assert_eq!(device["ip"], TEST_LOOPBACK_IP);
         assert_eq!(device["dnp3_port"], 33001);
         assert_eq!(device["discovery_transport"], "tcp_link_status");
+        // The typed record stores the outstation as 0x text, so this pins the
+        // conversion back to the number the web contract has always emitted.
+        assert!(
+            device["outstation_addr"].is_number(),
+            "outstation_addr must stay a JSON number, got {}",
+            device["outstation_addr"]
+        );
+        assert_eq!(device["outstation_addr"], 10);
         Ok(())
     }
 

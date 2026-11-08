@@ -51,7 +51,7 @@ fn ops_modbus_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Modbus,
         "127.0.0.1",
         21502,
@@ -77,7 +77,7 @@ fn ops_enip_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Enip,
         "127.0.0.1",
         34818,
@@ -101,7 +101,7 @@ fn ops_siemens_scan_high_port() {
     std::thread::sleep(Duration::from_millis(500));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Siemens,
         "127.0.0.1",
         11202,
@@ -125,7 +125,7 @@ fn ops_beckhoff_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Beckhoff,
         "127.0.0.1",
         38898,
@@ -149,7 +149,7 @@ fn ops_bacnet_scan_high_port() {
     std::thread::sleep(Duration::from_millis(600)); // UDP sim needs extra time
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Bacnet,
         "127.0.0.1",
         47909,
@@ -174,7 +174,7 @@ fn ops_mitsubishi_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Mitsubishi,
         "127.0.0.1",
         25007,
@@ -198,7 +198,7 @@ fn ops_omron_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Omron,
         "127.0.0.1",
         29600,
@@ -223,7 +223,7 @@ fn ops_iec104_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Iec104,
         "127.0.0.1",
         22404,
@@ -247,7 +247,7 @@ fn ops_phoenix_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Phoenix,
         "127.0.0.1",
         21962,
@@ -272,7 +272,7 @@ fn ops_ewon_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Ewon,
         "127.0.0.1",
         18080,
@@ -295,7 +295,7 @@ fn ops_snmp_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Snmp,
         "127.0.0.1",
         21161,
@@ -320,7 +320,7 @@ fn ops_mqtt_scan_high_port() {
     std::thread::sleep(Duration::from_millis(600));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Mqtt,
         "127.0.0.1",
         21883,
@@ -345,7 +345,7 @@ fn ops_dnp3_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Dnp3,
         "127.0.0.1",
         33001,
@@ -370,7 +370,7 @@ fn ops_opcua_scan_high_port() {
     std::thread::sleep(Duration::from_millis(1200)); // asyncua startup is slow
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::OpcUa,
         "127.0.0.1",
         44840,
@@ -395,7 +395,7 @@ fn ops_schneider_scan_high_port() {
     std::thread::sleep(Duration::from_millis(400));
 
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let result = scadaver::ops::scan_ip(
+    let result = scadaver::ops::scan_ip_report(
         Protocol::Schneider,
         "127.0.0.1",
         21503,

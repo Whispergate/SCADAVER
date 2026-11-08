@@ -57,6 +57,10 @@ cargo build --release
 
 The binary is written to `target/release/scadaver` or `target/release/scadaver.exe`.
 
+The protocol library is pulled from GitHub at a pinned tag, so you do not need a second
+repository. If you are working on `casket` itself, add an untracked `.cargo/config.toml`
+with a `[patch]` pointing at your local checkout. See `docs/build.md`.
+
 ## Quick Start
 
 Start with read-only discovery and enumeration against an authorized lab target:

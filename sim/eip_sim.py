@@ -627,12 +627,14 @@ LIST_IDENTITY_RESP = _build_list_identity_resp()
 REG_SESSION_RESP = _build_reg_session_resp()
 
 
-def _udp_list_identity_worker(port: int) -> None:
+def _udp_list_identity_worker(host: str, port: int) -> None:
     import socket as _socket
     resp = _build_list_identity_resp()
     with _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM) as sock:
         sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
-        sock.bind(("0.0.0.0", port))
+        # Bind the host the caller asked for. 0.0.0.0:44818 would answer real CIP traffic
+        # from the LAN while `cargo test` runs.
+        sock.bind((host, port))
         sock.settimeout(1.0)
         while True:
             try:
@@ -708,7 +710,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     threading.Thread(
-        target=_udp_list_identity_worker, args=(args.udp_port,), daemon=True
+        target=_udp_list_identity_worker, args=(args.host, args.udp_port), daemon=True
     ).start()
     with socketserver.ThreadingTCPServer((args.host, args.port), EipHandler) as srv:
         srv.daemon_threads = True

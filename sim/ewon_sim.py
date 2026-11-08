@@ -69,12 +69,13 @@ def _build_ipconf_response() -> bytes:
     return bytes(resp)
 
 
-def _udp_ipconf_worker(port: int) -> None:
+def _udp_ipconf_worker(host: str, port: int) -> None:
     import socket as _socket
     resp = _build_ipconf_response()
     with _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM) as sock:
         sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
-        sock.bind(("0.0.0.0", port))
+        # Bind the host the caller asked for; see eip_sim.py for why 0.0.0.0 is wrong here.
+        sock.bind((host, port))
         sock.settimeout(1.0)
         while True:
             try:
@@ -177,7 +178,7 @@ async def main() -> None:
         raise ValueError("--modbus-port must be between 1 and 65535")
 
     threading.Thread(
-        target=_udp_ipconf_worker, args=(args.udp_port,), daemon=True
+        target=_udp_ipconf_worker, args=(args.host, args.udp_port), daemon=True
     ).start()
 
     srv = http.server.ThreadingHTTPServer((args.host, port), EwonHandler)

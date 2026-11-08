@@ -62,6 +62,10 @@ pub struct Args {
     #[arg(long, global = true)]
     pub confirm_stale: bool,
 
+    /// OT safe mode: delay between probes, refuse mutating verbs, honour the fragile-hosts list
+    #[arg(long, global = true)]
+    pub safe_mode: bool,
+
     #[command(subcommand)]
     pub command: Option<Verb>,
 }
@@ -597,13 +601,16 @@ pub fn run(args: Args, cfg: &crate::config::ConfigFile) -> Result<()> {
         }
         Verb::Get { noun } => {
             let ip = require_ip(args.ip.as_ref(), "get")?;
+            // `get info` asks the device a question, so it probes even when a saved record
+            // exists. Cache-first here is how a five-week-old identity answered as if live.
+            let live = args.live || args.no_cache || matches!(noun, GetNoun::Info);
             run_get(
                 ip,
                 args.port,
                 timeout,
                 args.protocol,
                 noun,
-                args.live || args.no_cache,
+                live,
                 !args.no_cache,
             )
             .with_context(|| diagnostic_context("get", args.protocol, Some(ip), args.port, timeout))
@@ -1121,7 +1128,7 @@ fn emit_output(s: &str) {
 
 #[allow(clippy::unnecessary_wraps)]
 fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol, cache: bool) -> Result<()> {
-    if let Some(fields) = crate::ops::scan_ip(proto, ip, port, timeout, &emit_output) {
+    if let Some(fields) = crate::ops::scan_ip_report(proto, ip, port, timeout, &emit_output) {
         if cache {
             let vendor = fields["vendor"].as_str().unwrap_or("");
             let p = u16::try_from(fields["port"].as_u64().unwrap_or(0)).unwrap_or(0);
@@ -2521,7 +2528,7 @@ fn get_state(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resu
             let fins_port = if port == 0 { 9600 } else { port };
             match fins::get_cpu_state(ip, fins_port, 0) {
                 Ok(state) => crate::display::print_success(&format!("CPU state: {state}")),
-                Err(e) => crate::display::print_error(&format!("{e}")),
+                Err(e) => crate::display::print_error(&format!("omron {ip}:{fins_port}: {e}")),
             }
         }
         Some(Protocol::Beckhoff) => {
@@ -2533,7 +2540,7 @@ fn get_state(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resu
             let local_netid = casket::vendors::beckhoff::ads::build_local_netid(&local_ip_for(ip));
             let state = scan::get_state(&dev, &local_netid, port);
             if state == "ERROR" {
-                bail!("Could not read TwinCAT state.");
+                bail!("beckhoff {ip}:{port}: could not read TwinCAT state.");
             }
             crate::display::print_success(&format!("TwinCAT state: {state}"));
         }
