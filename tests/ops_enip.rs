@@ -93,7 +93,11 @@ fn enip_with_nothing_listening_is_a_message_not_a_panic() {
     // The List Identity probe has no port argument, so the silent case has to be an unroutable
     // address (RFC 5737 TEST-NET-1) rather than an unused port.
     let outcome = scadaver::ops::enip::scan_ip("192.0.2.1", 0, 1);
-    assert!(outcome.records.is_empty());
+    assert!(
+        outcome.records.is_empty(),
+        "expected empty, got {:?}",
+        outcome.records
+    );
     assert!(outcome
         .messages
         .iter()

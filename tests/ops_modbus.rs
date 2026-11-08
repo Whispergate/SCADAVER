@@ -80,7 +80,11 @@ fn a_scan_that_finds_nothing_is_a_message_not_a_panic() {
     // Nothing listens on port 1, and the call must still return an Outcome.
     let outcome = scadaver::ops::scan_ip(Protocol::Modbus, "127.0.0.1", 1, 1);
 
-    assert!(outcome.records.is_empty());
+    assert!(
+        outcome.records.is_empty(),
+        "expected empty, got {:?}",
+        outcome.records
+    );
     assert!(
         outcome
             .messages

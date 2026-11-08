@@ -958,7 +958,16 @@ mod tests {
         let second = db
             .upsert_data_points("127.0.0.1", "modbus", &[("HR40001", Some("UINT16"), "0")])
             .unwrap();
-        assert!(second.value_changed.is_empty());
+        assert!(
+            second.value_changed.is_empty(),
+            "expected no value changes, got {} change(s): {:?}",
+            second.value_changed.len(),
+            second
+                .value_changed
+                .iter()
+                .map(|c| &c.address)
+                .collect::<Vec<_>>()
+        );
 
         let stored = db.load_data_points("127.0.0.1", "modbus").unwrap();
         assert_eq!(Some("0"), stored[0].last_value.as_deref());
@@ -1104,8 +1113,16 @@ mod tests {
         db.upsert_data_points("127.0.0.1", "modbus", &[("hr:40001", Some("UINT16"), "42")])
             .unwrap();
         db.delete_device(host.id).unwrap();
-        assert!(db.load_devices().unwrap().is_empty());
-        assert!(db.load_protocols("127.0.0.1").unwrap().is_empty());
+        assert!(
+            db.load_devices().unwrap().is_empty(),
+            "expected empty, got {:?}",
+            db.load_devices().unwrap()
+        );
+        assert!(
+            db.load_protocols("127.0.0.1").unwrap().is_empty(),
+            "expected empty, got {:?}",
+            db.load_protocols("127.0.0.1").unwrap()
+        );
         assert!(db
             .load_tags_for_protocol("127.0.0.1", "modbus")
             .unwrap()

@@ -85,7 +85,11 @@ fn mqtt_scan_returns_typed_records() {
 #[test]
 fn mqtt_with_nothing_listening_is_a_message_not_a_panic() {
     let outcome = scadaver::ops::scan_ip(Protocol::Mqtt, "127.0.0.1", 1, 1);
-    assert!(outcome.records.is_empty());
+    assert!(
+        outcome.records.is_empty(),
+        "expected empty, got {:?}",
+        outcome.records
+    );
     assert!(outcome
         .messages
         .iter()

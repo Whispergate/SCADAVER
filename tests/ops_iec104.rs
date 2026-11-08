@@ -61,13 +61,21 @@ fn iec104_scan_reports_a_link_test_response() {
     assert_eq!(record.protocol, Protocol::Iec104);
     assert_eq!(record.port, PORT);
     assert_eq!(record.vendor, "iec104");
-    assert!(record.fields.is_empty());
+    assert!(
+        record.fields.is_empty(),
+        "expected empty, got {:?}",
+        record.fields
+    );
 }
 
 #[test]
 fn iec104_with_nothing_listening_is_a_message_not_a_panic() {
     let outcome = scadaver::ops::scan_ip(Protocol::Iec104, "127.0.0.1", 1, 1);
-    assert!(outcome.records.is_empty());
+    assert!(
+        outcome.records.is_empty(),
+        "expected empty, got {:?}",
+        outcome.records
+    );
     assert!(outcome
         .messages
         .iter()

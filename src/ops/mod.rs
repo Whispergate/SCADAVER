@@ -15,6 +15,7 @@ pub mod mqtt;
 pub mod omron;
 pub mod opcua;
 pub mod phoenix;
+pub mod ranges;
 pub mod rockwell;
 pub mod schneider;
 pub mod siemens;
@@ -682,7 +683,13 @@ pub fn scan_broadcast(
 // ─── Shared exploit layer ─────────────────────────────────────────────────────
 // All functions below are DB-free and surface-agnostic.
 
-use casket::core::network::{local_ip_for, NetworkInterface};
+// Re-exported so a surface gets the route-probing helper from the seam it is allowed to
+// call, instead of importing casket itself for one function. cli.rs used to keep a private
+// copy, and drift from casket's version was invisible until a netid looked wrong.
+// Helpers only: never re-export casket types through `ops`, because that is how the
+// direct-`casket::` parity count becomes decoration instead of a measurement.
+pub use casket::core::network::local_ip_for;
+use casket::core::network::NetworkInterface;
 
 // ─── Format helpers ───────────────────────────────────────────────────────────
 
@@ -821,392 +828,12 @@ fn fmt_leaf_row(member_name: &str, value: &str, pad: usize) -> String {
     format!("           {member_name:<pad$}  {value}")
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── Range maps ───────────────────────────────────────────────────────────────
+// MODBUS_ADDRESS_SPACE, ModbusTable, ModbusMapRange, SLMP_*, SlmpDeviceKind,
+// SlmpMapRange and the parse/chunk helpers moved to `ops::ranges`. Re-exported so
+// every caller keeps using `ops::<name>` and only one module owns the parsing.
 
-pub const MODBUS_ADDRESS_SPACE: u32 = 65_536;
-pub const MODBUS_WORD_CHUNK: u16 = 125;
-pub const MODBUS_BIT_CHUNK: u16 = 2000;
-pub const MODBUS_MAP_VALUE_OUTPUT_CAP: usize = 64;
-pub const MODBUS_MAP_ERROR_OUTPUT_CAP: usize = 20;
-pub const SLMP_ADDRESS_SPACE: u32 = 16_777_216;
-pub const SLMP_WORD_CHUNK: u16 = 960;
-pub const SLMP_BIT_CHUNK: u16 = 3584;
-
-// ─── ModbusTable ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModbusTable {
-    Holding,
-    Input,
-    Coil,
-    Discrete,
-}
-
-impl ModbusTable {
-    pub fn parse(input: &str) -> Option<Self> {
-        match input.trim().to_ascii_lowercase().as_str() {
-            "hr" | "holding" | "holding-register" | "holding-registers" | "hreg" | "hregs"
-            | "register" | "registers" => Some(Self::Holding),
-            "ir" | "input" | "input-register" | "input-registers" | "ireg" | "iregs" => {
-                Some(Self::Input)
-            }
-            "co" | "coil" | "coils" => Some(Self::Coil),
-            "di" | "discrete" | "discrete-input" | "discrete-inputs" | "input-bit"
-            | "input-bits" => Some(Self::Discrete),
-            _ => None,
-        }
-    }
-
-    pub fn short_name(self) -> &'static str {
-        match self {
-            Self::Holding => "HR",
-            Self::Input => "IR",
-            Self::Coil => "CO",
-            Self::Discrete => "DI",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Holding => "holding registers",
-            Self::Input => "input registers",
-            Self::Coil => "coils",
-            Self::Discrete => "discrete inputs",
-        }
-    }
-
-    pub fn point_type(self) -> &'static str {
-        match self {
-            Self::Holding | Self::Input => "UINT16",
-            Self::Coil | Self::Discrete => "BOOL",
-        }
-    }
-
-    pub fn chunk_limit(self) -> u16 {
-        match self {
-            Self::Holding | Self::Input => MODBUS_WORD_CHUNK,
-            Self::Coil | Self::Discrete => MODBUS_BIT_CHUNK,
-        }
-    }
-
-    pub fn display_addr(self, address: u32) -> u32 {
-        let offset = match self {
-            Self::Holding => 40001,
-            Self::Input => 30001,
-            Self::Coil => 1,
-            Self::Discrete => 10001,
-        };
-        address + offset
-    }
-
-    pub fn point_key(self, address: u32) -> String {
-        format!("{}{}", self.short_name(), self.display_addr(address))
-    }
-}
-
-// ─── ModbusMapRange ───────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ModbusMapRange {
-    pub table: ModbusTable,
-    pub start: u32,
-    pub count: u32,
-}
-
-impl ModbusMapRange {
-    pub fn new(table: ModbusTable, start: u32, count: u32) -> Self {
-        Self {
-            table,
-            start,
-            count,
-        }
-    }
-
-    pub fn display_start(self) -> u32 {
-        self.table.display_addr(self.start)
-    }
-
-    pub fn display_end(self) -> u32 {
-        self.table.display_addr(self.start + self.count - 1)
-    }
-}
-
-pub fn quick_modbus_ranges() -> Vec<ModbusMapRange> {
-    vec![
-        ModbusMapRange::new(ModbusTable::Holding, 0, 32),
-        ModbusMapRange::new(ModbusTable::Input, 0, 32),
-        ModbusMapRange::new(ModbusTable::Coil, 0, 64),
-        ModbusMapRange::new(ModbusTable::Discrete, 0, 64),
-    ]
-}
-
-pub fn common_modbus_ranges() -> Vec<ModbusMapRange> {
-    vec![
-        ModbusMapRange::new(ModbusTable::Holding, 0, 1000),
-        ModbusMapRange::new(ModbusTable::Input, 0, 1000),
-        ModbusMapRange::new(ModbusTable::Coil, 0, 2000),
-        ModbusMapRange::new(ModbusTable::Discrete, 0, 2000),
-    ]
-}
-
-pub fn all_modbus_ranges() -> Vec<ModbusMapRange> {
-    vec![
-        ModbusMapRange::new(ModbusTable::Holding, 0, MODBUS_ADDRESS_SPACE),
-        ModbusMapRange::new(ModbusTable::Input, 0, MODBUS_ADDRESS_SPACE),
-        ModbusMapRange::new(ModbusTable::Coil, 0, MODBUS_ADDRESS_SPACE),
-        ModbusMapRange::new(ModbusTable::Discrete, 0, MODBUS_ADDRESS_SPACE),
-    ]
-}
-
-pub fn parse_modbus_map_input(input: &str) -> Result<Vec<ModbusMapRange>, String> {
-    let spec = input.trim();
-    if spec.is_empty() || spec.eq_ignore_ascii_case("quick") {
-        return Ok(quick_modbus_ranges());
-    }
-    if spec.eq_ignore_ascii_case("common") {
-        return Ok(common_modbus_ranges());
-    }
-    if spec.eq_ignore_ascii_case("all") {
-        return Ok(all_modbus_ranges());
-    }
-    let mut ranges = Vec::new();
-    for token in spec.split(',') {
-        let token = token.trim();
-        if token.is_empty() {
-            return Err(format_modbus_map_usage());
-        }
-        let parts: Vec<_> = token.split(':').map(str::trim).collect();
-        if parts.len() != 3 {
-            return Err(format_modbus_map_usage());
-        }
-        let table = ModbusTable::parse(parts[0]).ok_or_else(|| {
-            format!(
-                "unknown Modbus table '{}'. {}",
-                parts[0],
-                format_modbus_map_usage()
-            )
-        })?;
-        let start = parts[1].parse::<u32>().map_err(|_| {
-            format!(
-                "invalid start address '{}'. {}",
-                parts[1],
-                format_modbus_map_usage()
-            )
-        })?;
-        let count = parts[2].parse::<u32>().map_err(|_| {
-            format!(
-                "invalid count '{}'. {}",
-                parts[2],
-                format_modbus_map_usage()
-            )
-        })?;
-        if start >= MODBUS_ADDRESS_SPACE {
-            return Err(format!(
-                "start address {start} is outside 0..65535. {}",
-                format_modbus_map_usage()
-            ));
-        }
-        if count == 0 || count > MODBUS_ADDRESS_SPACE - start {
-            return Err(format!(
-                "count {count} at start {start} is outside the Modbus address space. {}",
-                format_modbus_map_usage()
-            ));
-        }
-        ranges.push(ModbusMapRange::new(table, start, count));
-    }
-    if ranges.is_empty() {
-        Err(format_modbus_map_usage())
-    } else {
-        Ok(ranges)
-    }
-}
-
-pub fn format_modbus_map_usage() -> String {
-    "use quick, common, all, or table:start:count entries like hr:0:500,ir:0:100,co:0:128,di:0:128"
-        .to_string()
-}
-
-pub fn modbus_map_chunks(range: ModbusMapRange) -> Vec<(u16, u16)> {
-    let mut chunks = Vec::new();
-    let mut start = range.start;
-    let mut remaining = range.count;
-    let max_count = u32::from(range.table.chunk_limit());
-    while remaining > 0 {
-        let count = remaining.min(max_count);
-        chunks.push((
-            u16::try_from(start).unwrap_or(u16::MAX),
-            u16::try_from(count).unwrap_or(u16::MAX),
-        ));
-        start += count;
-        remaining -= count;
-    }
-    chunks
-}
-
-// ─── SlmpDeviceKind / SlmpMapRange ────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SlmpDeviceKind {
-    Word,
-    Bit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SlmpMapRange {
-    pub device: &'static str,
-    pub kind: SlmpDeviceKind,
-    pub start: u32,
-    pub count: u32,
-}
-
-impl SlmpMapRange {
-    pub fn new(device: &'static str, kind: SlmpDeviceKind, start: u32, count: u32) -> Self {
-        Self {
-            device,
-            kind,
-            start,
-            count,
-        }
-    }
-
-    pub fn display_start(self) -> String {
-        format!("{}{}", self.device, self.start)
-    }
-
-    pub fn display_end(self) -> String {
-        format!("{}{}", self.device, self.start + self.count - 1)
-    }
-
-    pub fn chunk_limit(self) -> u16 {
-        match self.kind {
-            SlmpDeviceKind::Word => SLMP_WORD_CHUNK,
-            SlmpDeviceKind::Bit => SLMP_BIT_CHUNK,
-        }
-    }
-}
-
-pub fn parse_slmp_device(input: &str) -> Option<(&'static str, SlmpDeviceKind)> {
-    match input.trim().to_ascii_lowercase().as_str() {
-        "d" | "data" | "data-register" | "data-registers" => Some(("D", SlmpDeviceKind::Word)),
-        "w" | "link-register" | "link-registers" => Some(("W", SlmpDeviceKind::Word)),
-        "r" | "file-register" | "file-registers" => Some(("R", SlmpDeviceKind::Word)),
-        "m" | "marker" | "markers" | "internal-relay" | "internal-relays" => {
-            Some(("M", SlmpDeviceKind::Bit))
-        }
-        "x" | "input" | "inputs" => Some(("X", SlmpDeviceKind::Bit)),
-        "y" | "output" | "outputs" => Some(("Y", SlmpDeviceKind::Bit)),
-        "b" | "link-relay" | "link-relays" => Some(("B", SlmpDeviceKind::Bit)),
-        _ => None,
-    }
-}
-
-pub fn quick_slmp_ranges() -> Vec<SlmpMapRange> {
-    vec![
-        SlmpMapRange::new("D", SlmpDeviceKind::Word, 0, 50),
-        SlmpMapRange::new("M", SlmpDeviceKind::Bit, 0, 128),
-    ]
-}
-
-pub fn common_slmp_ranges() -> Vec<SlmpMapRange> {
-    vec![
-        SlmpMapRange::new("D", SlmpDeviceKind::Word, 0, 1000),
-        SlmpMapRange::new("W", SlmpDeviceKind::Word, 0, 512),
-        SlmpMapRange::new("R", SlmpDeviceKind::Word, 0, 512),
-        SlmpMapRange::new("M", SlmpDeviceKind::Bit, 0, 2048),
-        SlmpMapRange::new("X", SlmpDeviceKind::Bit, 0, 512),
-        SlmpMapRange::new("Y", SlmpDeviceKind::Bit, 0, 512),
-        SlmpMapRange::new("B", SlmpDeviceKind::Bit, 0, 512),
-    ]
-}
-
-pub fn all_slmp_ranges() -> Vec<SlmpMapRange> {
-    vec![
-        SlmpMapRange::new("D", SlmpDeviceKind::Word, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("W", SlmpDeviceKind::Word, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("R", SlmpDeviceKind::Word, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("M", SlmpDeviceKind::Bit, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("X", SlmpDeviceKind::Bit, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("Y", SlmpDeviceKind::Bit, 0, SLMP_ADDRESS_SPACE),
-        SlmpMapRange::new("B", SlmpDeviceKind::Bit, 0, SLMP_ADDRESS_SPACE),
-    ]
-}
-
-pub fn parse_slmp_map_input(input: &str) -> Result<Vec<SlmpMapRange>, String> {
-    let spec = input.trim();
-    if spec.is_empty() || spec.eq_ignore_ascii_case("quick") {
-        return Ok(quick_slmp_ranges());
-    }
-    if spec.eq_ignore_ascii_case("common") {
-        return Ok(common_slmp_ranges());
-    }
-    if spec.eq_ignore_ascii_case("all") {
-        return Ok(all_slmp_ranges());
-    }
-    let mut ranges = Vec::new();
-    for token in spec.split(',') {
-        let token = token.trim();
-        if token.is_empty() {
-            return Err(format_slmp_map_usage());
-        }
-        let parts: Vec<_> = token.split(':').map(str::trim).collect();
-        if parts.len() != 3 {
-            return Err(format_slmp_map_usage());
-        }
-        let (device, kind) = parse_slmp_device(parts[0]).ok_or_else(|| {
-            format!(
-                "unknown SLMP device '{}'. {}",
-                parts[0],
-                format_slmp_map_usage()
-            )
-        })?;
-        let start = parts[1].parse::<u32>().map_err(|_| {
-            format!(
-                "invalid start address '{}'. {}",
-                parts[1],
-                format_slmp_map_usage()
-            )
-        })?;
-        let count = parts[2]
-            .parse::<u32>()
-            .map_err(|_| format!("invalid count '{}'. {}", parts[2], format_slmp_map_usage()))?;
-        if start >= SLMP_ADDRESS_SPACE {
-            return Err(format!(
-                "start address {start} is outside 0..16777215. {}",
-                format_slmp_map_usage()
-            ));
-        }
-        if count == 0 || count > SLMP_ADDRESS_SPACE - start {
-            return Err(format!(
-                "count {count} at start {start} is outside the SLMP address space. {}",
-                format_slmp_map_usage()
-            ));
-        }
-        ranges.push(SlmpMapRange::new(device, kind, start, count));
-    }
-    if ranges.is_empty() {
-        Err(format_slmp_map_usage())
-    } else {
-        Ok(ranges)
-    }
-}
-
-pub fn format_slmp_map_usage() -> String {
-    "use quick, common, all, or device:start:count entries like d:0:100,m:0:128,w:0:64".to_string()
-}
-
-pub fn slmp_map_chunks(range: SlmpMapRange) -> Vec<(u32, u16)> {
-    let mut chunks = Vec::new();
-    let mut start = range.start;
-    let mut remaining = range.count;
-    let max_count = u32::from(range.chunk_limit());
-    while remaining > 0 {
-        let count = remaining.min(max_count);
-        chunks.push((start, u16::try_from(count).unwrap_or(u16::MAX)));
-        start += count;
-        remaining -= count;
-    }
-    chunks
-}
+pub use ranges::*;
 
 // ─── Beckhoff exploits ────────────────────────────────────────────────────────
 
@@ -3692,5 +3319,38 @@ pub fn action_id_from_name(name: &str) -> &str {
         "mqtt/subscribe" => "mqtt/1",
         // Pass-through: already numeric or unknown
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod format_helper_tests {
+    use super::{hex_dump_lines, hex_fmt};
+
+    // These two helpers are the render contract for every "0x..." and byte-dump line a
+    // surface prints, and cli.rs used to carry a private copy of hex_fmt. Pin the shape
+    // here so a future refactor cannot quietly change case, padding or row width.
+    #[test]
+    fn hex_fmt_is_lowercase_and_zero_padded() {
+        assert_eq!(hex_fmt(&[]), "");
+        assert_eq!(hex_fmt(&[0x00, 0x0a, 0xff]), "000aff");
+        assert_eq!(hex_fmt(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+    }
+
+    #[test]
+    fn hex_dump_rows_hold_sixteen_bytes_and_advance_the_offset() {
+        let data: Vec<u8> = (0u8..18).collect();
+        let lines = hex_dump_lines(&data, 0x10);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].starts_with("  0010  "), "{}", lines[0]);
+        assert!(lines[1].starts_with("  0020  "), "{}", lines[1]);
+        // 0x00..0x0f are all controls, so the first row's preview is 16 dots; the second
+        // row has two bytes and therefore two dots.
+        assert!(lines[0].ends_with("  ................"), "{}", lines[0]);
+        assert!(lines[1].ends_with("  .."), "{}", lines[1]);
+        assert!(
+            hex_dump_lines(&[], 0).is_empty(),
+            "expected empty, got {:?}",
+            hex_dump_lines(&[], 0)
+        );
     }
 }

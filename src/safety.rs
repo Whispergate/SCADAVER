@@ -248,6 +248,10 @@ mod tests {
         assert!(hosts.contains("10.0.0.5"));
         assert!(hosts.contains("10.0.0.6"));
         assert_eq!(hosts.len(), 2);
-        assert!(fragile_hosts_from_file(&dir.join("missing.txt")).is_empty());
+        assert!(
+            fragile_hosts_from_file(&dir.join("missing.txt")).is_empty(),
+            "expected empty, got {:?}",
+            fragile_hosts_from_file(&dir.join("missing.txt"))
+        );
     }
 }

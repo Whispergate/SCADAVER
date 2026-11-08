@@ -72,6 +72,10 @@ pub struct Args {
 
 pub use crate::protocol::Protocol;
 
+// The surface's only door to the shared layer: everything protocol-shaped comes from ops,
+// including the route-probing helper. See the re-export note in src/ops/mod.rs.
+use crate::ops::local_ip_for;
+
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum ColorMode {
     #[default]
@@ -80,17 +84,24 @@ pub enum ColorMode {
     Never,
 }
 
-/// Data representation for published eWON Flexy Modbus holding registers.
+/// clap glue for the eWON register codec.
 ///
-/// Flexy publishes 32-bit values as low 16-bit word followed by high 16-bit
-/// word. Individual Modbus registers remain big-endian on the wire.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum EwonRegisterType {
-    U16,
-    I16,
-    U32,
-    I32,
-    F32,
+/// The codec and its kind enum live in `ops::ewon` so `get`, `set` and every later surface
+/// share one definition of Flexy's word order. Only the argument spelling belongs here.
+impl ValueEnum for crate::ops::ewon::RegisterKind {
+    fn value_variants<'a>() -> &'a [Self] {
+        &Self::ALL
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        Some(match self {
+            Self::U16 => clap::builder::PossibleValue::new("u16"),
+            Self::I16 => clap::builder::PossibleValue::new("i16"),
+            Self::U32 => clap::builder::PossibleValue::new("u32"),
+            Self::I32 => clap::builder::PossibleValue::new("i32"),
+            Self::F32 => clap::builder::PossibleValue::new("f32"),
+        })
+    }
 }
 
 #[derive(Subcommand)]
@@ -276,8 +287,8 @@ pub enum GetNoun {
     /// Read one eWON Flexy published holding-register value over Modbus TCP (unit 100 by default)
     EwonRegister {
         address: u16,
-        #[arg(long, value_enum, default_value_t = EwonRegisterType::U16)]
-        r#type: EwonRegisterType,
+        #[arg(long, value_enum, default_value = "u16")]
+        r#type: crate::ops::ewon::RegisterKind,
         #[arg(long, default_value_t = 100)]
         unit_id: u8,
     },
@@ -386,8 +397,8 @@ pub enum SetNoun {
         address: u16,
         #[arg(allow_hyphen_values = true)]
         value: String,
-        #[arg(long, value_enum, default_value_t = EwonRegisterType::U16)]
-        r#type: EwonRegisterType,
+        #[arg(long, value_enum, default_value = "u16")]
+        r#type: crate::ops::ewon::RegisterKind,
         #[arg(long, default_value_t = 100)]
         unit_id: u8,
     },
@@ -676,26 +687,6 @@ fn require_ip<'a>(ip: Option<&'a String>, verb: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("'-i <IP>' is required for '{verb}'"))
 }
 
-fn default_port(protocol: Option<Protocol>) -> Option<u16> {
-    match protocol {
-        Some(Protocol::Bacnet) => Some(47_808),
-        Some(Protocol::Beckhoff) => Some(casket::vendors::beckhoff::scan::DEFAULT_ADS_PORT),
-        Some(Protocol::Dnp3) => Some(20_000),
-        Some(Protocol::Enip | Protocol::Rockwell) => Some(44_818),
-        Some(Protocol::Ewon) => Some(80),
-        Some(Protocol::Iec104) => Some(casket::vendors::iec104::client::IEC104_PORT),
-        Some(Protocol::Mitsubishi) => Some(casket::vendors::mitsubishi::slmp::DEFAULT_PORT),
-        Some(Protocol::Modbus | Protocol::Schneider) => Some(casket::core::modbus::DEFAULT_PORT),
-        Some(Protocol::Mqtt) => Some(casket::vendors::mqtt::client::MQTT_PORT),
-        Some(Protocol::Omron) => Some(casket::vendors::omron::fins::FINS_TCP_PORT),
-        Some(Protocol::OpcUa) => Some(4840),
-        Some(Protocol::Phoenix) => Some(1962),
-        Some(Protocol::Siemens) => Some(102),
-        Some(Protocol::Snmp) => Some(161),
-        None => None,
-    }
-}
-
 fn diagnostic_context(
     operation: &str,
     protocol: Option<Protocol>,
@@ -706,8 +697,8 @@ fn diagnostic_context(
     let protocol_name = protocol.map_or_else(|| "auto-detect".to_string(), |p| format!("{p:?}"));
     let target = ip.unwrap_or("local/broadcast");
     let (effective_port, source) = if port == 0 {
-        match default_port(protocol) {
-            Some(default) => (default.to_string(), "protocol default"),
+        match protocol {
+            Some(protocol) => (protocol.default_port().to_string(), "protocol default"),
             None => ("protocol-specific".to_string(), "automatic"),
         }
     } else {
@@ -1295,8 +1286,7 @@ fn resolve_cached_target(
         record
             .as_ref()
             .and_then(|record| record.port)
-            .or_else(|| default_port(Some(protocol)))
-            .unwrap_or(0)
+            .unwrap_or_else(|| protocol.default_port())
     };
     Ok((protocol, effective_port, record))
 }
@@ -1313,11 +1303,36 @@ fn resolve_get_target(
     if requested_port != 0 {
         return Ok((protocol, fallback_port, record));
     }
+    // The eWON Modbus verbs are the one case where the registry default is the wrong
+    // number: `Protocol::Ewon::default_port()` is the IPCONF discovery port (1507),
+    // while registers and coils live on the gateway's Modbus port (502). Discovery
+    // cannot report 502, so keep the explicit 0 and let `ops::ewon::modbus_port`
+    // choose it, unless a scan did record a port for these nouns.
+    if resolves_own_modbus_port(protocol, noun) {
+        let port = record
+            .as_ref()
+            .and_then(|record| cached_get_port(protocol, noun, &record.fields))
+            .unwrap_or(0);
+        return Ok((protocol, port, record));
+    }
     let Some(record) = record else {
         return Ok((protocol, fallback_port, None));
     };
     let endpoint_port = cached_get_port(protocol, noun, &record.fields).unwrap_or(fallback_port);
     Ok((protocol, endpoint_port, Some(record)))
+}
+
+/// True when a verb resolves its own port instead of inheriting `Protocol::default_port()`.
+///
+/// eWON is the one protocol where the registry default is a discovery port (IPCONF 1507)
+/// while the verb speaks Modbus (502), so the register and coil verbs must keep the
+/// explicit 0 that `ops::ewon::modbus_port` turns into 502.
+fn resolves_own_modbus_port(protocol: Protocol, noun: &GetNoun) -> bool {
+    protocol == Protocol::Ewon
+        && matches!(
+            noun,
+            GetNoun::EwonRegister { .. } | GetNoun::EwonCoil { .. }
+        )
 }
 
 fn cached_get_port(protocol: Protocol, noun: &GetNoun, fields: &serde_json::Value) -> Option<u16> {
@@ -1820,13 +1835,15 @@ fn run_get(
             Ok(())
         }
         GetNoun::Dm { start, count } => {
-            use casket::vendors::omron::fins;
-            let fins_port = if port == 0 { 9600 } else { port };
-            let pb = crate::display::spinner_start(&format!(
-                "Reading DM{start}..DM{} from {ip}â€¦",
-                start + count - 1
-            ));
-            let result = fins::read_dm_words(ip, fins_port, 0, start, count);
+            // Port resolution, the DM range check and the FINS call all live in ops, so the
+            // CLI only renders. `count - 1` used to be computed here and could overflow.
+            let range =
+                crate::ops::omron::DmRange::new(start, count).map_err(anyhow::Error::msg)?;
+            let fins_port = crate::ops::omron::fins_port(port);
+            let pb =
+                crate::display::spinner_start(&format!("Reading {} from {ip}…", range.label()));
+            let result = crate::ops::omron::read_dm_words(ip, fins_port, range.start, range.count)
+                .map_err(anyhow::Error::msg);
             pb.finish_and_clear();
             let vals = result?;
             println!("  {:<8}  {:<8}  Hex", "Address", "Dec");
@@ -1888,7 +1905,7 @@ fn run_get(
                 let address = format!("db:{db}:{offset}:{len}");
                 let value = format!(
                     "{} |{}|",
-                    hex_encode(&bytes),
+                    crate::ops::hex_fmt(&bytes),
                     crate::display::ascii_preview(&bytes)
                 );
                 cache_live_points(
@@ -2237,15 +2254,13 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             }
         }
         Some(Protocol::Omron) => {
-            use casket::vendors::omron::fins;
-            let fins_port = if port == 0 { 9600 } else { port };
-            let pb = crate::display::spinner_start(&format!("Querying Omron FINS at {ip}â€¦"));
-            let result = fins::get_device_info_tcp(ip, fins_port);
+            let pb = crate::display::spinner_start(&format!("Querying Omron FINS at {ip}…"));
+            let result = crate::ops::omron::identity(ip, port).map_err(anyhow::Error::msg);
             pb.finish_and_clear();
             let dev = result?;
             println!("  Model:   {}", dev.model);
             println!("  Version: {}", dev.version);
-            println!("  Node:    0x{:02x}", dev.node_addr);
+            println!("  Node:    0x{:02x}", dev.node);
         }
         Some(Protocol::Phoenix) => {
             use casket::vendors::phoenix::control;
@@ -2528,14 +2543,10 @@ fn get_state(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resu
             let state = s7comm::get_cpu_state(ip, s7_port, timeout, None);
             crate::display::print_info(&format!("CPU state: {state}"));
         }
-        Some(Protocol::Omron) => {
-            use casket::vendors::omron::fins;
-            let fins_port = if port == 0 { 9600 } else { port };
-            match fins::get_cpu_state(ip, fins_port, 0) {
-                Ok(state) => crate::display::print_success(&format!("CPU state: {state}")),
-                Err(e) => crate::display::print_error(&format!("omron {ip}:{fins_port}: {e}")),
-            }
-        }
+        Some(Protocol::Omron) => match crate::ops::omron::cpu_state(ip, port) {
+            Ok(state) => crate::display::print_success(&format!("CPU state: {state}")),
+            Err(e) => crate::display::print_error(&e),
+        },
         Some(Protocol::Beckhoff) => {
             use casket::vendors::beckhoff::scan;
             let devs = scan::discover_ip_with_port(ip, timeout, true, port)?;
@@ -3122,10 +3133,10 @@ fn get_tags(
             crate::display::print_success(&format!("{} register(s).", vals.len()));
         }
         Some(Protocol::Omron) => {
-            use casket::vendors::omron::fins;
-            let fins_port = if port == 0 { 9600 } else { port };
-            let pb = crate::display::spinner_start(&format!("Reading Omron DM words on {ip}â€¦"));
-            let result = fins::read_dm_words(ip, fins_port, 0, 0, 32);
+            let fins_port = crate::ops::omron::fins_port(port);
+            let pb = crate::display::spinner_start(&format!("Reading Omron DM words on {ip}…"));
+            let result =
+                crate::ops::omron::read_dm_words(ip, fins_port, 0, 32).map_err(anyhow::Error::msg);
             pb.finish_and_clear();
             let words = result?;
             let limit = tag_limit(words.len());
@@ -3397,154 +3408,38 @@ fn get_tags(
     Ok(())
 }
 
-const EWON_DEFAULT_UNIT_ID: u8 = 100;
-
-fn ewon_modbus_port(port: u16) -> u16 {
-    casket::core::modbus::effective_port(port)
-}
-
-fn validate_ewon_unit_id(unit_id: u8) -> Result<()> {
-    if !(1..=247).contains(&unit_id) {
-        bail!(
-            "eWON Modbus unit id {unit_id} is invalid; use a value from 1 through 247 (Flexy default: {EWON_DEFAULT_UNIT_ID})"
-        );
-    }
-    Ok(())
-}
-
-fn ewon_register_word_count(kind: EwonRegisterType) -> u16 {
-    match kind {
-        EwonRegisterType::U16 | EwonRegisterType::I16 => 1,
-        EwonRegisterType::U32 | EwonRegisterType::I32 | EwonRegisterType::F32 => 2,
-    }
-}
-
-fn decode_ewon_register(words: &[u16], kind: EwonRegisterType) -> Result<String> {
-    let required = usize::from(ewon_register_word_count(kind));
-    if words.len() < required {
-        bail!(
-            "eWON Modbus response returned {} word(s), expected {required}",
-            words.len()
-        );
-    }
-    let value = match kind {
-        EwonRegisterType::U16 => words[0].to_string(),
-        EwonRegisterType::I16 => i16::from_ne_bytes(words[0].to_ne_bytes()).to_string(),
-        // eWON Flexy publishes 32-bit values as low word, then high word.
-        EwonRegisterType::U32 => {
-            let bits = u32::from(words[0]) | (u32::from(words[1]) << 16);
-            bits.to_string()
-        }
-        EwonRegisterType::I32 => {
-            let bits = u32::from(words[0]) | (u32::from(words[1]) << 16);
-            i32::from_ne_bytes(bits.to_ne_bytes()).to_string()
-        }
-        EwonRegisterType::F32 => {
-            let bits = u32::from(words[0]) | (u32::from(words[1]) << 16);
-            let value = f32::from_bits(bits);
-            if !value.is_finite() {
-                bail!("eWON Modbus value is not a finite f32")
-            }
-            value.to_string()
-        }
-    };
-    Ok(value)
-}
-
-fn encode_ewon_register(value: &str, kind: EwonRegisterType) -> Result<Vec<u16>> {
-    let value = value.trim();
-    let words = match kind {
-        EwonRegisterType::U16 => vec![value
-            .parse::<u16>()
-            .map_err(|_| anyhow::anyhow!("invalid u16 value '{value}'"))?],
-        EwonRegisterType::I16 => vec![u16::from_ne_bytes(
-            value
-                .parse::<i16>()
-                .map_err(|_| anyhow::anyhow!("invalid i16 value '{value}'"))?
-                .to_ne_bytes(),
-        )],
-        EwonRegisterType::U32 => {
-            let bits = value
-                .parse::<u32>()
-                .map_err(|_| anyhow::anyhow!("invalid u32 value '{value}'"))?;
-            vec![
-                u16::try_from(bits & 0xffff).unwrap_or_default(),
-                u16::try_from(bits >> 16).unwrap_or_default(),
-            ]
-        }
-        EwonRegisterType::I32 => {
-            let bits = value
-                .parse::<i32>()
-                .map_err(|_| anyhow::anyhow!("invalid i32 value '{value}'"))?;
-            let bits = u32::from_ne_bytes(bits.to_ne_bytes());
-            vec![
-                u16::try_from(bits & 0xffff).unwrap_or_default(),
-                u16::try_from(bits >> 16).unwrap_or_default(),
-            ]
-        }
-        EwonRegisterType::F32 => {
-            let parsed = value
-                .parse::<f32>()
-                .map_err(|_| anyhow::anyhow!("invalid f32 value '{value}'"))?;
-            if !parsed.is_finite() {
-                bail!("eWON f32 value must be finite")
-            }
-            let bits = parsed.to_bits();
-            vec![
-                u16::try_from(bits & 0xffff).unwrap_or_default(),
-                u16::try_from(bits >> 16).unwrap_or_default(),
-            ]
-        }
-    };
-    Ok(words)
-}
-
 fn get_ewon_register(
     ip: &str,
     port: u16,
     address: u16,
-    kind: EwonRegisterType,
+    kind: crate::ops::ewon::RegisterKind,
     unit_id: u8,
     cache: bool,
 ) -> Result<()> {
-    use casket::core::modbus;
-    validate_ewon_unit_id(unit_id)?;
-    let port = ewon_modbus_port(port);
-    let count = ewon_register_word_count(kind);
-    let registers = modbus::read_holding_registers_with_unit_id(ip, port, unit_id, address, count)?;
-    let words: Vec<u16> = registers.iter().map(|register| register.raw).collect();
-    let value = decode_ewon_register(&words, kind)?;
-    println!("  eWON HR{address} ({kind:?}) = {value}");
+    let read = crate::ops::ewon::read_register(ip, port, unit_id, address, kind)
+        .map_err(anyhow::Error::msg)?;
+    println!("  eWON HR{address} ({kind:?}) = {}", read.value);
     if cache {
         cache_ewon_modbus_point(
             ip,
             &format!("ewon:hr:{address}"),
             &format!("{kind:?}"),
-            &value,
+            &read.value,
         )?;
     }
     crate::display::print_success(&format!(
-        "{count} eWON Modbus word(s) read from unit {unit_id}."
+        "{} eWON Modbus word(s) read from unit {unit_id}.",
+        read.words
     ));
     Ok(())
 }
 
 fn get_ewon_coil(ip: &str, port: u16, address: u16, unit_id: u8, cache: bool) -> Result<()> {
-    use casket::core::modbus;
-    validate_ewon_unit_id(unit_id)?;
-    let port = ewon_modbus_port(port);
-    let coils = modbus::read_coils_with_unit_id(ip, port, unit_id, address, 1)?;
-    let value = coils
-        .first()
-        .context("eWON Modbus coil response was empty")?;
-    println!("  eWON coil {address} = {}", value.value_str);
+    let read =
+        crate::ops::ewon::read_coil(ip, port, unit_id, address).map_err(anyhow::Error::msg)?;
+    println!("  eWON coil {address} = {}", read.state());
     if cache {
-        cache_ewon_modbus_point(
-            ip,
-            &format!("ewon:coil:{address}"),
-            "BOOL",
-            &value.value_str,
-        )?;
+        cache_ewon_modbus_point(ip, &format!("ewon:coil:{address}"), "BOOL", read.state())?;
     }
     crate::display::print_success(&format!("eWON Modbus coil read from unit {unit_id}."));
     Ok(())
@@ -3561,18 +3456,11 @@ fn set_ewon_register(
     port: u16,
     address: u16,
     value: &str,
-    kind: EwonRegisterType,
+    kind: crate::ops::ewon::RegisterKind,
     unit_id: u8,
 ) -> Result<()> {
-    use casket::core::modbus;
-    validate_ewon_unit_id(unit_id)?;
-    let port = ewon_modbus_port(port);
-    let words = encode_ewon_register(value, kind)?;
-    if words.len() == 1 {
-        modbus::write_single_register_with_unit_id(ip, port, unit_id, address, words[0])?;
-    } else {
-        modbus::write_multiple_registers_with_unit_id(ip, port, unit_id, address, &words)?;
-    }
+    crate::ops::ewon::write_register(ip, port, unit_id, address, value, kind)
+        .map_err(anyhow::Error::msg)?;
     crate::display::print_success(&format!(
         "eWON register HR{address} ({kind:?}) written to unit {unit_id}."
     ));
@@ -3580,17 +3468,8 @@ fn set_ewon_register(
 }
 
 fn set_ewon_coil(ip: &str, port: u16, address: u16, state: &str, unit_id: u8) -> Result<()> {
-    use casket::core::modbus;
-    validate_ewon_unit_id(unit_id)?;
-    let on = if state.eq_ignore_ascii_case("on") {
-        true
-    } else if state.eq_ignore_ascii_case("off") {
-        false
-    } else {
-        bail!("invalid eWON coil state '{state}': use 'on' or 'off'");
-    };
-    let port = ewon_modbus_port(port);
-    modbus::write_single_coil_with_unit_id(ip, port, unit_id, address, on)?;
+    let on = crate::ops::ewon::write_coil(ip, port, unit_id, address, state)
+        .map_err(anyhow::Error::msg)?;
     crate::display::print_success(&format!(
         "eWON coil {address} set {} on unit {unit_id}.",
         if on { "ON" } else { "OFF" }
@@ -3865,9 +3744,7 @@ fn get_tag(
             }
         }
         Some(Protocol::Omron) => {
-            use casket::vendors::omron::fins;
-            let fins_port = if port == 0 { 9600 } else { port };
-            // Accept "DM100" or a plain number â†’ DM address
+            // Accept "DM100" or a plain number → DM address
             let dm_addr: u16 = name
                 .trim_start_matches("DM")
                 .trim_start_matches("dm")
@@ -3875,20 +3752,22 @@ fn get_tag(
                 .map_err(|_| {
                     anyhow::anyhow!("Invalid Omron DM address '{name}'; use DM<number>")
                 })?;
-            let pb = crate::display::spinner_start(&format!("Reading {name}â€¦"));
-            let result = fins::read_dm_words(ip, fins_port, 0, dm_addr, 1);
+            let pb = crate::display::spinner_start(&format!("Reading {name}…"));
+            let result =
+                crate::ops::omron::read_dm_words(ip, port, dm_addr, 1).map_err(anyhow::Error::msg);
             pb.finish_and_clear();
             match result {
-                Ok(words) if !words.is_empty() => {
+                // ops rejects a short answer, so one word is what a success means here.
+                Ok(words) => {
+                    let word = words[0];
                     println!(
                         "  {} = {} ({})",
                         crate::display::tag_name(name),
-                        crate::display::numeric(&words[0].to_string()),
-                        crate::display::raw(&format!("0x{:04x}", words[0]))
+                        crate::display::numeric(&word.to_string()),
+                        crate::display::raw(&format!("0x{word:04x}"))
                     );
                 }
-                Ok(_) => crate::display::print_warn("No value returned."),
-                Err(e) => crate::display::print_error(&format!("{e}")),
+                Err(e) => crate::display::print_error(&e.to_string()),
             }
         }
         Some(Protocol::Schneider) => {
@@ -4188,16 +4067,26 @@ fn run_set(
             }
         }
         SetNoun::Dm { start, values } => {
-            use casket::vendors::omron::fins;
-            let fins_port = if port == 0 { 9600 } else { port };
-            let parsed: Vec<u16> = values
-                .split(',')
-                .filter_map(|s| s.trim().parse::<u16>().ok())
-                .collect();
-            if parsed.is_empty() {
-                bail!("No valid DM word values in '{values}' â€” expected comma-separated decimals, e.g. 100,200,300");
+            // Parsed strictly: `filter_map(parse.ok())` used to drop a bad token and still
+            // report success, so "1,2,x" wrote two words and said nothing about the third.
+            let mut parsed: Vec<u16> = Vec::new();
+            for token in values.split(',') {
+                let token = token.trim();
+                if token.is_empty() {
+                    continue;
+                }
+                let word = token.parse::<u16>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Invalid DM word value '{token}' in '{values}'; expected comma-separated decimals, e.g. 100,200,300"
+                    )
+                })?;
+                parsed.push(word);
             }
-            fins::write_dm_words(ip, fins_port, 0, start, &parsed)?;
+            if parsed.is_empty() {
+                bail!("No DM word values in '{values}'; expected comma-separated decimals, e.g. 100,200,300");
+            }
+            crate::ops::omron::write_dm_words(ip, port, start, &parsed)
+                .map_err(anyhow::Error::msg)?;
             crate::display::print_success(&format!(
                 "{} DM word(s) written at DM{start}.",
                 parsed.len()
@@ -4382,19 +4271,15 @@ fn set_state(
             }
         }
         Some(Protocol::Omron) => {
-            use casket::vendors::omron::fins;
-            let fins_port = if port == 0 { 9600 } else { port };
-            let mode = if state.eq_ignore_ascii_case("run") {
-                fins::CpuMode::Run
-            } else if state.eq_ignore_ascii_case("stop") {
-                fins::CpuMode::Stop
-            } else {
-                bail!("Unknown state '{state}': use 'run' or 'stop'.")
+            // The verb stays run/stop even though ops also knows monitor and program: widening
+            // what this command accepts is a separate decision from moving the call.
+            let mode = match state.to_ascii_lowercase().as_str() {
+                "run" => crate::ops::omron::CpuMode::Run,
+                "stop" => crate::ops::omron::CpuMode::Stop,
+                _ => bail!("Unknown state '{state}': use 'run' or 'stop'."),
             };
-            if !fins::set_cpu_state(ip, fins_port, 0, mode)? {
-                bail!("FINS CPU mode change was rejected")
-            }
-            crate::display::print_success(&format!("CPU set to {state}."));
+            crate::ops::omron::set_cpu_mode(ip, port, mode).map_err(anyhow::Error::msg)?;
+            crate::display::print_success(&format!("CPU set to {}.", mode.as_str()));
         }
         Some(Protocol::Beckhoff) => {
             use casket::vendors::beckhoff::{ads, scan};
@@ -5097,16 +4982,6 @@ fn run_db(cmd: DbCmd) -> Result<()> {
 // Helpers
 // ===================================================================
 
-fn local_ip_for(target: &str) -> String {
-    use std::net::UdpSocket;
-    let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else {
-        return "0.0.0.0".into();
-    };
-    let _ = sock.connect(format!("{target}:1"));
-    sock.local_addr()
-        .map_or_else(|_| "0.0.0.0".into(), |a| a.ip().to_string())
-}
-
 fn summarize_device(info: &casket::core::autodetect::DeviceInfo) -> String {
     const FIELDS: &[(&str, &str)] = &[
         ("hardware", "Hardware"),
@@ -5143,14 +5018,6 @@ fn summarize_device(info: &casket::core::autodetect::DeviceInfo) -> String {
     } else {
         format!("{}  {}", info.vendor.to_uppercase(), parts.join("  "))
     }
-}
-
-fn hex_encode(b: &[u8]) -> String {
-    use std::fmt::Write;
-    b.iter().fold(String::new(), |mut s, x| {
-        let _ = write!(s, "{x:02x}");
-        s
-    })
 }
 
 fn parse_s7_tag_name(name: &str) -> anyhow::Result<(u16, u16, u16)> {
@@ -5351,10 +5218,31 @@ fn ellipsize(value: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_ewon_register, decode_rockwell_payload, diagnostic_context, ellipsize,
-        encode_ewon_register, mqtt_payload, parse_hex, rockwell_atomic_type_from_name,
-        set_operation_supported, EwonRegisterType, Protocol, SetNoun,
+        decode_rockwell_payload, diagnostic_context, ellipsize, mqtt_payload, parse_hex,
+        resolves_own_modbus_port, rockwell_atomic_type_from_name, set_operation_supported, GetNoun,
+        Protocol, SetNoun,
     };
+
+    #[test]
+    fn ewon_modbus_verbs_do_not_inherit_the_discovery_port() {
+        // Regression: with `--port` omitted, port resolution used `Protocol::Ewon::default_port()`,
+        // which is the IPCONF discovery port 1507, so `get ewon-register` dialled 1507 for a
+        // Modbus read. The verb keeps 0 and `ops::ewon::modbus_port` picks 502.
+        let register = GetNoun::EwonRegister {
+            address: 1,
+            r#type: crate::ops::ewon::RegisterKind::U16,
+            unit_id: 100,
+        };
+        let coil = GetNoun::EwonCoil {
+            address: 1,
+            unit_id: 100,
+        };
+        assert!(resolves_own_modbus_port(Protocol::Ewon, &register));
+        assert!(resolves_own_modbus_port(Protocol::Ewon, &coil));
+        assert!(!resolves_own_modbus_port(Protocol::Modbus, &coil));
+        assert_eq!(Protocol::Ewon.default_port(), 1_507);
+        assert_eq!(crate::ops::ewon::modbus_port(0), 502);
+    }
 
     #[test]
     fn parse_hex_odd_length_returns_empty() {
@@ -5385,9 +5273,21 @@ mod tests {
 
     #[test]
     fn parse_hex_empty_returns_empty() {
-        assert!(parse_hex("").is_empty());
-        assert!(parse_hex("0x").is_empty());
-        assert!(parse_hex("   ").is_empty());
+        assert!(
+            parse_hex("").is_empty(),
+            "expected empty, got {:?}",
+            parse_hex("")
+        );
+        assert!(
+            parse_hex("0x").is_empty(),
+            "expected empty, got {:?}",
+            parse_hex("0x")
+        );
+        assert!(
+            parse_hex("   ").is_empty(),
+            "expected empty, got {:?}",
+            parse_hex("   ")
+        );
     }
 
     #[test]
@@ -5396,28 +5296,6 @@ mod tests {
         assert_eq!(mqtt_payload("running", "auto").unwrap(), b"running");
         assert_eq!(mqtt_payload("a1b2", "text").unwrap(), b"a1b2");
         assert!(mqtt_payload("running", "hex").is_err());
-    }
-
-    #[test]
-    fn ewon_32_bit_registers_use_low_word_first() {
-        assert_eq!(
-            encode_ewon_register("305419896", EwonRegisterType::U32).unwrap(),
-            vec![0x5678, 0x1234]
-        );
-        assert_eq!(
-            decode_ewon_register(&[0x0000, 0x4293], EwonRegisterType::F32).unwrap(),
-            "73.5"
-        );
-        assert_eq!(
-            decode_ewon_register(&[0xFFFF, 0xFFFF], EwonRegisterType::I32).unwrap(),
-            "-1"
-        );
-    }
-
-    #[test]
-    fn ewon_float_rejects_non_finite_writes() {
-        assert!(encode_ewon_register("NaN", EwonRegisterType::F32).is_err());
-        assert!(encode_ewon_register("inf", EwonRegisterType::F32).is_err());
     }
 
     #[test]
@@ -5447,6 +5325,18 @@ mod tests {
         let context = diagnostic_context("get", Some(Protocol::Rockwell), Some("127.0.0.1"), 0, 5);
         assert!(context.contains("port=44818 [protocol default]"));
         assert!(context.contains("target=127.0.0.1"));
+    }
+
+    #[test]
+    fn diagnostic_context_uses_the_registry_default_for_ewon() {
+        // cli.rs carried its own port table, and it said 80 for eWON while Protocol::default_port
+        // (and every ops scanner) used casket's IPCONF 1507. Only the diagnostic line kept the
+        // stale number alive, which is why nothing failed.
+        let context = diagnostic_context("scan", Some(Protocol::Ewon), Some("10.0.0.5"), 0, 2);
+        assert!(
+            context.contains("port=1507 [protocol default]"),
+            "eWON default drifted from the protocol registry: {context}"
+        );
     }
 
     #[test]

@@ -571,7 +571,7 @@ fn ads_construct_readstate_packet_is_nonempty() {
         Some("00000001"),
         true,
     );
-    assert!(!pkt.is_empty());
+    assert!(!pkt.is_empty(), "expected at least one value, got none");
     // Every AMS packet starts with "0000" (TCP header prefix, reserved)
     assert!(
         pkt.starts_with("0000"),
@@ -595,7 +595,7 @@ fn ads_construct_read_packet_encodes_params() {
         Some("00000002"),
         true,
     );
-    assert!(!pkt.is_empty());
+    assert!(!pkt.is_empty(), "expected at least one value, got none");
     // Read packets carry more payload than ReadState
     assert!(pkt.len() > 20);
 }
@@ -790,7 +790,11 @@ fn siemens_device_optional_fields_none() {
     };
     assert!(dev.hardware.is_none());
     assert!(dev.cpu_state.is_none());
-    assert!(dev.open_ports.is_empty());
+    assert!(
+        dev.open_ports.is_empty(),
+        "expected empty, got {:?}",
+        dev.open_ports
+    );
 }
 
 // ── mqtt::client ─────────────────────────────────────────────────────────────
@@ -941,7 +945,11 @@ fn dnp3_device_struct_fields_accessible() {
     };
     assert_eq!(dev.ip, "10.0.0.100");
     assert_eq!(dev.outstation_addr, 1);
-    assert!(dev.device_attributes.is_empty());
+    assert!(
+        dev.device_attributes.is_empty(),
+        "expected empty, got {:?}",
+        dev.device_attributes
+    );
 }
 
 // ── opcua::client ─────────────────────────────────────────────────────────────
@@ -964,7 +972,11 @@ fn opcua_server_struct_fields_accessible() {
     assert_eq!(server.ip, "10.0.0.50");
     assert_eq!(server.port, 4840);
     assert_eq!(server.application_name, "CIServer");
-    assert!(server.endpoints.is_empty());
+    assert!(
+        server.endpoints.is_empty(),
+        "expected empty, got {:?}",
+        server.endpoints
+    );
 }
 
 #[test]
@@ -1014,5 +1026,9 @@ fn autodetect_device_info_struct_fields_accessible() {
     };
     assert_eq!(info.vendor, "siemens");
     assert_eq!(info.ip, "192.168.1.10");
-    assert!(info.fields.is_empty());
+    assert!(
+        info.fields.is_empty(),
+        "expected empty, got {:?}",
+        info.fields
+    );
 }

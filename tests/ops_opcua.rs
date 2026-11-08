@@ -66,7 +66,10 @@ fn opcua_scan_returns_typed_records() {
     // the endpoint list is the only part that carries device facts. The GetEndpoints
     // exchange can legitimately come back empty, so assert the shape rather than a
     // count this fixture does not guarantee.
-    assert!(!record.fields.is_empty());
+    assert!(
+        !record.fields.is_empty(),
+        "expected at least one value, got none"
+    );
 
     let endpoint_count = record
         .fields
@@ -102,7 +105,11 @@ fn opcua_scan_returns_typed_records() {
 #[test]
 fn opcua_with_nothing_listening_is_a_message_not_a_panic() {
     let outcome = scadaver::ops::scan_ip(Protocol::OpcUa, "127.0.0.1", 1, 1);
-    assert!(outcome.records.is_empty());
+    assert!(
+        outcome.records.is_empty(),
+        "expected empty, got {:?}",
+        outcome.records
+    );
     assert!(outcome
         .messages
         .iter()

@@ -223,11 +223,19 @@ fn fragile_hosts_file_parsing() {
     // Comment-only file: valid, means "nothing fragile".
     let empty_path = dir.path().join("comments_only.txt");
     std::fs::write(&empty_path, "# nothing here yet\n\n# still nothing\n").expect("write fixture");
-    assert!(safety::fragile_hosts_from_file(&empty_path).is_empty());
+    assert!(
+        safety::fragile_hosts_from_file(&empty_path).is_empty(),
+        "expected empty, got {:?}",
+        safety::fragile_hosts_from_file(&empty_path)
+    );
 
     // Missing file is not an error; it means an empty list.
     let missing = dir.path().join("does_not_exist.txt");
-    assert!(safety::fragile_hosts_from_file(&missing).is_empty());
+    assert!(
+        safety::fragile_hosts_from_file(&missing).is_empty(),
+        "expected empty, got {:?}",
+        safety::fragile_hosts_from_file(&missing)
+    );
 
     // The parsed set is what the gate honours once handed to `enable`.
     safety::enable(Duration::ZERO, hosts);

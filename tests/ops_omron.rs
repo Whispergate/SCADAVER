@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 
 const PORT: u16 = 29600;
 const CLOSED_PORT: u16 = 29601;
+const IDENTITY_PORT: u16 = 29610;
+const DM_PORT: u16 = 29620;
+const CPU_PORT: u16 = 29630;
 
 struct Simulator(Child);
 
@@ -89,7 +92,11 @@ fn omron_scan_returns_typed_records() {
 #[test]
 fn omron_with_nothing_listening_is_a_message_not_a_panic() {
     let outcome = scadaver::ops::scan_ip(Protocol::Omron, "127.0.0.1", CLOSED_PORT, 1);
-    assert!(outcome.records.is_empty());
+    assert!(
+        outcome.records.is_empty(),
+        "expected empty, got {:?}",
+        outcome.records
+    );
     assert!(
         outcome
             .messages
@@ -99,4 +106,86 @@ fn omron_with_nothing_listening_is_a_message_not_a_panic() {
         outcome.messages
     );
     assert_eq!(outcome.messages.len(), 1);
+}
+
+// Each test below spawns its own simulator on its own port. `cargo test` without
+// `--test-threads=1` runs siblings in parallel, and two FINS stubs on one port means one of
+// them never listens.
+
+#[test]
+fn omron_identity_carries_the_negotiated_node() {
+    let _sim = Simulator::spawn(IDENTITY_PORT);
+
+    let identity = scadaver::ops::omron::identity("127.0.0.1", IDENTITY_PORT)
+        .expect("the simulator answers controller data read");
+    assert_eq!(identity.model, "CP1E");
+    assert_eq!(identity.version, "V1.0");
+    assert_eq!(identity.node, 1, "server node from the negotiation frame");
+}
+
+#[test]
+fn omron_dm_write_then_read_returns_the_same_words() {
+    let _sim = Simulator::spawn(DM_PORT);
+    let written = [11u16, 22, 33, 0xBEEF];
+
+    scadaver::ops::omron::write_dm_words("127.0.0.1", DM_PORT, 500, &written)
+        .expect("the simulator acknowledges memory area write");
+
+    let read = scadaver::ops::omron::read_dm_words("127.0.0.1", DM_PORT, 500, 4)
+        .expect("the simulator answers memory area read");
+    assert_eq!(read, written);
+}
+
+#[test]
+fn omron_port_zero_resolves_to_the_fins_default() {
+    // The simulator cannot listen on 9600 here, so only the resolution is under test.
+    assert_eq!(scadaver::ops::omron::fins_port(0), 9600);
+    assert_eq!(scadaver::ops::omron::fins_port(DM_PORT), DM_PORT);
+}
+
+#[test]
+fn omron_dm_range_past_the_last_word_fails_before_connecting() {
+    // Port 1 is not listening; a socket error would name the endpoint. The range error must
+    // win, which proves the check runs before any connect.
+    let error = scadaver::ops::omron::read_dm_words("127.0.0.1", 1, 65530, 32)
+        .expect_err("DM65530 plus 32 words cannot exist");
+    assert!(error.contains("DM65530"), "got {error}");
+    assert!(error.contains("65535"), "got {error}");
+    assert!(
+        !error.contains("127.0.0.1"),
+        "no socket was opened: {error}"
+    );
+}
+
+#[test]
+fn omron_dm_read_error_names_the_endpoint_and_the_range() {
+    let error = scadaver::ops::omron::read_dm_words("127.0.0.1", CLOSED_PORT, 100, 4)
+        .expect_err("nothing is listening");
+    assert!(
+        error.contains(&format!("127.0.0.1:{CLOSED_PORT}")),
+        "got {error}"
+    );
+    assert!(error.contains("DM100..DM103"), "got {error}");
+}
+
+#[test]
+fn omron_cpu_mode_change_is_reflected_by_cpu_state() {
+    let _sim = Simulator::spawn(CPU_PORT);
+
+    assert_eq!(
+        scadaver::ops::omron::cpu_state("127.0.0.1", CPU_PORT).expect("status read"),
+        "Run",
+        "the simulator starts in Run"
+    );
+
+    scadaver::ops::omron::set_cpu_mode("127.0.0.1", CPU_PORT, scadaver::ops::omron::CpuMode::Stop)
+        .expect("mode change is acknowledged");
+    assert_eq!(
+        scadaver::ops::omron::cpu_state("127.0.0.1", CPU_PORT).expect("status read"),
+        "Stop"
+    );
+
+    // Leave the simulator in Run, the state the other tests assume.
+    scadaver::ops::omron::set_cpu_mode("127.0.0.1", CPU_PORT, scadaver::ops::omron::CpuMode::Run)
+        .expect("mode change is acknowledged");
 }

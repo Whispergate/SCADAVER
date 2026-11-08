@@ -1777,6 +1777,40 @@ fn beckhoff_device_info(
     }
 }
 
+/// Fold a `probe_all` result into the line the operator reads and the record to store.
+///
+/// Both callers branched on `all.len()` and then re-fetched the single result with
+/// `all.into_iter().next().unwrap()`. That unwrap is a panic waiting for any caller that
+/// filters the vec first, and inside `spawn_ip_scan` it would surface as a dead scan thread
+/// rather than a message. A slice pattern hands the element to the arm that already proved
+/// there is exactly one.
+fn autodetect_record(ip: &str, all: &[DeviceInfo]) -> Option<(String, DeviceInfo)> {
+    match all {
+        [] => None,
+        [info] => Some((format!("[+] {ip} \u{2192} {}", info.vendor), info.clone())),
+        many => {
+            let protocols: Vec<String> = many.iter().map(|d| d.vendor.clone()).collect();
+            let mut fields: HashMap<String, Value> = HashMap::new();
+            fields.insert(
+                "protocols".into(),
+                Value::Array(protocols.iter().map(|p| Value::String(p.clone())).collect()),
+            );
+            for d in many {
+                let vf = serde_json::to_value(&d.fields).unwrap_or_default();
+                fields.insert(d.vendor.clone(), vf);
+            }
+            Some((
+                format!("[+] {ip} \u{2192} MULTI ({})", protocols.join(", ")),
+                DeviceInfo {
+                    vendor: "multi".into(),
+                    ip: ip.to_string(),
+                    fields,
+                },
+            ))
+        }
+    }
+}
+
 fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
     std::thread::spawn(move || {
         let label = target.label();
@@ -1949,96 +1983,67 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
         }
 
         let all = probe_all(&target.ip, 8);
-        match all.len() {
-            0 => {
-                // probe_all found nothing — try Modbus TCP as a silent fallback
+        if all.is_empty() {
+            // probe_all found nothing — try Modbus TCP as a silent fallback
+            use casket::core::modbus;
+            use std::net::{SocketAddr, TcpStream};
+            use std::time::Duration;
+            let mb_port = target.port.unwrap_or(modbus::DEFAULT_PORT);
+            let addr_str = format!("{}:{}", target.ip, mb_port);
+            if let Ok(addr) = addr_str.parse::<SocketAddr>() {
+                if TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok()
+                    && modbus::read_holding_registers(&target.ip, mb_port, 0, 1).is_ok()
                 {
-                    use casket::core::modbus;
-                    use std::net::{SocketAddr, TcpStream};
-                    use std::time::Duration;
-                    let mb_port = target.port.unwrap_or(modbus::DEFAULT_PORT);
-                    let addr_str = format!("{}:{}", target.ip, mb_port);
-                    if let Ok(addr) = addr_str.parse::<SocketAddr>() {
-                        if TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok()
-                            && modbus::read_holding_registers(&target.ip, mb_port, 0, 1).is_ok()
-                        {
-                            let _ = tx.send(ScanEvent::Output(format!(
-                                "[+] Modbus TCP: {}:{mb_port}",
-                                target.ip
-                            )));
-                            let mut fields = HashMap::new();
-                            fields.insert("port".into(), Value::Number(i64::from(mb_port).into()));
-                            fields.insert(
-                                "modbus_port".into(),
-                                Value::Number(i64::from(mb_port).into()),
-                            );
-                            fields.insert("protocol".into(), Value::String("modbus_tcp".into()));
-                            fields
-                                .insert("discovery_transport".into(), Value::String("tcp".into()));
-                            fields.insert("cap_modbus_tcp".into(), Value::Bool(true));
-                            let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
-                                vendor: "modbus".into(),
-                                ip: target.ip.clone(),
-                                fields,
-                            }));
-                            let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
-                            return;
-                        }
-                    }
-                }
-                if let Some(port) = target.port {
+                    let _ = tx.send(ScanEvent::Output(format!(
+                        "[+] Modbus TCP: {}:{mb_port}",
+                        target.ip
+                    )));
                     let mut fields = HashMap::new();
-                    fields.insert("port".into(), Value::Number(i64::from(port).into()));
+                    fields.insert("port".into(), Value::Number(i64::from(mb_port).into()));
+                    fields.insert(
+                        "modbus_port".into(),
+                        Value::Number(i64::from(mb_port).into()),
+                    );
+                    fields.insert("protocol".into(), Value::String("modbus_tcp".into()));
+                    fields.insert("discovery_transport".into(), Value::String("tcp".into()));
+                    fields.insert("cap_modbus_tcp".into(), Value::Bool(true));
                     let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
-                        vendor: "unknown".into(),
+                        vendor: "modbus".into(),
                         ip: target.ip.clone(),
                         fields,
                     }));
-                    let _ = tx.send(ScanEvent::Output(format!(
-                        "[!] {label} - no device identified; stored with custom port"
-                    )));
-                } else {
-                    let _ = tx.send(ScanEvent::Output(format!(
-                        "[-] {} \u{2014} no device identified",
-                        target.ip
-                    )));
+                    let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
+                    return;
                 }
-                let _ = tx.send(ScanEvent::Done(format!(
-                    "Scan of {label} complete (no result)"
-                )));
             }
-            1 => {
-                let info = all.into_iter().next().unwrap();
-                let _ = tx.send(ScanEvent::Output(format!(
-                    "[+] {} \u{2192} {}",
-                    target.ip, info.vendor
-                )));
-                let _ = tx.send(ScanEvent::DeviceFound(info));
-                let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
-            }
-            _ => {
-                let protocols: Vec<String> = all.iter().map(|d| d.vendor.clone()).collect();
-                let proto_str = protocols.join(", ");
-                let _ = tx.send(ScanEvent::Output(format!(
-                    "[+] {} \u{2192} MULTI ({proto_str})",
-                    target.ip
-                )));
-                let mut fields: HashMap<String, Value> = HashMap::new();
-                fields.insert(
-                    "protocols".into(),
-                    Value::Array(protocols.iter().map(|p| Value::String(p.clone())).collect()),
-                );
-                for d in all {
-                    let vf = serde_json::to_value(&d.fields).unwrap_or_default();
-                    fields.insert(d.vendor, vf);
-                }
+            if let Some(port) = target.port {
+                let mut fields = HashMap::new();
+                fields.insert("port".into(), Value::Number(i64::from(port).into()));
                 let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
-                    vendor: "multi".into(),
+                    vendor: "unknown".into(),
                     ip: target.ip.clone(),
                     fields,
                 }));
-                let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
+                let _ = tx.send(ScanEvent::Output(format!(
+                    "[!] {label} - no device identified; stored with custom port"
+                )));
+            } else {
+                let _ = tx.send(ScanEvent::Output(format!(
+                    "[-] {} \u{2014} no device identified",
+                    target.ip
+                )));
             }
+            let _ = tx.send(ScanEvent::Done(format!(
+                "Scan of {label} complete (no result)"
+            )));
+        } else {
+            // One device or several: the line and the record come from the same helper, and
+            // the single-device case carries its element instead of re-fetching it.
+            if let Some((line, info)) = autodetect_record(&target.ip, &all) {
+                let _ = tx.send(ScanEvent::Output(line));
+                let _ = tx.send(ScanEvent::DeviceFound(info));
+            }
+            let _ = tx.send(ScanEvent::Done(format!("Scan of {label} complete")));
         }
     });
 }
@@ -2573,35 +2578,12 @@ fn dispatch_exploit(
         // Unknown action — auto-detect all protocols.
         out(&format!("[*] Auto-detecting {ip}..."));
         let all = probe_all(ip, 8);
-        match all.len() {
-            0 => out(&format!("[-] {ip}: no device identified")),
-            1 => {
-                let info = all.into_iter().next().unwrap();
-                out(&format!("[+] {} \u{2192} {}", ip, info.vendor));
+        match autodetect_record(ip, &all) {
+            Some((line, info)) => {
+                out(&line);
                 let _ = tx.send(ScanEvent::DeviceFound(info));
             }
-            _ => {
-                let protocols: Vec<String> = all.iter().map(|d| d.vendor.clone()).collect();
-                out(&format!(
-                    "[+] {} \u{2192} MULTI ({})",
-                    ip,
-                    protocols.join(", ")
-                ));
-                let mut fields: HashMap<String, Value> = HashMap::new();
-                fields.insert(
-                    "protocols".into(),
-                    Value::Array(protocols.iter().map(|p| Value::String(p.clone())).collect()),
-                );
-                for d in all {
-                    let vf = serde_json::to_value(&d.fields).unwrap_or_default();
-                    fields.insert(d.vendor, vf);
-                }
-                let _ = tx.send(ScanEvent::DeviceFound(DeviceInfo {
-                    vendor: "multi".into(),
-                    ip: ip.to_string(),
-                    fields,
-                }));
-            }
+            None => out(&format!("[-] {ip}: no device identified")),
         }
     }
 }
@@ -2798,15 +2780,14 @@ fn exploit_beckhoff_symbols(
     }
     out(&sep);
     out(&format!("[+] {} symbol(s)", symbols.len()));
+    // filter_map, not filter-then-unwrap: the predicate and the unwrap asked the same
+    // question twice, and only one of them had a panic path.
     let points: Vec<(&str, Option<&str>, &str)> = symbols
         .iter()
-        .filter(|s| s.value_str.is_some())
-        .map(|s| {
-            (
-                s.name.as_str(),
-                Some(s.type_name.as_str()),
-                s.value_str.as_deref().unwrap(),
-            )
+        .filter_map(|s| {
+            s.value_str
+                .as_deref()
+                .map(|value| (s.name.as_str(), Some(s.type_name.as_str()), value))
         })
         .collect();
     save_and_diff(ip, "ads", &points, out);
@@ -6685,5 +6666,49 @@ mod tests {
         let mut app = App::new(&db);
         terminal.draw(|f| app.draw(f)).unwrap();
         // No assertion — just verify no panic on empty state.
+    }
+
+    #[test]
+    fn autodetect_record_reports_a_single_device_without_reindexing() {
+        let device = DeviceInfo {
+            vendor: "siemens".into(),
+            ip: "10.0.0.5".into(),
+            fields: HashMap::new(),
+        };
+        let (line, info) = autodetect_record("10.0.0.5", &[device]).expect("one device");
+        assert_eq!(line, "[+] 10.0.0.5 \u{2192} siemens");
+        assert_eq!(info.vendor, "siemens");
+        assert_eq!(info.ip, "10.0.0.5");
+        assert!(info.fields.is_empty(), "{:?}", info.fields);
+    }
+
+    #[test]
+    fn autodetect_record_folds_several_devices_into_one_multi_record() {
+        let devices = vec![
+            DeviceInfo {
+                vendor: "modbus".into(),
+                ip: "10.0.0.5".into(),
+                fields: HashMap::from([("port".to_string(), serde_json::json!(502))]),
+            },
+            DeviceInfo {
+                vendor: "siemens".into(),
+                ip: "10.0.0.5".into(),
+                fields: HashMap::new(),
+            },
+        ];
+        let (line, info) = autodetect_record("10.0.0.5", &devices).expect("two devices");
+        assert_eq!(line, "[+] 10.0.0.5 \u{2192} MULTI (modbus, siemens)");
+        assert_eq!(info.vendor, "multi");
+        assert_eq!(
+            info.fields["protocols"],
+            serde_json::json!(["modbus", "siemens"])
+        );
+        // Each vendor's own fields are kept under its slug, not merged into the top level.
+        assert_eq!(info.fields["modbus"], serde_json::json!({"port": 502}));
+    }
+
+    #[test]
+    fn autodetect_record_returns_none_when_nothing_answered() {
+        assert!(autodetect_record("10.0.0.5", &[]).is_none());
     }
 }

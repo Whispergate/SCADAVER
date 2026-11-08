@@ -304,7 +304,7 @@ fn device_mitsubishi_port(ip: &str) -> u16 {
 fn device_fins_port(ip: &str) -> u16 {
     device_field_u16(ip, "fins_port")
         .or_else(|| device_field_u16(ip, "port"))
-        .unwrap_or(casket::vendors::omron::fins::FINS_TCP_PORT)
+        .unwrap_or_else(|| crate::ops::omron::fins_port(0))
 }
 
 /// `WebVisit`'s HTTP endpoint is deliberately independent from the `ProConOS`
@@ -568,6 +568,18 @@ fn protocol_sweep_hosts(
         MAX_PROTOCOL_SWEEP_HOSTS,
         "Protocol subnet scan",
     )
+}
+
+/// Fetch the port a vendor-specific unicast scan was dispatched with.
+///
+/// Each `scan_<vendor>_tcp` flag is derived from `target_port.is_some()` far above the
+/// dispatch site, so this failure is unreachable today. It is still an error and not an
+/// `expect`: `broadcast_scan` runs inside `spawn_blocking`, and a panic there reaches the
+/// operator as a bare "task failed" join error with no protocol name attached. An error
+/// names the scan that could not run, and a future refactor that moves a flag can no
+/// longer turn a bad request into a lost task.
+fn scan_port(port: Option<u16>, scan: &str) -> anyhow::Result<u16> {
+    port.ok_or_else(|| anyhow::anyhow!("{scan} scan requires an explicit port"))
 }
 
 fn selected_interface(
@@ -1190,7 +1202,7 @@ fn broadcast_scan_on_interface(
     if scan_beckhoff_tcp {
         use casket::vendors::beckhoff::{ads, scan};
 
-        let port = target_port.expect("Beckhoff ADS scan requires an explicit port");
+        let port = scan_port(target_port, "Beckhoff ADS")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
         let local_netid = ads::build_local_netid(&iface.ip);
 
@@ -1263,7 +1275,7 @@ fn broadcast_scan_on_interface(
     if scan_enip_tcp {
         use casket::vendors::rockwell::driver;
 
-        let port = target_port.expect("EtherNet/IP scan requires an explicit port");
+        let port = scan_port(target_port, "EtherNet/IP")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
 
         for batch in hosts.chunks(16) {
@@ -1409,7 +1421,7 @@ fn broadcast_scan_on_interface(
     if scan_mitsubishi_tcp {
         use casket::vendors::mitsubishi::scan::{self, Transport};
 
-        let port = target_port.expect("Mitsubishi SLMP scan requires an explicit port");
+        let port = scan_port(target_port, "Mitsubishi SLMP")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
 
         for batch in hosts.chunks(16) {
@@ -1453,7 +1465,7 @@ fn broadcast_scan_on_interface(
     if scan_bacnet_unicast {
         use casket::vendors::bacnet::client;
 
-        let port = target_port.expect("BACnet unicast scan requires an explicit port");
+        let port = scan_port(target_port, "BACnet unicast")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
         for batch in hosts.chunks(16) {
             let handles: Vec<_> = batch
@@ -1499,7 +1511,7 @@ fn broadcast_scan_on_interface(
     }
 
     if scan_dnp3_tcp {
-        let port = target_port.expect("DNP3 scan requires an explicit port");
+        let port = scan_port(target_port, "DNP3")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
         for batch in hosts.chunks(16) {
             let handles: Vec<_> = batch
@@ -1599,7 +1611,7 @@ fn broadcast_scan_on_interface(
     if scan_schneider_tcp {
         use casket::vendors::schneider::scan::{self, Transport};
 
-        let port = target_port.expect("Schneider TCP scan requires an explicit port");
+        let port = scan_port(target_port, "Schneider TCP")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
 
         for batch in hosts.chunks(16) {
@@ -1654,7 +1666,7 @@ fn broadcast_scan_on_interface(
     }
 
     if scan_siemens_tcp {
-        let port = target_port.expect("Siemens S7 scan requires an explicit port");
+        let port = scan_port(target_port, "Siemens S7")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
 
         for batch in hosts.chunks(16) {
@@ -1697,7 +1709,7 @@ fn broadcast_scan_on_interface(
     }
 
     if scan_omron_tcp {
-        let port = target_port.expect("Omron FINS scan requires an explicit port");
+        let port = scan_port(target_port, "Omron FINS")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
 
         for batch in hosts.chunks(16) {
@@ -1790,7 +1802,7 @@ fn broadcast_scan_on_interface(
     }
 
     if scan_iec104_tcp {
-        let port = target_port.expect("IEC-104 scan requires an explicit port");
+        let port = scan_port(target_port, "IEC-104")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
         for batch in hosts.chunks(16) {
             let handles: Vec<_> = batch
@@ -1828,7 +1840,11 @@ fn broadcast_scan_on_interface(
     if scan_snmp {
         use casket::vendors::snmp::{client, enumerate};
 
-        let community = snmp_community.expect("SNMP scan was validated before dispatch");
+        // The HTTP handler rejects an SNMP scan without a community, but this function is also
+        // reachable from tests and any future caller, and a missing community is a request
+        // error with a name, not a panic inside spawn_blocking.
+        let community = snmp_community
+            .ok_or_else(|| anyhow::anyhow!("SNMP scan requires a community; none was passed"))?;
         let port = target_port.unwrap_or(client::SNMP_PORT);
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
         for batch in hosts.chunks(16) {
@@ -1868,7 +1884,7 @@ fn broadcast_scan_on_interface(
     }
 
     if scan_mqtt_tcp {
-        let port = target_port.expect("MQTT scan requires an explicit port");
+        let port = scan_port(target_port, "MQTT")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
         for batch in hosts.chunks(16) {
             let handles: Vec<_> = batch
@@ -1910,7 +1926,7 @@ fn broadcast_scan_on_interface(
     if scan_opcua_tcp {
         use casket::vendors::opcua::client;
 
-        let port = target_port.expect("OPC-UA scan requires an explicit port");
+        let port = scan_port(target_port, "OPC-UA")?;
         let (scan_scope, hosts) = protocol_sweep_hosts(target_cidr, iface)?;
         for batch in hosts.chunks(16) {
             let handles: Vec<_> = batch
@@ -2132,9 +2148,8 @@ fn read_tags_for_vendor(
         }
         // ── Omron FINS: live DM-word reads ───────────────────────────────────
         "omron" | "fins" => {
-            use casket::vendors::omron::fins;
             let port = device_fins_port(ip);
-            if let Ok(words) = fins::read_dm_words(ip, port, 0, 0, 10) {
+            if let Ok(words) = crate::ops::omron::read_dm_words(ip, port, 0, 10) {
                 for (i, val) in words.iter().enumerate() {
                     tags.insert(format!("DM{i}"), (*val).into());
                 }
@@ -2560,7 +2575,6 @@ fn write_tag_for_vendor(
     // ── Omron FINS ───────────────────────────────────────────────────────────
     // Tags displayed as "DM0"…"DM9" (word).
     if matches!(vendor, "omron" | "fins") {
-        use casket::vendors::omron::fins;
         if let Some(rest) = tag.strip_prefix("DM") {
             let addr: u16 = rest
                 .trim()
@@ -2570,7 +2584,10 @@ fn write_tag_for_vendor(
                 .trim()
                 .parse()
                 .map_err(|_| anyhow::anyhow!("DM value must be 0–65535, got: {value}"))?;
-            fins::write_dm_words(ip, 9600, 0, addr, &[val])?;
+            // The saved FINS port, not the 9600 literal: a discovery result on a high port
+            // could otherwise be read from but never written to.
+            crate::ops::omron::write_dm_words(ip, device_fins_port(ip), addr, &[val])
+                .map_err(anyhow::Error::msg)?;
         } else {
             anyhow::bail!("Omron tag must be DM<n>, got: {tag}");
         }
@@ -3076,45 +3093,59 @@ fn run_exploit(
         }
 
         "omron/info" => {
-            use casket::vendors::omron::fins;
-            let dev = fins::get_device_info_tcp(ip, eff_port(9600))?;
+            let dev = crate::ops::omron::identity(ip, port).map_err(anyhow::Error::msg)?;
             Ok(format!(
                 "Node:    {}\nModel:   {}\nVersion: {}",
-                dev.node_addr, dev.model, dev.version
+                dev.node, dev.model, dev.version
             ))
         }
 
         "omron/cpu_status" => {
-            use casket::vendors::omron::fins;
-            let state = fins::get_cpu_state(ip, eff_port(9600), 0)?;
+            let state = crate::ops::omron::cpu_state(ip, port).map_err(anyhow::Error::msg)?;
             Ok(format!("CPU state: {state}"))
         }
 
         "omron/cpu_run" => {
-            use casket::vendors::omron::fins;
-            let ok = fins::set_cpu_mode(ip, eff_port(9600), 0, true)?;
-            if ok {
-                Ok(format!("CPU set to Monitor (Run) mode on {ip}."))
-            } else {
-                anyhow::bail!("CPU mode change was not confirmed by device")
-            }
+            // Run (0x01), so the route now does what its name says. The byte used to be
+            // Monitor (0x02) while the CLI's `set-cpu-mode run` sent 0x01; a browser
+            // click and a CLI command put the controller in different states. The
+            // exploit primitive (`exploit_omron_cpu_run`) keeps casket's boolean API,
+            // which is Monitor, and says so in its own output.
+            use crate::ops::omron::CpuMode;
+            crate::ops::omron::set_cpu_mode(ip, port, CpuMode::Run).map_err(anyhow::Error::msg)?;
+            Ok(format!("CPU set to Run mode on {ip}."))
         }
 
         "omron/cpu_stop" => {
-            use casket::vendors::omron::fins;
-            let ok = fins::set_cpu_mode(ip, eff_port(9600), 0, false)?;
-            if ok {
-                Ok(format!("CPU set to Stop mode on {ip}."))
-            } else {
-                anyhow::bail!("CPU mode change was not confirmed by device")
-            }
+            use crate::ops::omron::CpuMode;
+            crate::ops::omron::set_cpu_mode(ip, port, CpuMode::Stop).map_err(anyhow::Error::msg)?;
+            Ok(format!("CPU set to Stop mode on {ip}."))
         }
 
         "omron/read_dm" => {
-            use casket::vendors::omron::fins;
-            let start: u16 = username.trim().parse().unwrap_or(0);
-            let count: u16 = password.trim().parse().unwrap_or(10).min(100);
-            let words = fins::read_dm_words(ip, eff_port(9600), 0, start, count)?;
+            // A blank field keeps its old meaning (DM0, ten words); anything that is not a
+            // number is an error, where `unwrap_or` used to read DM0 for garbage.
+            let start: u16 = match username.trim() {
+                "" => 0,
+                text => text.parse().map_err(|_| {
+                    anyhow::anyhow!("Invalid DM start address: '{text}' (must be 0–65535)")
+                })?,
+            };
+            let count: u16 = match password.trim() {
+                "" => 10,
+                text => text.parse().map_err(|_| {
+                    anyhow::anyhow!("Invalid DM word count: '{text}' (must be 1–100)")
+                })?,
+            };
+            if !(1..=100).contains(&count) {
+                // Used to clamp to 100 and report success: a request for 500 silently
+                // read 100 words. The range in the message is the range now enforced.
+                return Err(anyhow::anyhow!(
+                    "Invalid DM word count: {count} (must be 1–100)"
+                ));
+            }
+            let words = crate::ops::omron::read_dm_words(ip, port, start, count)
+                .map_err(anyhow::Error::msg)?;
             let mut out = String::new();
             for (i, val) in words.iter().enumerate() {
                 writeln!(out, "DM{}: {val}", start as usize + i).ok();
@@ -3123,7 +3154,6 @@ fn run_exploit(
         }
 
         "omron/write_dm" => {
-            use casket::vendors::omron::fins;
             let start: u16 = username
                 .trim()
                 .parse()
@@ -3138,7 +3168,8 @@ fn run_exploit(
             if values.is_empty() {
                 anyhow::bail!("No values provided in Password field");
             }
-            fins::write_dm_words(ip, eff_port(9600), 0, start, &values)?;
+            crate::ops::omron::write_dm_words(ip, port, start, &values)
+                .map_err(anyhow::Error::msg)?;
             Ok(format!(
                 "Wrote {} word(s) starting at DM{} on {ip}.",
                 values.len(),
@@ -4154,6 +4185,39 @@ mod tests {
 
     // ── require_api_key ────────────────────────────────────────────────────────
 
+    /// `scan_port` replaced twelve identical `expect` calls. It must still refuse the
+    /// dispatch, but the message has to name the scan that could not run, because that
+    /// string is the only thing the operator sees when the blocked task returns.
+    #[test]
+    fn scan_port_names_the_protocol_it_could_not_dispatch() {
+        assert_eq!(scan_port(Some(44818), "EtherNet/IP").unwrap(), 44818);
+
+        let error = scan_port(None, "DNP3").unwrap_err().to_string();
+        assert_eq!(error, "DNP3 scan requires an explicit port");
+
+        // Every protocol-specific unicast scan must be able to produce a sentence rather
+        // than an empty message, so the label is never blank.
+        for scan in [
+            "Beckhoff ADS",
+            "EtherNet/IP",
+            "Mitsubishi SLMP",
+            "BACnet unicast",
+            "DNP3",
+            "Schneider TCP",
+            "Siemens S7",
+            "Omron FINS",
+            "IEC-104",
+            "MQTT",
+            "OPC-UA",
+        ] {
+            let message = scan_port(None, scan).unwrap_err().to_string();
+            assert!(
+                message.starts_with(scan) && message.ends_with("requires an explicit port"),
+                "unhelpful message for {scan}: {message}"
+            );
+        }
+    }
+
     fn make_headers_with_key(key: &str) -> HeaderMap {
         let mut h = HeaderMap::new();
         h.insert("x-api-key", key.parse().unwrap());
@@ -4788,6 +4852,70 @@ mod tests {
             Ok(())
         })();
         outcome
+    }
+
+    /// The web Omron actions must reach the wire through `ops::omron`, which owns the port
+    /// resolution, the DM range check and the short-reply rejection. This test drives the
+    /// real handlers against the simulator so a future edit that goes back to `fins::`
+    /// directly, or drops the range check, fails here. Read-only: no CPU mode change.
+    #[test]
+    #[ignore = "requires the local Python Omron FINS simulator on the high-port lab profile"]
+    fn omron_web_actions_go_through_ops_against_the_simulator() -> anyhow::Result<()> {
+        use std::{
+            process::{Command, Stdio},
+            thread,
+            time::Duration,
+        };
+
+        let simulator_path = concat!(env!("CARGO_MANIFEST_DIR"), "/sim/fins_sim.py");
+        let _simulator = SimulatorGuard(
+            Command::new("python")
+                .args([
+                    "-u",
+                    simulator_path,
+                    "--host",
+                    TEST_LOOPBACK_IP,
+                    "--port",
+                    "19601",
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?,
+        );
+        thread::sleep(Duration::from_millis(250));
+
+        let info = run_exploit("omron/info", TEST_LOOPBACK_IP, 19601, "", "")?;
+        assert!(
+            info.contains("Model:   CP1E"),
+            "identity should come from the controller read: {info}"
+        );
+
+        let state = run_exploit("omron/cpu_status", TEST_LOOPBACK_IP, 19601, "", "")?;
+        assert_eq!(state, "CPU state: Run", "got: {state}");
+
+        let dm = run_exploit("omron/read_dm", TEST_LOOPBACK_IP, 19601, "0", "4")?;
+        assert_eq!(dm.lines().count(), 4, "got: {dm}");
+        assert!(dm.starts_with("DM0: "), "got: {dm}");
+
+        let empty = run_exploit("omron/read_dm", TEST_LOOPBACK_IP, 19601, "0", "0")
+            .expect_err("a zero-word read is not a request");
+        assert!(format!("{empty}").contains("at least 1"), "got: {empty}");
+
+        let past_the_end = run_exploit("omron/read_dm", TEST_LOOPBACK_IP, 19601, "65530", "32")
+            .expect_err("DM65530 plus 32 words cannot exist");
+        assert!(
+            format!("{past_the_end}").contains("65535"),
+            "got: {past_the_end}"
+        );
+
+        let bad_start = run_exploit("omron/read_dm", TEST_LOOPBACK_IP, 19601, "DM", "4")
+            .expect_err("a non-numeric start is not address 0");
+        assert!(
+            format!("{bad_start}").contains("Invalid DM start address"),
+            "got: {bad_start}"
+        );
+
+        Ok(())
     }
 
     #[test]

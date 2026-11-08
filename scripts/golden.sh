@@ -27,7 +27,14 @@ drift=0
 missing=0
 ran=0
 
+# The case files are checked out with CRLF on Windows (core.autocrlf=true), so the last
+# argument of every line arrives as "scan\r". clap then answers with a usage error and a
+# healthy tree reads as fixture drift. Strip CR once here, before the name/args split, so
+# both modes see the same line.
+cr=$(printf '\r')
+
 while IFS= read -r line; do
+  line=${line%"$cr"}
   case "$line" in '' | \#*) continue ;; esac
   name=$(printf '%s' "$line" | sed -n 's/^\[\([A-Za-z0-9_-]*\)\].*/\1/p')
   args=$(printf '%s' "$line" | sed -n 's/^\[[A-Za-z0-9_-]*\][[:space:]]*//p')
@@ -39,6 +46,9 @@ while IFS= read -r line; do
   file="$dir/$name.txt"
   # shellcheck disable=SC2086
   out=$(cargo run --quiet -- $args --color never 2>&1 || true)
+  # core.autocrlf also leaves CRLF in the fixtures while the binary writes bare LF; strip
+  # CRs from the captured text as well, so the diff reports content and not line endings.
+  out=${out//"$cr"/}
   ran=$((ran + 1))
   if [ "$update" = "--update" ]; then
     printf '%s\n' "$out" >"$file"
@@ -47,7 +57,7 @@ while IFS= read -r line; do
     echo "MISSING fixture $file" >&2
     echo "  capture it with '$0 $mode --update' and the simulators in the right state" >&2
     missing=1
-  elif ! diff -u "$file" <(printf '%s\n' "$out"); then
+  elif ! diff -u <(tr -d "$cr" <"$file") <(printf '%s\n' "$out"); then
     echo "DRIFT in $name" >&2
     drift=1
   fi
