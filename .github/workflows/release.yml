@@ -68,7 +68,11 @@ jobs:
             artifact: scadaver
             asset_name: scadaver-macos-arm64
 
-          - os: macos-13
+          # macos-13 is retired. The job sits queued with no runner assigned, and because the
+          # publish job needs the whole build matrix, a dead runner label silently blocks the
+          # crates.io publish (the v1.7.2 run hung for 24 hours exactly this way). Build the
+          # Intel binary by cross-compiling on the arm runner instead.
+          - os: macos-latest
             target: x86_64-apple-darwin
             artifact: scadaver
             asset_name: scadaver-macos-x86_64
