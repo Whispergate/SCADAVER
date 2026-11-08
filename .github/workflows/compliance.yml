@@ -1,0 +1,28 @@
+name: Compliance
+
+# Cheap, deterministic checks for the organisation rules that a machine can verify:
+# usage disclaimer, disclosure policy, licence declaration, credits, ignored-test reasons,
+# and credential patterns in tracked files. No Rust toolchain needed, so it finishes in seconds.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compliance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Policy files and disclosure rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v4
+
+      - name: Run compliance gate
+        run: bash scripts/check-compliance.sh

@@ -67,6 +67,8 @@ with a `[patch]` pointing at your local checkout. See `docs/build.md`.
 - [Building and testing](docs/build.md): the gates, the pinned dependency, and the simulator
   setup.
 - [Safe mode](docs/safe-mode.md): what the mutating-verb guard refuses and why.
+- [Compliance](docs/compliance.md): how the organisation rules map to files and automated checks.
+- [Security policy](SECURITY.md) and [Contributing](CONTRIBUTING.md).
 
 ## Quick Start
 
@@ -1099,6 +1101,8 @@ The optional `scadaver-macros` crate provides `#[derive(IntoDeviceInfo)]` with `
 SCADAver is intended for authorized penetration tests, red team exercises, OT security research, controlled training labs, and CTF competitions. Unauthorized use against systems you do not own or have explicit permission to test may be illegal and may create physical safety risks.
 
 The authors assume no liability for misuse. See the [PolyForm Noncommercial License 1.0.0](LICENSE) for the project's licensing terms.
+
+A defect in SCADAver itself does not go in a public issue. [SECURITY.md](SECURITY.md) has the private reporting channel and the 90 day coordinated disclosure window, and [CONTRIBUTING.md](CONTRIBUTING.md) covers the rules for changes, including AI-assisted work.
 
 ## Author
 
