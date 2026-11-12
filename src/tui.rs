@@ -6329,7 +6329,11 @@ mod tests {
 
         assert_eq!(app.current_output_ip, "192.168.1.10");
         assert_eq!(app.output_lines, vec!["[+] panel of .10".to_string()]);
-        assert!(app.tag_leaves.is_empty());
+        assert!(
+            app.tag_leaves.is_empty(),
+            "tag leaves: {:?}",
+            app.tag_leaves
+        );
         let slot = &app.per_device_output["192.168.1.11"];
         assert_eq!(slot.tag_leaves, vec![("DB1.Real".to_string(), true)]);
         assert_eq!(slot.tag_write_ip, "192.168.1.11");
