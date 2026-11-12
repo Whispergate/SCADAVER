@@ -9,16 +9,18 @@ use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod common;
+
 // The casket List Identity probe is UDP and pinned to 44818, so the simulator's UDP listener is
-// the one that answers. The TCP port is only used as the readiness probe.
-const PORT: u16 = 34818;
+// the one that answers. The TCP port is only used as the readiness probe, so it comes from the OS:
+// a hardcoded value landed inside a Windows reserved range and the bind failed.
 const DISCOVERY_PORT: u16 = 44_818;
 
 struct Simulator(Child);
 
 impl Simulator {
     fn spawn(port: u16) -> Self {
-        let child = Command::new("python")
+        let child = Command::new(common::python_exe())
             .args([
                 "sim/eip_sim.py",
                 "--host",
@@ -63,7 +65,7 @@ fn text(record: &EndpointRecord, key: &str) -> String {
 
 #[test]
 fn enip_scan_returns_typed_records() {
-    let _sim = Simulator::spawn(PORT);
+    let _sim = Simulator::spawn(common::tcp_port());
     // The simulator's UDP worker is a daemon thread started after the TCP listener check.
     std::thread::sleep(Duration::from_millis(200));
 

@@ -31,13 +31,16 @@ fn loopback_ewon_scan_ip_finds_device() {
         return;
     }; // port busy, skip
     server_sock
-        .set_read_timeout(Some(Duration::from_secs(3)))
+        .set_read_timeout(Some(Duration::from_millis(200)))
         .unwrap();
     let resp = build_ewon_device_info_response();
 
-    thread::spawn(move || {
+    // Answer every discovery packet and stay open until the scan stops asking. The probe sends two
+    // packets; a mock that answered once and closed made the second bounce, and Windows reports that
+    // bounce as a connection reset, which ends the scan's receive loop before it reads the reply.
+    let handle = thread::spawn(move || {
         let mut buf = [0u8; 256];
-        if let Ok((_, peer)) = server_sock.recv_from(&mut buf) {
+        while let Ok((_, peer)) = server_sock.recv_from(&mut buf) {
             let _ = server_sock.send_to(&resp, peer);
         }
     });
@@ -45,6 +48,7 @@ fn loopback_ewon_scan_ip_finds_device() {
 
     // scan_ip sends two discovery packets then listens on port 1506 (or random fallback).
     let result = casket::vendors::ewon::scan::scan_ip("127.0.0.1", 2, true);
+    let _ = handle.join();
     assert!(
         result.is_ok(),
         "eWON scan_ip should return Ok: {:?}",

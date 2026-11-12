@@ -3,18 +3,18 @@
 // the tuple struct, so it reports the spawn as unreaped.
 #![allow(clippy::zombie_processes)]
 
+mod common;
+
 use scadaver::protocol::Protocol;
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-const PORT: u16 = 21883;
-
 struct Simulator(Child);
 
 impl Simulator {
     fn spawn(port: u16) -> Self {
-        let child = Command::new("python")
+        let child = Command::new(common::python_exe())
             .args([
                 "sim/mqtt_sim.py",
                 "--host",
@@ -48,9 +48,10 @@ impl Drop for Simulator {
 
 #[test]
 fn mqtt_scan_returns_typed_records() {
-    let _sim = Simulator::spawn(PORT);
+    let port = common::tcp_port();
+    let _sim = Simulator::spawn(port);
 
-    let outcome = scadaver::ops::scan_ip(Protocol::Mqtt, "127.0.0.1", PORT, 2);
+    let outcome = scadaver::ops::scan_ip(Protocol::Mqtt, "127.0.0.1", port, 2);
     assert_eq!(
         outcome.records.len(),
         1,
@@ -59,7 +60,7 @@ fn mqtt_scan_returns_typed_records() {
     );
     let record = &outcome.records[0];
     assert_eq!(record.protocol, Protocol::Mqtt);
-    assert_eq!(record.port, PORT);
+    assert_eq!(record.port, port);
     assert_eq!(record.vendor, "mqtt");
 
     // The fixture enables `allow-anonymous`, and `probe` only returns `Some` for

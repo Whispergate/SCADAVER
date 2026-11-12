@@ -46,6 +46,38 @@ enum ScanEvent {
     },
 }
 
+/// One queued event plus the device it belongs to.
+///
+/// Without the owner, every line landed in whichever buffer was on screen when it arrived, so a scan
+/// of one target wrote its output into another target's panel. The owner travels with the line, and
+/// `drain_scan_events` files it under that device.
+struct TargetedEvent {
+    ip: String,
+    event: ScanEvent,
+}
+
+/// A sender that stamps its device onto every event it forwards. An empty owner means "not tied to a
+/// device" (broadcast sweeps, startup notices), which keeps today's behaviour of drawing in the panel
+/// the operator is looking at.
+#[derive(Clone)]
+struct TargetTx {
+    ip: String,
+    tx: mpsc::Sender<TargetedEvent>,
+}
+
+impl TargetTx {
+    fn new(ip: impl Into<String>, tx: mpsc::Sender<TargetedEvent>) -> Self {
+        Self { ip: ip.into(), tx }
+    }
+
+    fn send(&self, event: ScanEvent) -> Result<(), mpsc::SendError<TargetedEvent>> {
+        self.tx.send(TargetedEvent {
+            ip: self.ip.clone(),
+            event,
+        })
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum ExportFormat {
     #[default]
@@ -716,8 +748,8 @@ pub struct App {
     output_lines: Vec<String>,
     output_scroll: usize,
     logs: VecDeque<String>,
-    scan_rx: mpsc::Receiver<ScanEvent>,
-    scan_tx: mpsc::Sender<ScanEvent>,
+    scan_rx: mpsc::Receiver<TargetedEvent>,
+    scan_tx: mpsc::Sender<TargetedEvent>,
     scan_menu_sel: usize,
     exploit_defs: Vec<ExploitDef>,
     exploit_sel: usize,
@@ -970,8 +1002,9 @@ impl App {
     }
 
     fn drain_scan_events(&mut self, db: &Database) {
-        while let Ok(ev) = self.scan_rx.try_recv() {
-            match ev {
+        while let Ok(targeted) = self.scan_rx.try_recv() {
+            let owner = targeted.ip;
+            match targeted.event {
                 ScanEvent::DeviceFound(info) => {
                     let fields = serde_json::to_value(&info.fields).unwrap_or_default();
                     let _ = db.upsert_protocol_device(&info.ip, &info.vendor, &fields);
@@ -980,15 +1013,15 @@ impl App {
                     self.reload(db);
                 }
                 ScanEvent::Done(msg) => {
-                    self.output_lines.push(format!("── done: {msg} ──"));
                     self.log(format!("[*] {msg}"));
                     self.active_jobs = self.active_jobs.saturating_sub(1);
+                    self.push_output_line(
+                        &owner,
+                        format!("\u{2500}\u{2500} done: {msg} \u{2500}\u{2500}"),
+                    );
                 }
                 ScanEvent::Output(line) => {
-                    if self.output_lines.len() >= 100_000 {
-                        self.output_lines.remove(0);
-                    }
-                    self.output_lines.push(line);
+                    self.push_output_line(&owner, line);
                 }
                 ScanEvent::MqttLine(line) => {
                     self.mqtt_attack_lines.push(line);
@@ -1012,11 +1045,10 @@ impl App {
                         .and_then(|devs| devs.into_iter().find(|d| d.ip == ip))
                         .map_or_else(|| "discovered".to_string(), |d| d.vendor);
                     let _ = db.upsert_device(&ip, &vendor, &fields);
-                    if self.output_lines.len() >= 500 {
-                        self.output_lines.remove(0);
-                    }
-                    self.output_lines
-                        .push(format!("[+] Credentials saved for {ip}: {username}"));
+                    self.push_output_line(
+                        &owner,
+                        format!("[+] Credentials saved for {ip}: {username}"),
+                    );
                 }
                 ScanEvent::TagLeaves {
                     ip,
@@ -1024,54 +1056,131 @@ impl App {
                     vendor,
                     leaves,
                 } => {
-                    self.output_from_cache = false;
-                    self.output_has_tag_content = true;
-                    self.output_line_backup = None;
-                    self.scan_timestamp = Some(std::time::Instant::now());
-                    self.tag_write_ip.clone_from(&ip);
-                    self.tag_write_port = port;
-                    self.tag_write_vendor.clone_from(&vendor);
-                    self.tag_leaves = leaves;
-                    // Persist struct member leaves (dotted paths) for offline Overview expansion.
-                    let members: Vec<(&str, bool)> = self
-                        .tag_leaves
-                        .iter()
-                        .filter(|(p, _)| p.contains('.'))
-                        .map(|(p, w)| (p.as_str(), *w))
-                        .collect();
-                    if !members.is_empty() {
-                        let _ = db.upsert_members_for_protocol(&ip, &vendor, &members);
-                    }
-                    self.tag_leaf_line_indices =
-                        build_leaf_line_indices(&self.output_lines, &self.tag_leaves);
-                    self.output_leaf_cursor = if self.tag_leaf_line_indices.is_empty() {
-                        None
-                    } else {
-                        Some(0)
-                    };
-                    if let Some(&(first_line, _)) = self.tag_leaf_line_indices.first() {
-                        self.scroll_to_output_line(first_line);
-                    }
-                    // Persist output so it survives device-list navigation.
-                    self.current_output_ip.clone_from(&ip);
-                    self.per_device_output.insert(
-                        ip,
-                        DeviceOutput {
-                            output_lines: self.output_lines.clone(),
-                            output_scroll: self.output_scroll,
-                            tag_leaves: self.tag_leaves.clone(),
-                            tag_leaf_line_indices: self.tag_leaf_line_indices.clone(),
-                            output_leaf_cursor: self.output_leaf_cursor,
-                            output_line_backup: None,
-                            tag_write_ip: self.tag_write_ip.clone(),
-                            tag_write_port: self.tag_write_port,
-                            tag_write_vendor: self.tag_write_vendor.clone(),
-                            scan_timestamp: self.scan_timestamp,
-                        },
-                    );
+                    self.apply_tag_leaves(db, ip, port, vendor, leaves);
                 }
             }
         }
+    }
+
+    /// The buffer a line belongs to.
+    ///
+    /// Live when the operator is looking at that device, or when the line is not tied to a device at
+    /// all (broadcast sweep, startup notice). Otherwise it goes to that device's stored slot, created
+    /// on demand, so a scan that finishes while another target is selected does not overwrite what is
+    /// on screen.
+    fn buffer_for(&mut self, owner: &str) -> &mut Vec<String> {
+        let live = owner.is_empty()
+            || self.current_output_ip.is_empty()
+            || owner == self.current_output_ip;
+        if live {
+            &mut self.output_lines
+        } else {
+            &mut self
+                .per_device_output
+                .entry(owner.to_string())
+                .or_insert_with(|| DeviceOutput {
+                    tag_write_ip: owner.to_string(),
+                    ..DeviceOutput::default()
+                })
+                .output_lines
+        }
+    }
+
+    /// When nothing is pinned to the panel yet, the device the operator just acted on takes it, so a
+    /// multi-host sweep does not pool every host's output into an unattached buffer.
+    fn adopt_output_if_unset(&mut self, ip: &str) {
+        if self.current_output_ip.is_empty() && !ip.is_empty() {
+            self.current_output_ip = ip.to_string();
+        }
+    }
+
+    fn push_output_line(&mut self, owner: &str, line: String) {
+        let buffer = self.buffer_for(owner);
+        if buffer.len() >= 100_000 {
+            buffer.remove(0);
+        }
+        buffer.push(line);
+    }
+
+    /// File a finished tag enumeration under its own device.
+    ///
+    /// Enumeration takes seconds, so the operator has often moved to another target by the time the
+    /// leaves arrive. The old code adopted the leaves into the live buffers and rebonded
+    /// `current_output_ip`, which replaced the panel's contents with another target's tag tree.
+    fn apply_tag_leaves(
+        &mut self,
+        db: &Database,
+        ip: String,
+        port: u16,
+        vendor: String,
+        leaves: Vec<(String, bool)>,
+    ) {
+        // Persist struct member leaves (dotted paths) for offline Overview expansion.
+        let members: Vec<(&str, bool)> = leaves
+            .iter()
+            .filter(|(path, _)| path.contains('.'))
+            .map(|(path, writable)| (path.as_str(), *writable))
+            .collect();
+        if !members.is_empty() {
+            let _ = db.upsert_members_for_protocol(&ip, &vendor, &members);
+        }
+
+        let viewing_owner =
+            ip.is_empty() || self.current_output_ip.is_empty() || ip == self.current_output_ip;
+        if !viewing_owner {
+            let slot = self
+                .per_device_output
+                .entry(ip.clone())
+                .or_insert_with(|| DeviceOutput {
+                    tag_write_ip: ip.clone(),
+                    ..DeviceOutput::default()
+                });
+            slot.tag_leaves = leaves;
+            let indices = build_leaf_line_indices(&slot.output_lines, &slot.tag_leaves);
+            slot.output_leaf_cursor = if indices.is_empty() { None } else { Some(0) };
+            slot.tag_leaf_line_indices = indices;
+            slot.tag_write_ip = ip;
+            slot.tag_write_port = port;
+            slot.tag_write_vendor = vendor;
+            slot.scan_timestamp = Some(std::time::Instant::now());
+            slot.output_line_backup = None;
+            return;
+        }
+
+        self.output_from_cache = false;
+        self.output_has_tag_content = true;
+        self.output_line_backup = None;
+        self.scan_timestamp = Some(std::time::Instant::now());
+        self.tag_write_ip.clone_from(&ip);
+        self.tag_write_port = port;
+        self.tag_write_vendor.clone_from(&vendor);
+        self.tag_leaves = leaves;
+        self.tag_leaf_line_indices = build_leaf_line_indices(&self.output_lines, &self.tag_leaves);
+        self.output_leaf_cursor = if self.tag_leaf_line_indices.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        if let Some(&(first_line, _)) = self.tag_leaf_line_indices.first() {
+            self.scroll_to_output_line(first_line);
+        }
+        // Persist output so it survives device-list navigation.
+        self.current_output_ip.clone_from(&ip);
+        self.per_device_output.insert(
+            ip,
+            DeviceOutput {
+                output_lines: self.output_lines.clone(),
+                output_scroll: self.output_scroll,
+                tag_leaves: self.tag_leaves.clone(),
+                tag_leaf_line_indices: self.tag_leaf_line_indices.clone(),
+                output_leaf_cursor: self.output_leaf_cursor,
+                output_line_backup: None,
+                tag_write_ip: self.tag_write_ip.clone(),
+                tag_write_port: self.tag_write_port,
+                tag_write_vendor: self.tag_write_vendor.clone(),
+                scan_timestamp: self.scan_timestamp,
+            },
+        );
     }
 
     /// Swap output buffers when the selected device changes so each device's
@@ -1811,7 +1920,8 @@ fn autodetect_record(ip: &str, all: &[DeviceInfo]) -> Option<(String, DeviceInfo
     }
 }
 
-fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
+fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<TargetedEvent>) {
+    let tx = TargetTx::new(target.ip.clone(), tx);
     std::thread::spawn(move || {
         let label = target.label();
         let _ = tx.send(ScanEvent::Output(format!("[*] Probing {label}...")));
@@ -2048,7 +2158,9 @@ fn spawn_ip_scan(target: TargetScan, tx: mpsc::Sender<ScanEvent>) {
     });
 }
 
-fn spawn_broadcast_scan(scan_idx: usize, tx: mpsc::Sender<ScanEvent>) {
+fn spawn_broadcast_scan(scan_idx: usize, tx: mpsc::Sender<TargetedEvent>) {
+    // A sweep spans every host it finds, so it has no single owner and keeps drawing in the live panel.
+    let tx = TargetTx::new(String::new(), tx);
     std::thread::spawn(move || {
         let ifaces = get_interfaces();
         if ifaces.is_empty() {
@@ -2087,7 +2199,7 @@ fn spawn_broadcast_scan(scan_idx: usize, tx: mpsc::Sender<ScanEvent>) {
     });
 }
 
-fn run_vendor_broadcast(vendor_idx: usize, iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
+fn run_vendor_broadcast(vendor_idx: usize, iface: &NetworkInterface, tx: &TargetTx) {
     match vendor_idx {
         1 => scan_broadcast_beckhoff(iface, tx),
         2 => scan_broadcast_enip(iface, tx),
@@ -2099,7 +2211,7 @@ fn run_vendor_broadcast(vendor_idx: usize, iface: &NetworkInterface, tx: &mpsc::
     }
 }
 
-fn scan_broadcast_beckhoff(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
+fn scan_broadcast_beckhoff(iface: &NetworkInterface, tx: &TargetTx) {
     use casket::vendors::beckhoff::scan;
     if let Ok(devs) = scan::discover(iface, 3, true) {
         for d in devs {
@@ -2116,7 +2228,7 @@ fn scan_broadcast_beckhoff(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent
     }
 }
 
-fn scan_broadcast_enip(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
+fn scan_broadcast_enip(iface: &NetworkInterface, tx: &TargetTx) {
     use casket::vendors::enip::scan;
     if let Ok(devs) = scan::scan(iface, 3, true) {
         for d in devs {
@@ -2150,7 +2262,7 @@ fn scan_broadcast_enip(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
     }
 }
 
-fn scan_broadcast_schneider(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
+fn scan_broadcast_schneider(iface: &NetworkInterface, tx: &TargetTx) {
     use casket::vendors::schneider::scan;
     if let Ok(devs) = scan::scan(iface, 3, true) {
         for d in devs {
@@ -2165,7 +2277,7 @@ fn scan_broadcast_schneider(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEven
     }
 }
 
-fn scan_broadcast_mitsubishi(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
+fn scan_broadcast_mitsubishi(iface: &NetworkInterface, tx: &TargetTx) {
     use casket::vendors::mitsubishi::scan;
     if let Ok(devs) = scan::scan(iface, 3, true) {
         for d in devs {
@@ -2182,7 +2294,7 @@ fn scan_broadcast_mitsubishi(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEve
     }
 }
 
-fn scan_broadcast_ewon(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
+fn scan_broadcast_ewon(iface: &NetworkInterface, tx: &TargetTx) {
     use casket::vendors::ewon::scan;
     if let Ok(devs) = scan::scan(iface, 3, true) {
         for d in devs {
@@ -2227,7 +2339,7 @@ fn compute_sweep_prefix(
     (std::net::Ipv4Addr::from(net), host_bits)
 }
 
-fn scan_broadcast_modbus(iface: &NetworkInterface, tx: &mpsc::Sender<ScanEvent>) {
+fn scan_broadcast_modbus(iface: &NetworkInterface, tx: &TargetTx) {
     use casket::core::modbus;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
     use std::time::Duration;
@@ -2393,16 +2505,17 @@ fn run_exploit_for(
     port: u16,
     input: &str,
     label: &str,
-    tx: mpsc::Sender<ScanEvent>,
+    tx: mpsc::Sender<TargetedEvent>,
 ) {
     let vendor = vendor.to_lowercase();
     let ip = ip.to_string();
+    let tx = TargetTx::new(ip.clone(), tx);
     let input = input.to_string();
     let label = label.to_string();
 
     std::thread::spawn(move || {
         struct DoneGuard {
-            tx: mpsc::Sender<ScanEvent>,
+            tx: TargetTx,
             msg: String,
         }
         impl Drop for DoneGuard {
@@ -2464,7 +2577,7 @@ fn dispatch_exploit(
     input: &str,
     stored_password: Option<&str>,
     out: impl Fn(&str),
-    tx: &mpsc::Sender<ScanEvent>,
+    tx: &TargetTx,
 ) {
     // Actions that return structured tag data must be handled inline here so
     // they can forward ScanEvent::TagLeaves to the TUI channel.
@@ -2739,12 +2852,7 @@ fn save_and_diff(
     }
 }
 
-fn exploit_beckhoff_symbols(
-    ip: &str,
-    port: u16,
-    out: &impl Fn(&str),
-    tx: &mpsc::Sender<ScanEvent>,
-) {
+fn exploit_beckhoff_symbols(ip: &str, port: u16, out: &impl Fn(&str), tx: &TargetTx) {
     use casket::vendors::beckhoff::{ads, scan};
     let local_netid = ads::build_local_netid(&local_ip_for(ip));
     out(&format!("[*] Enumerating ADS symbols on {ip}..."));
@@ -4510,12 +4618,13 @@ fn handle_normal(app: &mut App, db: &Database, code: KeyCode, mods: KeyModifiers
         }
         KeyCode::Char('r' | 'R') => {
             if let Some(ip) = app.selected_device_ip() {
+                app.adopt_output_if_unset(&ip);
                 if app.active_jobs == 0 {
                     app.output_lines.clear();
                     app.output_has_tag_content = false;
                     app.output_scroll = 0;
                 }
-                app.output_lines.push(format!("══ Rescan @ {ip} ══"));
+                app.push_output_line(&ip, format!("══ Rescan @ {ip} ══"));
                 app.active_jobs += 1;
                 app.log(format!("[*] Rescanning {ip}..."));
                 let tx = app.scan_tx.clone();
@@ -4675,12 +4784,14 @@ fn handle_ip_input(app: &mut App, code: KeyCode) {
                 return;
             }
             if let Some(target) = parse_target_scan(&raw) {
-                if app.active_jobs == 0 {
+                app.adopt_output_if_unset(&target.ip);
+                let viewing = target.ip == app.current_output_ip;
+                if viewing && app.active_jobs == 0 {
                     app.output_lines.clear();
                     app.output_scroll = 0;
                 }
                 let label = target.label();
-                app.output_lines.push(format!("══ Probe @ {label} ══"));
+                app.push_output_line(&target.ip, format!("══ Probe @ {label} ══"));
                 app.active_jobs += 1;
                 app.log(format!("[*] Probing {label}..."));
                 let tx = app.scan_tx.clone();
@@ -5215,6 +5326,12 @@ fn handle_cache_rescan_prompt(app: &mut App, code: KeyCode) {
 
 fn fire_exploit(app: &mut App, input: &str) {
     if let (Some(ip), Some(vendor)) = (app.selected_device_ip(), app.selected_vendor()) {
+        // A device row with no address produces output headed "@ " with nothing after it, which reads
+        // as a broken scan. Refuse it and say why instead.
+        if ip.is_empty() {
+            app.log("[!] Selected device has no address, rescan it before running actions");
+            return;
+        }
         let Some(exploit_def) = app.exploit_defs.get(app.exploit_sel) else {
             return;
         };
@@ -5253,9 +5370,13 @@ fn execute_pending_exploit(app: &mut App, pending: &PendingExploit) {
         .get(pending.idx)
         .is_some_and(|e| e.is_monitor);
 
-    if app.active_jobs == 0 {
+    // Only clear the panel when this result is about to land in it. An action aimed at another
+    // device must not wipe what the operator is reading.
+    app.adopt_output_if_unset(&pending.ip);
+    let viewing = app.current_output_ip.is_empty() || pending.ip == app.current_output_ip;
+    if viewing && app.active_jobs == 0 {
         if app.output_has_tag_content {
-            // Preserve the tag list — append exploit output below a separator so the
+            // Preserve the tag list, append exploit output below a separator so the
             // user can still scroll up to see tags.  Next exploit will clear normally.
             app.output_lines.push("\u{2500}".repeat(60));
             app.output_has_tag_content = false;
@@ -5264,8 +5385,10 @@ fn execute_pending_exploit(app: &mut App, pending: &PendingExploit) {
         }
         app.output_scroll = 0;
     }
-    app.output_lines
-        .push(format!("══ {} @ {} ══", pending.label, pending.ip));
+    app.push_output_line(
+        &pending.ip,
+        format!("══ {} @ {} ══", pending.label, pending.ip),
+    );
     app.log(format!("[*] Running: {} on {}", pending.label, pending.ip));
     app.active_jobs += 1;
 
@@ -5275,13 +5398,13 @@ fn execute_pending_exploit(app: &mut App, pending: &PendingExploit) {
         }
         let stop = Arc::new(AtomicBool::new(false));
         app.monitor_stop = Some(Arc::clone(&stop));
-        let tx = app.scan_tx.clone();
         let ip2 = pending.ip.clone();
+        let tx = TargetTx::new(ip2.clone(), app.scan_tx.clone());
         let label2 = pending.label.clone();
         let port = pending.port;
         std::thread::spawn(move || {
             struct DoneGuard {
-                tx: mpsc::Sender<ScanEvent>,
+                tx: TargetTx,
                 msg: String,
             }
             impl Drop for DoneGuard {
@@ -5868,7 +5991,7 @@ fn run_tui_acl(app: &mut App) {
         return;
     };
     let arc = Arc::clone(arc);
-    let tx = app.scan_tx.clone();
+    let tx = TargetTx::new(String::new(), app.scan_tx.clone());
 
     app.mqtt_attack_running = true;
     app.mqtt_attack_lines.clear();
@@ -5941,7 +6064,7 @@ fn run_tui_retain(app: &mut App) {
         return;
     };
     let arc = Arc::clone(arc);
-    let tx = app.scan_tx.clone();
+    let tx = TargetTx::new(String::new(), app.scan_tx.clone());
 
     app.mqtt_attack_running = true;
     app.mqtt_attack_lines.clear();
@@ -6024,7 +6147,7 @@ fn run_tui_session_hijack(app: &mut App, clientid: &str) {
     } else {
         Some(app.mqtt_password.clone())
     };
-    let tx = app.scan_tx.clone();
+    let tx = TargetTx::new(String::new(), app.scan_tx.clone());
 
     app.mqtt_attack_running = true;
     app.mqtt_attack_lines.clear();
@@ -6104,11 +6227,158 @@ fn run_tui_session_hijack(app: &mut App, clientid: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Database;
     use crate::ops::{
         modbus_map_chunks, parse_modbus_map_input, parse_slmp_map_input, slmp_map_chunks,
         ModbusMapRange, ModbusTable, SlmpDeviceKind, SlmpMapRange, MODBUS_ADDRESS_SPACE,
         SLMP_ADDRESS_SPACE,
     };
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_db() -> Database {
+        let path = std::env::temp_dir().join(format!(
+            "scadaver-tui-test-{}-{}.sqlite",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        Database::open(&path).unwrap()
+    }
+
+    /// Two devices, the operator watching the first one.
+    fn two_devices() -> App {
+        let mut app = app_with_device("siemens", serde_json::json!({}));
+        app.devices.push(DeviceRecord {
+            id: 2,
+            ip: "192.168.1.11".to_string(),
+            vendor: "siemens".to_string(),
+            last_seen: 0,
+            fields: serde_json::json!({}),
+        });
+        app.filtered_indices = vec![0, 1];
+        app.current_output_ip = "192.168.1.10".to_string();
+        app.output_lines = vec!["[+] panel of .10".to_string()];
+        app
+    }
+
+    #[test]
+    fn output_from_the_other_target_stays_out_of_the_visible_panel() {
+        let db = temp_db();
+        let mut app = two_devices();
+
+        app.scan_tx
+            .send(TargetedEvent {
+                ip: "192.168.1.11".to_string(),
+                event: ScanEvent::Output("[*] 152 top-level tags".to_string()),
+            })
+            .unwrap();
+        app.drain_scan_events(&db);
+
+        assert_eq!(app.output_lines, vec!["[+] panel of .10".to_string()]);
+        assert_eq!(app.current_output_ip, "192.168.1.10");
+        assert!(
+            app.per_device_output["192.168.1.11"]
+                .output_lines
+                .iter()
+                .any(|line| line.contains("152 top-level tags")),
+            "the line should be filed under the device it came from"
+        );
+    }
+
+    #[test]
+    fn done_marker_follows_its_owner_and_still_releases_the_job() {
+        let db = temp_db();
+        let mut app = two_devices();
+        app.active_jobs = 1;
+
+        app.scan_tx
+            .send(TargetedEvent {
+                ip: "192.168.1.11".to_string(),
+                event: ScanEvent::Done("Read CPU State @ 192.168.1.11".to_string()),
+            })
+            .unwrap();
+        app.drain_scan_events(&db);
+
+        assert_eq!(app.active_jobs, 0);
+        assert_eq!(app.output_lines, vec!["[+] panel of .10".to_string()]);
+        assert!(app.per_device_output["192.168.1.11"]
+            .output_lines
+            .iter()
+            .any(|line| line.contains("done: Read CPU State")));
+    }
+
+    #[test]
+    fn tag_leaves_from_another_target_do_not_take_over_the_panel() {
+        let db = temp_db();
+        let mut app = two_devices();
+
+        app.scan_tx
+            .send(TargetedEvent {
+                ip: "192.168.1.11".to_string(),
+                event: ScanEvent::TagLeaves {
+                    ip: "192.168.1.11".to_string(),
+                    port: 102,
+                    vendor: "siemens".to_string(),
+                    leaves: vec![("DB1.Real".to_string(), true)],
+                },
+            })
+            .unwrap();
+        app.drain_scan_events(&db);
+
+        assert_eq!(app.current_output_ip, "192.168.1.10");
+        assert_eq!(app.output_lines, vec!["[+] panel of .10".to_string()]);
+        assert!(app.tag_leaves.is_empty());
+        let slot = &app.per_device_output["192.168.1.11"];
+        assert_eq!(slot.tag_leaves, vec![("DB1.Real".to_string(), true)]);
+        assert_eq!(slot.tag_write_ip, "192.168.1.11");
+        assert_eq!(slot.tag_write_port, 102);
+    }
+
+    #[test]
+    fn tag_leaves_for_the_visible_target_are_adopted_as_before() {
+        let db = temp_db();
+        let mut app = two_devices();
+
+        app.scan_tx
+            .send(TargetedEvent {
+                ip: "192.168.1.10".to_string(),
+                event: ScanEvent::TagLeaves {
+                    ip: "192.168.1.10".to_string(),
+                    port: 102,
+                    vendor: "siemens".to_string(),
+                    leaves: vec![("DB1.Real".to_string(), true)],
+                },
+            })
+            .unwrap();
+        app.drain_scan_events(&db);
+
+        assert_eq!(app.tag_write_ip, "192.168.1.10");
+        assert_eq!(app.tag_write_port, 102);
+        assert_eq!(app.tag_leaves, vec![("DB1.Real".to_string(), true)]);
+        assert_eq!(app.current_output_ip, "192.168.1.10");
+    }
+
+    #[test]
+    fn unattached_panel_adopts_the_target_of_the_first_action() {
+        let mut app = two_devices();
+        app.current_output_ip.clear();
+        app.adopt_output_if_unset("192.168.1.11");
+        assert_eq!(app.current_output_ip, "192.168.1.11");
+    }
+
+    #[test]
+    fn action_on_a_device_without_an_address_is_refused() {
+        let mut app = two_devices();
+        app.devices[0].ip.clear();
+        fire_exploit(&mut app, "");
+        assert!(app.pending_exploit.is_none());
+        assert!(
+            app.logs.iter().any(|line| line.contains("no address")),
+            "the refusal should be visible in the activity log"
+        );
+    }
 
     #[test]
     fn parse_target_scan_accepts_ip_only() {

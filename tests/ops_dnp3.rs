@@ -3,18 +3,21 @@
 // the tuple struct, so it reports the spawn as unreaped.
 #![allow(clippy::zombie_processes)]
 
+mod common;
+
 use scadaver::protocol::Protocol;
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-const PORT: u16 = 33001;
+// The port comes from the OS: 33001 sat inside a Windows reserved range, where bind fails with
+// WinError 10013 and the simulator never starts.
 
 struct Simulator(Child);
 
 impl Simulator {
     fn spawn(port: u16) -> Self {
-        let child = Command::new("python")
+        let child = Command::new(common::python_exe())
             .args([
                 "sim/dnp3_sim.py",
                 "--host",
@@ -48,13 +51,14 @@ impl Drop for Simulator {
 
 #[test]
 fn dnp3_scan_reads_the_outstation_and_its_attributes() {
-    let _sim = Simulator::spawn(PORT);
+    let port = common::tcp_port();
+    let _sim = Simulator::spawn(port);
 
-    let outcome = scadaver::ops::scan_ip(Protocol::Dnp3, "127.0.0.1", PORT, 2);
+    let outcome = scadaver::ops::scan_ip(Protocol::Dnp3, "127.0.0.1", port, 2);
     assert_eq!(outcome.records.len(), 1, "one outstation expected");
     let record = &outcome.records[0];
     assert_eq!(record.protocol, Protocol::Dnp3);
-    assert_eq!(record.port, PORT);
+    assert_eq!(record.port, port);
     assert_eq!(record.ip, "127.0.0.1");
     assert_eq!(record.vendor, "dnp3");
 

@@ -3,6 +3,8 @@
 // the tuple struct, so it reports the spawn as unreaped.
 #![allow(clippy::zombie_processes)]
 
+mod common;
+
 use scadaver::protocol::Protocol;
 use std::net::UdpSocket;
 use std::process::{Child, Command, Stdio};
@@ -14,7 +16,7 @@ struct Simulator(Child);
 
 impl Simulator {
     fn spawn(port: u16) -> Self {
-        let child = Command::new("python")
+        let child = Command::new(common::python_exe())
             .args([
                 "scripts/sim_bacnet.py",
                 "--host",

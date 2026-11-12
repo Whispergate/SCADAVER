@@ -103,6 +103,34 @@ impl Protocol {
         ALL.into_iter()
             .find(|p| p.slug() == wanted || p.alias_slug() == Some(wanted.as_str()))
     }
+
+    /// casket's capability row for this protocol.
+    ///
+    /// The slugs are deliberately not joined directly: scadaver calls Omron `fins` and Siemens `s7`
+    /// because those are the flag and URL spellings operators already use, while casket names rows
+    /// after its vendor directories (`omron`, `siemens`). Joining the two silently loses two
+    /// protocols, which `capability_join_uses_casket_names_not_scadaver_slugs` pins.
+    #[must_use]
+    pub fn capability(self) -> Option<&'static casket::capabilities::Capability> {
+        let row_name = match self {
+            Self::Omron => "omron",
+            Self::Siemens => "siemens",
+            other => other.slug(),
+        };
+        casket::capabilities::capabilities()
+            .iter()
+            .find(|row| row.protocol == row_name)
+    }
+
+    /// Whether casket exposes a `write_*` function for this protocol.
+    ///
+    /// This answers "is there a write API", not "can this device be changed": SNMP, MQTT, IEC-104
+    /// and Schneider can all change state through `set`, `publish`, `single_command` and
+    /// `force_output_bit`, and casket reports those as `write: false` on purpose.
+    #[must_use]
+    pub fn supports_write(self) -> bool {
+        self.capability().is_some_and(|row| row.write)
+    }
 }
 
 /// Every variant, in enum order. One list, so `from_slug` cannot silently miss a protocol.
@@ -162,5 +190,51 @@ mod tests {
         assert_eq!(Protocol::from_slug("s7comm"), Some(Protocol::Siemens));
         assert_eq!(Protocol::from_slug("omron"), Some(Protocol::Omron));
         assert_eq!(Protocol::from_slug("nope"), None);
+    }
+
+    #[test]
+    fn every_protocol_has_a_casket_capability_row() {
+        for protocol in super::ALL {
+            assert!(
+                protocol.capability().is_some(),
+                "{} has no casket capability row",
+                protocol.slug()
+            );
+        }
+    }
+
+    #[test]
+    fn capability_join_uses_casket_names_not_scadaver_slugs() {
+        assert_eq!(
+            Protocol::Omron.capability().map(|row| row.protocol),
+            Some("omron")
+        );
+        assert_eq!(
+            Protocol::Siemens.capability().map(|row| row.protocol),
+            Some("siemens")
+        );
+    }
+
+    #[test]
+    fn write_paths_are_exactly_the_protocols_that_have_one() {
+        let mut writers: Vec<&str> = super::ALL
+            .iter()
+            .filter(|protocol| protocol.supports_write())
+            .map(|protocol| protocol.slug())
+            .collect();
+        writers.sort_unstable();
+        // Spelled in scadaver's own slugs, which is why Omron appears as `fins` here.
+        assert_eq!(
+            writers,
+            vec![
+                "beckhoff",
+                "fins",
+                "mitsubishi",
+                "modbus",
+                "phoenix",
+                "rockwell",
+                "s7"
+            ]
+        );
     }
 }

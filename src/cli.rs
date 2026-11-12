@@ -1119,12 +1119,16 @@ fn emit_output(s: &str) {
 
 #[allow(clippy::unnecessary_wraps)]
 fn scan_targeted(ip: &str, port: u16, timeout: u64, proto: Protocol, cache: bool) -> Result<()> {
-    if let Some(fields) = crate::ops::scan_ip_report(proto, ip, port, timeout, &emit_output) {
-        if cache {
-            let vendor = fields["vendor"].as_str().unwrap_or("");
-            let p = u16::try_from(fields["port"].as_u64().unwrap_or(0)).unwrap_or(0);
-            let _ = cache_scan_observation(ip, vendor, p, &fields);
-        }
+    // A targeted scan of one address is a question with a yes or no answer. Returning Ok(()) when
+    // nothing answered made `scan` exit 0 on a dead host, so a script could not tell a silent
+    // device from a scanned one. The probe's own message explains why; the exit code must agree.
+    let Some(fields) = crate::ops::scan_ip_report(proto, ip, port, timeout, &emit_output) else {
+        bail!("No {proto} response from {ip}:{port}.");
+    };
+    if cache {
+        let vendor = fields["vendor"].as_str().unwrap_or("");
+        let p = u16::try_from(fields["port"].as_u64().unwrap_or(0)).unwrap_or(0);
+        let _ = cache_scan_observation(ip, vendor, p, &fields);
     }
     Ok(())
 }
@@ -2065,6 +2069,21 @@ fn run_get(
                 }
                 crate::display::print_success(&format!("{} object(s).", entries.len()));
             }
+            for (o, v) in &entries {
+                println!("  {o} = {}", v.display());
+            }
+            if cache {
+                let points: Vec<(String, String)> = entries
+                    .iter()
+                    .map(|(entry_oid, value)| (format!("oid:{entry_oid}"), value.display()))
+                    .collect();
+                let refs: Vec<(&str, Option<&str>, &str)> = points
+                    .iter()
+                    .map(|(address, value)| (address.as_str(), Some("SNMP"), value.as_str()))
+                    .collect();
+                cache_live_points(ip, protocol, snmp_port, &refs)?;
+            }
+            crate::display::print_success(&format!("{} object(s).", entries.len()));
             Ok(())
         }
         GetNoun::Enum { community } => {
@@ -2171,6 +2190,7 @@ fn run_get(
             } else {
                 crate::display::print_success(&format!("Extracted {} credential(s).", users.len()));
             }
+            crate::display::print_success(&format!("Extracted {} credential(s).", users.len()));
             Ok(())
         }
         GetNoun::Session => {
@@ -2201,7 +2221,21 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
     match proto {
         Some(Protocol::Siemens) => {
             use casket::vendors::siemens::scan;
-            let dev = scan::scan_ip_with_port(ip, if port == 0 { 102 } else { port });
+            let s7_port = if port == 0 { 102 } else { port };
+            // scan_ip_with_port returns a struct even when nothing answered, so the fields are all
+            // empty and the run used to look successful. A refused or timed-out connect is the one
+            // honest signal available before a COTP frame is sent.
+            let addr = std::net::SocketAddr::from((
+                ip.parse::<std::net::IpAddr>()
+                    .map_err(|e| anyhow::anyhow!("'{ip}' is not an IP address: {e}"))?,
+                s7_port,
+            ));
+            if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(timeout))
+                .is_err()
+            {
+                bail!("No Siemens device responded at {ip}:{s7_port}.");
+            }
+            let dev = scan::scan_ip_with_port(ip, s7_port);
             println!("  IP:       {}", dev.ip);
             if let Some(hw) = &dev.hardware {
                 println!("  Hardware: {hw}");
@@ -2235,10 +2269,9 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             let devs = scan::discover_ip_with_port(ip, timeout, false, port).unwrap_or_default();
             pb.finish_and_clear();
             let Some(dev) = devs.into_iter().next() else {
-                crate::display::print_error("No Beckhoff device found.");
-                return Ok(());
+                bail!("No Beckhoff device found at {ip}.");
             };
-            let pb2 = crate::display::spinner_start("Reading full device infoâ€¦");
+            let pb2 = crate::display::spinner_start("Reading full device info…");
             let result = scan::get_device_info_full(&dev, &local_netid, port);
             pb2.finish_and_clear();
             match result {
@@ -2287,8 +2320,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             let dev = client::scan_ip_with_port(ip, bacnet_port, timeout);
             pb.finish_and_clear();
             let Some(d) = dev else {
-                crate::display::print_error("No BACnet device found.");
-                return Ok(());
+                bail!("No BACnet device found at {ip}:{bacnet_port}.");
             };
             println!("  Instance:  {}", d.instance_id);
             println!("  Vendor ID: {}", d.vendor_id);
@@ -2312,8 +2344,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             let dev = client::detect_with_port(ip, dnp3_port, Duration::from_secs(timeout));
             pb.finish_and_clear();
             let Some(d) = dev else {
-                crate::display::print_error("No DNP3 outstation found.");
-                return Ok(());
+                bail!("No DNP3 outstation found at {ip}:{port}.");
             };
             println!("  Outstation: 0x{:04x}", d.outstation_addr);
             for (k, v) in &d.device_attributes {
@@ -2330,8 +2361,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             let dev = client::detect(ip, opcua_port, Duration::from_secs(timeout));
             pb.finish_and_clear();
             let Some(d) = dev else {
-                crate::display::print_error("No OPC-UA server found.");
-                return Ok(());
+                bail!("No OPC-UA server found at {ip}:{opcua_port}.");
             };
             println!("  Application: {}", d.application_name);
             if !d.application_uri.is_empty() {
@@ -2353,8 +2383,7 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             let mut session = match session {
                 Ok(s) => s,
                 Err(e) => {
-                    crate::display::print_error(&format!("IEC 104 connection failed: {e}"));
-                    return Ok(());
+                    bail!("IEC 104 connection failed at {ip}:{iec_port}: {e}");
                 }
             };
             match client::general_interrogation(&mut session) {
@@ -2379,18 +2408,17 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             let devs = scan::scan_ip_with_transport(ip, timeout, false, port, Transport::Tcp)?;
             pb.finish_and_clear();
             if devs.is_empty() {
-                crate::display::print_error("No Modbus TCP device responded.");
-            } else {
-                for d in &devs {
-                    if let Some(name) = &d.name {
-                        println!("  Name:     {name}");
-                    }
-                    if let Some(fw) = &d.firmware {
-                        println!("  Firmware: {fw}");
-                    }
-                    if let Some(uid) = d.modbus_unit_id {
-                        println!("  Unit ID:  {uid}");
-                    }
+                bail!("No Modbus TCP device responded at {ip}:{port}.");
+            }
+            for d in &devs {
+                if let Some(name) = &d.name {
+                    println!("  Name:     {name}");
+                }
+                if let Some(fw) = &d.firmware {
+                    println!("  Firmware: {fw}");
+                }
+                if let Some(uid) = d.modbus_unit_id {
+                    println!("  Unit ID:  {uid}");
                 }
             }
         }
@@ -2400,30 +2428,29 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             let devs = scan::scan_ip(ip, timeout, false).unwrap_or_default();
             pb.finish_and_clear();
             if devs.is_empty() {
-                crate::display::print_error("No eWON device responded.");
-            } else {
-                for dev in &devs {
-                    if let Some(ip_addr) = &dev.ip {
-                        println!("  IP:           {ip_addr}");
-                    }
-                    if let Some(mac) = &dev.mac {
-                        println!("  MAC:          {mac}");
-                    }
-                    if let Some(serial) = &dev.serial {
-                        println!("  Serial:       {serial}");
-                    }
-                    if let Some(fw) = &dev.firmware {
-                        println!("  Firmware:     {fw}");
-                    }
-                    if let Some(pc) = &dev.product_code {
-                        println!("  Product code: {pc}");
-                    }
-                    if let Some(id) = &dev.identifier {
-                        println!("  Identifier:   {id}");
-                    }
-                }
-                crate::display::print_success(&format!("{} eWON device(s).", devs.len()));
+                bail!("No eWON device responded at {ip}:{port}.");
             }
+            for dev in &devs {
+                if let Some(ip_addr) = &dev.ip {
+                    println!("  IP:           {ip_addr}");
+                }
+                if let Some(mac) = &dev.mac {
+                    println!("  MAC:          {mac}");
+                }
+                if let Some(serial) = &dev.serial {
+                    println!("  Serial:       {serial}");
+                }
+                if let Some(fw) = &dev.firmware {
+                    println!("  Firmware:     {fw}");
+                }
+                if let Some(pc) = &dev.product_code {
+                    println!("  Product code: {pc}");
+                }
+                if let Some(id) = &dev.identifier {
+                    println!("  Identifier:   {id}");
+                }
+            }
+            crate::display::print_success(&format!("{} eWON device(s).", devs.len()));
         }
         Some(Protocol::Mqtt) => {
             use casket::vendors::mqtt::client;
@@ -2451,13 +2478,12 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             let devs = scan::scan_ip(ip, timeout, false).unwrap_or_default();
             pb.finish_and_clear();
             if devs.is_empty() {
-                crate::display::print_error("No EtherNet/IP device responded.");
-            } else {
-                for d in &devs {
-                    println!("  Product:  {}", d.product_name);
-                    println!("  Vendor:   {}", d.vendor_id);
-                    println!("  Revision: {}", d.revision);
-                }
+                bail!("No EtherNet/IP device responded at {ip}:{port}.");
+            }
+            for d in &devs {
+                println!("  Product:  {}", d.product_name);
+                println!("  Vendor:   {}", d.vendor_id);
+                println!("  Revision: {}", d.revision);
             }
         }
         Some(Protocol::Schneider) => {
@@ -2467,22 +2493,35 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             let devs = scan::scan_ip_with_transport(ip, timeout, false, port, Transport::Both)
                 .unwrap_or_default();
             pb.finish_and_clear();
+            // Discovery on a silent host still yields one record whose only field is the placeholder
+            // name "(short response)". Counting that as a device is what made `get info` exit 0 against
+            // a closed port, so require an actual identity field before believing it.
+            let devs: Vec<_> = devs
+                .into_iter()
+                .filter(|d| {
+                    d.firmware.is_some()
+                        || d.protocol.is_some()
+                        || d.modbus_unit_id.is_some()
+                        || d.name
+                            .as_deref()
+                            .is_some_and(|name| name != "(short response)")
+                })
+                .collect();
             if devs.is_empty() {
-                crate::display::print_error("No Schneider device responded.");
-            } else {
-                for d in &devs {
-                    if let Some(name) = &d.name {
-                        println!("  Name:     {name}");
-                    }
-                    if let Some(fw) = &d.firmware {
-                        println!("  Firmware: {fw}");
-                    }
-                    if let Some(proto) = &d.protocol {
-                        println!("  Protocol: {proto}");
-                    }
-                    if let Some(uid) = d.modbus_unit_id {
-                        println!("  Unit ID:  {uid}");
-                    }
+                bail!("No Schneider device responded at {ip}:{port}.");
+            }
+            for d in &devs {
+                if let Some(name) = &d.name {
+                    println!("  Name:     {name}");
+                }
+                if let Some(fw) = &d.firmware {
+                    println!("  Firmware: {fw}");
+                }
+                if let Some(proto) = &d.protocol {
+                    println!("  Protocol: {proto}");
+                }
+                if let Some(uid) = d.modbus_unit_id {
+                    println!("  Unit ID:  {uid}");
                 }
             }
         }
@@ -2494,19 +2533,18 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
                 .unwrap_or_default();
             pb.finish_and_clear();
             if devs.is_empty() {
-                crate::display::print_error("No Mitsubishi device responded.");
-            } else {
-                for d in &devs {
-                    println!("  PLC Type: {}", d.plc_type);
-                    if let Some(title) = &d.title {
-                        println!("  Title:    {title}");
-                    }
-                    if let Some(comment) = &d.comment {
-                        println!("  Comment:  {comment}");
-                    }
-                    if let Some(proto) = &d.protocol {
-                        println!("  Protocol: {proto}");
-                    }
+                bail!("No Mitsubishi device responded at {ip}:{port}.");
+            }
+            for d in &devs {
+                println!("  PLC Type: {}", d.plc_type);
+                if let Some(title) = &d.title {
+                    println!("  Title:    {title}");
+                }
+                if let Some(comment) = &d.comment {
+                    println!("  Comment:  {comment}");
+                }
+                if let Some(proto) = &d.protocol {
+                    println!("  Protocol: {proto}");
                 }
             }
         }
@@ -2523,11 +2561,10 @@ fn get_info(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resul
             }
             pb.finish_and_clear();
             if found.is_empty() {
-                crate::display::print_error("No SNMP community strings responded.");
-            } else {
-                for (c, descr) in &found {
-                    println!("  community={c:<12}  sysDescr={descr}");
-                }
+                bail!("No SNMP community strings responded at {ip}.");
+            }
+            for (c, descr) in &found {
+                println!("  community={c:<12}  sysDescr={descr}");
             }
         }
         None => bail!("'--protocol <PROTO>' required for 'get info'"),
@@ -2577,7 +2614,7 @@ fn get_state(ip: &str, port: u16, timeout: u64, proto: Option<Protocol>) -> Resu
                     "CPU run/stop state is not readable via SLMP discovery.",
                 );
             } else {
-                crate::display::print_error("No Mitsubishi MELSEC device responded.");
+                bail!("No Mitsubishi MELSEC device responded at {ip}:{port}.");
             }
         }
         Some(Protocol::Phoenix) => {
@@ -3366,6 +3403,10 @@ fn get_tags(
                 }
                 crate::display::print_success(&format!("{} attribute(s).", attrs.len()));
             }
+            for (k, v) in &attrs {
+                println!("  {k}: {v}");
+            }
+            crate::display::print_success(&format!("{} attribute(s).", attrs.len()));
         }
         Some(Protocol::OpcUa) => {
             use casket::vendors::opcua::client;
@@ -3681,8 +3722,7 @@ fn get_tag(
             let devs = scan::discover_ip_with_port(ip, timeout, true, port).unwrap_or_default();
             pb.finish_and_clear();
             let Some(dev) = devs.into_iter().next() else {
-                crate::display::print_error("No Beckhoff device found.");
-                return Ok(());
+                bail!("No Beckhoff device found at {ip}.");
             };
             match scan::read_symbol_value(&dev, &local_netid, name, port) {
                 Ok(val) => println!(
@@ -4726,6 +4766,7 @@ fn run_run(ip: &str, port: u16, timeout: u64, cmd: RunCmd) -> Result<()> {
             } else {
                 crate::display::print_success(&format!("Extracted {} credential(s).", users.len()));
             }
+            crate::display::print_success(&format!("Extracted {} credential(s).", users.len()));
         }
         RunCmd::Portscan { ports } => {
             use casket::core::portscan::scan_ot_ports;
@@ -4930,6 +4971,24 @@ fn run_db(cmd: DbCmd) -> Result<()> {
                 }
                 crate::display::print_success(&format!("{} device(s).", devices.len()));
             }
+            println!("{:<5}  {:<16}  {:<14}  LAST SEEN", "ID", "IP", "VENDOR");
+            println!("{}", "-".repeat(60));
+            for d in &devices {
+                use std::time::{Duration, SystemTime, UNIX_EPOCH};
+                let ts = UNIX_EPOCH + Duration::from_secs(d.last_seen.cast_unsigned());
+                let elapsed = SystemTime::now().duration_since(ts).unwrap_or_default();
+                let ago = if elapsed.as_secs() < 60 {
+                    format!("{}s ago", elapsed.as_secs())
+                } else if elapsed.as_secs() < 3600 {
+                    format!("{}m ago", elapsed.as_secs() / 60)
+                } else if elapsed.as_secs() < 86400 {
+                    format!("{}h ago", elapsed.as_secs() / 3600)
+                } else {
+                    format!("{}d ago", elapsed.as_secs() / 86400)
+                };
+                println!("{:<5}  {:<16}  {:<14}  {}", d.id, d.ip, d.vendor, ago);
+            }
+            crate::display::print_success(&format!("{} device(s).", devices.len()));
         }
         DbCmd::Show { ip } => {
             let protocols = db.load_protocols(&ip)?;

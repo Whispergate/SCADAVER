@@ -651,11 +651,18 @@ fn web_protocols() -> Vec<Value> {
     let mut protocols: Vec<Value> = casket::core::autodetect::builtin_protocols()
         .into_iter()
         .map(|protocol| {
+            // `write` is casket's statement about API shape: a `write_*` function exists. It is not
+            // a claim that the device can be changed, which is why `write_notes` travels with it.
+            let capability = casket::capabilities::capabilities()
+                .iter()
+                .find(|row| row.protocol == protocol.slug);
             json!({
                 "slug": protocol.slug,
                 "label": protocol.label,
                 "transport": protocol.transport,
                 "scan_mode": "builtin",
+                "write": capability.is_some_and(|row| row.write),
+                "write_notes": capability.map(|row| row.notes),
             })
         })
         .collect();
@@ -664,6 +671,8 @@ fn web_protocols() -> Vec<Value> {
         "label": "Modbus TCP",
         "transport": "TCP 502",
         "scan_mode": "modbus",
+        "write": true,
+        "write_notes": "write_single_coil, write_single_register, write_multiple_registers in src/core/modbus.rs.",
     }));
     protocols
 }
@@ -5441,6 +5450,18 @@ mod tests {
                 "{expected} is missing from the web catalog"
             );
         }
+
+        let modbus = protocols
+            .iter()
+            .find(|protocol| protocol["slug"] == "modbus")
+            .expect("modbus is in the catalog");
+        assert_eq!(modbus["write"], true, "modbus has a write API");
+
+        let snmp = protocols
+            .iter()
+            .find(|protocol| protocol["slug"] == "snmp")
+            .expect("snmp is in the catalog");
+        assert_eq!(snmp["write"], false, "snmp has no write_* function");
     }
 
     #[test]

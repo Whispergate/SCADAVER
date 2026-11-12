@@ -9,16 +9,17 @@ use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod common;
+
 // The EtherNet/IP simulator is shared with the enip test, so this one takes its own TCP port and
-// moves the UDP listener off 44818 to keep the two from colliding.
-const PORT: u16 = 34819;
-const UDP_PORT: u16 = 34820;
+// moves the UDP listener off 44818 to keep the two from colliding. Both come from the OS: 34819 and
+// 34820 sat inside a Windows reserved range, where bind fails with WinError 10013.
 
 struct Simulator(Child);
 
 impl Simulator {
-    fn spawn(port: u16) -> Self {
-        let child = Command::new("python")
+    fn spawn(port: u16, udp_port: u16) -> Self {
+        let child = Command::new(common::python_exe())
             .args([
                 "sim/eip_sim.py",
                 "--host",
@@ -26,7 +27,7 @@ impl Simulator {
                 "--port",
                 &port.to_string(),
                 "--udp-port",
-                &UDP_PORT.to_string(),
+                &udp_port.to_string(),
             ])
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdout(Stdio::null())
@@ -63,9 +64,10 @@ fn text(record: &EndpointRecord, key: &str) -> String {
 
 #[test]
 fn rockwell_scan_returns_typed_records() {
-    let _sim = Simulator::spawn(PORT);
+    let port = common::tcp_port();
+    let _sim = Simulator::spawn(port, common::udp_port());
 
-    let outcome = scadaver::ops::rockwell::scan_ip("127.0.0.1", PORT, 2);
+    let outcome = scadaver::ops::rockwell::scan_ip("127.0.0.1", port, 2);
     assert_eq!(
         outcome.records.len(),
         1,
@@ -74,7 +76,7 @@ fn rockwell_scan_returns_typed_records() {
     );
     let record = &outcome.records[0];
     assert_eq!(record.protocol, Protocol::Rockwell);
-    assert_eq!(record.port, PORT);
+    assert_eq!(record.port, port);
     assert_eq!(record.vendor, "rockwell");
 
     // Values the simulator's List Identity item carries: vendor 1, device type 0x0E, product

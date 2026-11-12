@@ -3,21 +3,22 @@
 // the tuple struct, so it reports the spawn as unreaped.
 #![allow(clippy::zombie_processes)]
 
+mod common;
+
 use scadaver::model::EndpointRecord;
 use scadaver::protocol::Protocol;
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-// The simulator parses `--ads-port` and `--discovery-port`, not `--port`.
-const ADS_PORT: u16 = 38898;
-const DISCOVERY_PORT: u16 = 38899;
+// The simulator parses `--ads-port` and `--discovery-port`, not `--port`. Both come from the OS:
+// hardcoded values landed inside a Windows reserved range and the bind failed before the sim started.
 
 struct Simulator(Child);
 
 impl Simulator {
-    fn spawn(ads_port: u16) -> Self {
-        let child = Command::new("python")
+    fn spawn(ads_port: u16, discovery_port: u16) -> Self {
+        let child = Command::new(common::python_exe())
             .args([
                 "sim/beckhoff_sim.py",
                 "--host",
@@ -25,7 +26,7 @@ impl Simulator {
                 "--ads-port",
                 &ads_port.to_string(),
                 "--discovery-port",
-                &DISCOVERY_PORT.to_string(),
+                &discovery_port.to_string(),
             ])
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdout(Stdio::null())
@@ -62,11 +63,12 @@ fn text(record: &EndpointRecord, key: &str) -> String {
 
 #[test]
 fn beckhoff_scan_returns_typed_records() {
-    let _sim = Simulator::spawn(ADS_PORT);
+    let ads_port = common::tcp_port();
+    let _sim = Simulator::spawn(ads_port, common::udp_port());
 
     // casket's UDP discovery leg is pinned to 48899, which the simulator is not listening on
     // here, so this exercises the ADS/TCP fallback the legacy arm also relied on.
-    let outcome = scadaver::ops::beckhoff::scan_ip("127.0.0.1", ADS_PORT, 1);
+    let outcome = scadaver::ops::beckhoff::scan_ip("127.0.0.1", ads_port, 1);
     assert_eq!(
         outcome.records.len(),
         1,
@@ -75,7 +77,7 @@ fn beckhoff_scan_returns_typed_records() {
     );
     let record = &outcome.records[0];
     assert_eq!(record.protocol, Protocol::Beckhoff);
-    assert_eq!(record.port, ADS_PORT);
+    assert_eq!(record.port, ads_port);
     assert_eq!(record.vendor, "beckhoff");
 
     // AMS Net ID derived from the target IP, and the ReadState answer the simulator always gives.
@@ -83,7 +85,7 @@ fn beckhoff_scan_returns_typed_records() {
     assert_eq!(text(record, "ads_state"), "RUN");
     assert_eq!(
         record.fields["ads_port"].as_u64(),
-        Some(u64::from(ADS_PORT))
+        Some(u64::from(ads_port))
     );
     let name = text(record, "name");
     assert!(
